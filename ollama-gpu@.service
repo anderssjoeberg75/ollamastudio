@@ -1,0 +1,42 @@
+# Kör EN Ollama-instans låst till EN GPU.  Detta är en systemd-"mall" (@) där
+# instansnamnet = GPU-index.  Instansen lyssnar på port 11434 + GPU-index
+# (GPU 0 -> 11434, GPU 1 -> 11435, ...).
+#
+# --- Installera (exempel med 2 GPU:er) -------------------------------------
+#   1. Stäng av den vanliga Ollama-tjänsten (den upptar GPU:erna och port 11434):
+#        sudo systemctl disable --now ollama
+#   2. Kopiera in mallen:
+#        sudo cp ollama-gpu@.service /etc/systemd/system/
+#        sudo systemctl daemon-reload
+#   3. Starta en instans per GPU:
+#        sudo systemctl enable --now ollama-gpu@0
+#        sudo systemctl enable --now ollama-gpu@1
+#   4. Peka Ollama Studio på instanserna (i ollama-studio-web.service):
+#        Environment=OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1
+#        sudo systemctl restart ollama-studio-web
+#
+# Kontrollera:  systemctl status ollama-gpu@0   ·   journalctl -u ollama-gpu@0 -f
+# ---------------------------------------------------------------------------
+
+[Unit]
+Description=Ollama (GPU %i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Lås instansen till en enda GPU (NVIDIA). %i = instansnamnet = GPU-index.
+Environment=CUDA_VISIBLE_DEVICES=%i
+# Alla instanser delar samma modell-lager på disken (så du slipper ladda ner två gånger).
+# Använder den vanliga Ollama-tjänstens katalog. Kör din Ollama som root i stället?
+# Byt då till:  Environment=OLLAMA_MODELS=/root/.ollama/models  och ta bort User/Group nedan.
+Environment=OLLAMA_MODELS=/usr/share/ollama/.ollama/models
+User=ollama
+Group=ollama
+# Lyssna på 127.0.0.1:(11434 + GPU-index). Ollama Studio pratar med den lokalt.
+ExecStart=/bin/sh -c 'OLLAMA_HOST=127.0.0.1:$((11434 + %i)) exec ollama serve'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

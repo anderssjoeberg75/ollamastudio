@@ -55,6 +55,10 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   automatiskt.
 - **Chatta** (webbversionen) – prata med en modell direkt i webbläsaren, med streamande
   svar token för token och sparad konversationshistorik.
+- **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
+  temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
+- **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
+  vilken GPU en modell ska köras på.
 - **Mörkt, modernt tema** i LM Studio-stil.
 - **Inga externa beroenden** – bygger enbart på Pythons standardbibliotek.
 
@@ -134,6 +138,7 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_PORT` | `8080` | Porten webbappen körs på. |
 | `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
+| `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
 
 Exempel – kör på port 9000 med lösenord:
 
@@ -260,6 +265,50 @@ om modellen körs på GPU eller CPU, hur mycket VRAM den använder och när den 
 frigörs. En modell blir aktiv när den används (t.ex. via `ollama run` eller ett chattanrop)
 och listan uppdateras automatiskt var femte sekund.
 
+### System / GPU (webbversionen)
+
+Öppna fliken **System / GPU** för en live-vy (uppdateras varannan sekund) över:
+
+- **CPU** – total användning och load average.
+- **RAM** – använt/totalt minne.
+- **Varje GPU** – namn, användning (%), VRAM (använt/totalt), temperatur och effekt, samt
+  vilka **processer** som ligger på GPU:n (Ollama-processer markeras i grönt).
+
+GPU-informationen läses via `nvidia-smi` (NVIDIA). Saknas det visas bara CPU/RAM.
+
+### Välj vilken GPU en modell körs på (en instans per GPU)
+
+Ollama har **inte** något stöd i sitt API för att låsa en enskild modell till en viss GPU
+per anrop – GPU-valet gäller hela `ollama serve`-processen. Sättet att verkligen styra
+modell → GPU är därför att köra **en Ollama-instans per GPU**, låst med
+`CUDA_VISIBLE_DEVICES`, och låta Ollama Studio välja instans (GPU) per chatt.
+
+Projektet innehåller en färdig systemd-mall, `ollama-gpu@.service`. Exempel med 2 GPU:er:
+
+```bash
+# 1. Stäng av den vanliga Ollama-tjänsten (upptar GPU:erna + port 11434)
+sudo systemctl disable --now ollama
+
+# 2. Installera mallen (en instans per GPU, portar 11434, 11435, ...)
+sudo cp /opt/ollamastudio/ollama-gpu@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ollama-gpu@0
+sudo systemctl enable --now ollama-gpu@1
+
+# 3. Peka Ollama Studio på instanserna
+#    (i /etc/systemd/system/ollama-studio-web.service):
+#    Environment=OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1
+sudo systemctl restart ollama-studio-web
+```
+
+Alla instanser delar samma modell-lager på disken, så du behöver bara ladda ner en modell
+en gång. När flera backends är konfigurerade dyker en **GPU-väljare** upp i chatten, och
+under **Mina modeller** visas på vilken GPU varje aktiv modell körs.
+
+> **Kontrollera GPU-index och namn:** kör `nvidia-smi -L` för att se vilka index dina kort
+> har. Justera `User`/`OLLAMA_MODELS` i `ollama-gpu@.service` om din Ollama inte kör som
+> användaren `ollama` (kommentarer finns i filen).
+
 ### Uppdatera listan
 
 Klicka **↻ Uppdatera** uppe till höger (t.ex. efter att du kört `ollama pull` i terminalen).
@@ -322,6 +371,10 @@ Båda varianterna pratar med Ollamas HTTP-API:
 | Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
 | Avinstallera | `DELETE /api/delete` |
 | Chatta (webbversionen) | `POST /api/chat` (strömmar svaret) |
+
+System-/GPU-vyn läser CPU/RAM från `/proc` och GPU-info via `nvidia-smi` – inget av det går
+via Ollama. Kör du flera Ollama-instanser (en per GPU) slår webbappen ihop `/api/ps` från
+alla och märker varje aktiv modell med rätt GPU.
 
 - **Skrivbordsappen** (`ollama_studio.py`) använder `tkinter` för gränssnittet och `urllib`
   för nätverk.

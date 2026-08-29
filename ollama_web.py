@@ -31,6 +31,8 @@ import json
 import os
 import sys
 import socket
+import shutil
+import subprocess
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +44,184 @@ LISTEN_HOST = os.environ.get("OLLAMA_STUDIO_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("OLLAMA_STUDIO_PORT", "8080"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
+
+
+# --------------------------------------------------------------------------
+# Backends – en eller flera Ollama-instanser (t.ex. en per GPU)
+# --------------------------------------------------------------------------
+# Konfigureras med OLLAMA_STUDIO_BACKENDS = "label,url,gpu ; label,url,gpu ; ..."
+# Exempel (en Ollama-instans låst per GPU):
+#   OLLAMA_STUDIO_BACKENDS="GPU 0,http://localhost:11434,0 ; GPU 1,http://localhost:11435,1"
+# Om variabeln inte är satt används en enda backend (OLLAMA_URL).
+def parse_backends():
+    raw = os.environ.get("OLLAMA_STUDIO_BACKENDS", "").strip()
+    backends = []
+    if raw:
+        for entry in raw.split(";"):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = [p.strip() for p in entry.split(",")]
+            label = parts[0] if parts and parts[0] else "Ollama"
+            url = (parts[1].rstrip("/") if len(parts) > 1 and parts[1] else OLLAMA_URL)
+            gpu = parts[2] if len(parts) > 2 and parts[2] != "" else None
+            backends.append({"label": label, "url": url, "gpu": gpu})
+    if not backends:
+        backends = [{"label": "Ollama", "url": OLLAMA_URL, "gpu": None}]
+    return backends
+
+
+BACKENDS = parse_backends()
+BACKEND_BY_LABEL = {b["label"]: b for b in BACKENDS}
+PRIMARY = BACKENDS[0]
+MULTI_BACKEND = len(BACKENDS) > 1
+
+
+def backend_url(label):
+    """URL för en given backend-label; faller tillbaka på den primära."""
+    b = BACKEND_BY_LABEL.get(label) if label else None
+    return (b or PRIMARY)["url"]
+
+
+# --------------------------------------------------------------------------
+# Systemresurser (CPU/RAM) och GPU-info (via nvidia-smi)
+# --------------------------------------------------------------------------
+_PREV_CPU = None  # (idle, total) från förra mätningen, för CPU-procent
+
+
+def read_mem():
+    """(total_bytes, used_bytes) från /proc/meminfo, eller (None, None)."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                info[k.strip()] = v.strip()
+
+        def kb(key):
+            return int(info[key].split()[0]) * 1024
+        total = kb("MemTotal")
+        avail = kb("MemAvailable")
+        return total, total - avail
+    except Exception:
+        return None, None
+
+
+def read_cpu_percent():
+    """Momentan CPU-användning i procent, beräknad mot förra anropet."""
+    global _PREV_CPU
+    try:
+        with open("/proc/stat") as f:
+            nums = list(map(int, f.readline().split()[1:]))
+        idle = nums[3] + (nums[4] if len(nums) > 4 else 0)  # idle + iowait
+        total = sum(nums)
+        pct = None
+        if _PREV_CPU:
+            dt = total - _PREV_CPU[1]
+            di = idle - _PREV_CPU[0]
+            if dt > 0:
+                pct = round((1 - di / dt) * 100, 1)
+        _PREV_CPU = (idle, total)
+        return pct
+    except Exception:
+        return None
+
+
+def read_loadavg():
+    try:
+        with open("/proc/loadavg") as f:
+            return [float(x) for x in f.read().split()[:3]]
+    except Exception:
+        return None
+
+
+def _num(x):
+    x = (x or "").strip()
+    if x in ("", "[N/A]", "[Not Supported]", "N/A"):
+        return None
+    try:
+        return float(x)
+    except ValueError:
+        return None
+
+
+def parse_gpu_csv(text):
+    """Tolka nvidia-smi --query-gpu CSV (index,uuid,name,util,mem_used,mem_total,temp,power,power_limit)."""
+    gpus = []
+    for line in (text or "").strip().splitlines():
+        c = [p.strip() for p in line.split(",")]
+        if len(c) < 9:
+            continue
+        gpus.append({
+            "index": int(_num(c[0]) or 0),
+            "uuid": c[1],
+            "name": c[2],
+            "util": _num(c[3]),
+            "mem_used_mb": _num(c[4]),
+            "mem_total_mb": _num(c[5]),
+            "temp": _num(c[6]),
+            "power": _num(c[7]),
+            "power_limit": _num(c[8]),
+            "procs": [],
+        })
+    return gpus
+
+
+def parse_procs_csv(text):
+    """Tolka nvidia-smi --query-compute-apps CSV (gpu_uuid,pid,process_name,used_memory)."""
+    procs = []
+    for line in (text or "").strip().splitlines():
+        c = [p.strip() for p in line.split(",")]
+        if len(c) < 4:
+            continue
+        name = c[2]
+        procs.append({
+            "uuid": c[0],
+            "pid": int(_num(c[1]) or 0),
+            "name": name,
+            "mem_mb": _num(c[3]),
+            "is_ollama": "ollama" in name.lower(),
+        })
+    return procs
+
+
+def nvidia_gpus():
+    """Lista GPU:er med processer, eller (None, felmeddelande) om nvidia-smi saknas/fel."""
+    if not shutil.which("nvidia-smi"):
+        return None, "nvidia-smi hittades inte (ingen NVIDIA-drivrutin?)"
+    try:
+        gq = ("index,uuid,name,utilization.gpu,memory.used,memory.total,"
+              "temperature.gpu,power.draw,power.limit")
+        gout = subprocess.run(
+            ["nvidia-smi", "--query-gpu=" + gq, "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=6)
+        gpus = parse_gpu_csv(gout.stdout)
+        by_uuid = {g["uuid"]: g for g in gpus}
+        pout = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=6)
+        for p in parse_procs_csv(pout.stdout):
+            g = by_uuid.get(p["uuid"])
+            if g:
+                g["procs"].append({k: p[k] for k in ("pid", "name", "mem_mb", "is_ollama")})
+        # Koppla in vilka Studio-backends (GPU-instanser) som pekar på varje GPU-index
+        for g in gpus:
+            g["backends"] = [b["label"] for b in BACKENDS if str(b.get("gpu")) == str(g["index"])]
+        return gpus, None
+    except Exception as e:
+        return None, str(e)
+
+
+def gather_system():
+    total, used = read_mem()
+    gpus, gpu_err = nvidia_gpus()
+    return {
+        "cpu": {"percent": read_cpu_percent(), "cores": os.cpu_count(), "load": read_loadavg()},
+        "mem": {"total": total, "used": used},
+        "gpus": gpus or [],
+        "gpu_error": gpu_err,
+    }
 
 # --------------------------------------------------------------------------
 # Kurerad katalog över populära modeller (samma som i skrivbordsappen)
@@ -145,6 +325,32 @@ PAGE = r"""<!doctype html>
     max-height:160px;line-height:1.4}
   .chat-input textarea:focus{outline:none;border-color:var(--accent)}
 
+  /* System / GPU */
+  .sysgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 2px}
+  .sysgrid.one{grid-template-columns:1fr}
+  .metric{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+  .metric .h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+  .metric .h .name{font-weight:700;font-size:14px}
+  .metric .h .val{font-size:13px;color:var(--subtle)}
+  .usebar{height:8px;background:var(--border);border-radius:4px;overflow:hidden}
+  .usebar>div{height:100%;width:0;background:var(--accent);transition:width .3s}
+  .metric .sub{color:var(--faint);font-size:12px;margin-top:6px}
+  .gpu-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:8px 2px}
+  .gpu-card .title{display:flex;align-items:center;gap:10px;margin-bottom:2px}
+  .gpu-card .gidx{background:var(--accent-dim);color:var(--accent-hov);font-weight:700;font-size:12px;
+    padding:2px 8px;border-radius:6px}
+  .gpu-card .gname{font-weight:700;font-size:15px}
+  .gpu-card .badge{background:var(--chip);color:var(--accent-hov);font-size:11px;font-weight:700;
+    padding:2px 8px;border-radius:6px}
+  .gpu-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+  .gpu-stats{display:flex;gap:18px;flex-wrap:wrap;color:var(--subtle);font-size:12px;margin-top:10px}
+  .gpu-procs{margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+  .gpu-procs .row{display:flex;justify-content:space-between;font-size:12px;color:var(--subtle);padding:2px 0}
+  .gpu-procs .row.oll{color:var(--green);font-weight:600}
+  .sysnote{color:var(--faint);font-size:12px;margin:6px 2px}
+  .sys-warn{background:var(--danger-dim);border:1px solid var(--danger);color:var(--danger);
+    border-radius:10px;padding:12px 14px;margin:6px 2px;font-size:13px}
+
   /* Kort */
   .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:8px 2px}
   .card.hoverable:hover{background:var(--card-hover)}
@@ -222,6 +428,7 @@ PAGE = r"""<!doctype html>
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
+      <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
     </div>
     <div class="status"><span class="dot" id="statusDot">●</span><span id="statusText">Kontrollerar…</span></div>
   </div>
@@ -263,6 +470,8 @@ PAGE = r"""<!doctype html>
       <div class="chatbar">
         <label style="color:var(--subtle);font-size:13px">Modell:</label>
         <select id="chatModel"></select>
+        <label id="chatGpuLabel" style="color:var(--subtle);font-size:13px;display:none">GPU:</label>
+        <select id="chatBackend" style="display:none"></select>
         <button class="btn ghost small" onclick="clearChat()">Rensa</button>
       </div>
       <div id="chatMessages" class="chat-messages"></div>
@@ -271,6 +480,8 @@ PAGE = r"""<!doctype html>
         <button class="btn accent" id="chatSend">Skicka</button>
       </div>
     </div>
+
+    <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -289,11 +500,32 @@ const CATALOG = __CATALOG_JSON__;
 const AUTH = __AUTH_ENABLED__;
 let token = AUTH ? (localStorage.getItem('os_token') || '') : '';
 let installed = new Set();
-let running = new Map();   // namn -> info om modeller som just nu är inlästa i minnet
+let running = new Map();   // namn -> [ {backend, gpu, size_vram, expires_at, ...}, ... ]
 let lastModels = [];       // senast hämtade modell-listan (för lätt omritning)
 let pullController = null;
 let chatMessages = [];     // konversationshistorik: {role, content}
 let chatController = null;
+let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false};   // /api/config
+let systemTimer = null;    // intervall för System-vyn
+
+function buildRunning(list){
+  const map = new Map();
+  for(const m of (list||[])){
+    if(!map.has(m.name)) map.set(m.name, []);
+    map.get(m.name).push(m);
+  }
+  return map;
+}
+function runSig(map){
+  const arr = [];
+  for(const [n, list] of map){ for(const e of list){ arr.push(n+'@'+(e.backend||'')); } }
+  return arr.sort().join(',');
+}
+function gpuLabel(e){
+  if(e.gpu !== null && e.gpu !== undefined && e.gpu !== '') return 'GPU '+e.gpu;
+  if(cfg.multi && e.backend) return e.backend;
+  return '';
+}
 
 function headers(json){
   const h = json ? {'Content-Type':'application/json'} : {};
@@ -320,14 +552,17 @@ function humanSize(b){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta'};
+const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU'};
 function showView(v){
-  for(const k of ['models','discover','chat']){
+  for(const k of ['models','discover','chat','system']){
     document.getElementById('nav-'+k).classList.toggle('active', v===k);
     document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
   }
   document.getElementById('title').textContent = TITLES[v] || '';
   if(v==='chat'){ populateChatModels(); renderChat(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
+  // System-vyn pollas bara medan den visas
+  if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
+  if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
 }
 function setStatus(text, color){
   document.getElementById('statusDot').style.color = color;
@@ -349,7 +584,7 @@ async function refresh(){
     installed = new Set(models.map(m=>m.name));
     try{
       const pr = await api('/api/running'); const pd = await pr.json();
-      running = new Map((pd.models||[]).map(m=>[m.name, m]));
+      running = buildRunning(pd.models);
     }catch(e){ running = new Map(); }
     lastModels = models;
     populateChatModels();
@@ -363,8 +598,10 @@ async function refresh(){
 }
 
 function runMeta(r){
-  // Beskriv hur en inläst modell använder minne + när den frigörs
+  // Beskriv var (GPU) en inläst modell körs, hur den använder minne + när den frigörs
   const parts = [];
+  const gl = gpuLabel(r);
+  if(gl) parts.push(gl);
   const vram = Number(r.size_vram)||0, size = Number(r.size)||0;
   if(vram <= 0) parts.push('körs på CPU/RAM');
   else if(vram >= size) parts.push('helt på GPU · '+humanSize(vram)+' VRAM');
@@ -390,10 +627,14 @@ function renderModels(models){
   if(activeNames.length) summary += ' · '+activeNames.length+' körs nu';
   document.getElementById('summary').textContent = summary;
 
-  // Banner högst upp: vilken modell är aktiv just nu?
+  // Banner högst upp: vilken modell är aktiv (och på vilken GPU) just nu?
   let banner;
   if(activeNames.length){
-    banner = '<div class="banner">● Aktiv i minnet just nu: '+activeNames.map(esc).join(', ')+'</div>';
+    const items = activeNames.map(n=>{
+      const gpus = running.get(n).map(gpuLabel).filter(Boolean);
+      return esc(n) + (gpus.length ? ' ('+gpus.join(', ')+')' : '');
+    });
+    banner = '<div class="banner">● Aktiv i minnet just nu: '+items.join(',&nbsp; ')+'</div>';
   }else{
     banner = '<div class="meta" style="margin:6px 2px 8px">Ingen modell är inläst i minnet just nu '
            + '(en modell blir aktiv när den används, t.ex. via <code>ollama run</code> eller ett chattanrop).</div>';
@@ -404,8 +645,12 @@ function renderModels(models){
     const bits = [d.parameter_size, d.quantization_level, d.family, humanSize(m.size),
                   (m.modified_at||'').slice(0,10)].filter(Boolean).map(esc).join('     ·     ');
     const r = running.get(m.name);
-    const liveChip = r ? '<span class="chip live">● Körs nu</span>' : '';
-    const liveMeta = r ? '<div class="meta live">'+esc(runMeta(r))+'</div>' : '';
+    let liveChip = '', liveMeta = '';
+    if(r){
+      const gpus = r.map(gpuLabel).filter(Boolean);
+      liveChip = '<span class="chip live">● Körs nu'+(gpus.length ? ' · '+esc(gpus.join(', ')) : '')+'</span>';
+      liveMeta = r.map(e=>'<div class="meta live">'+esc(runMeta(e))+'</div>').join('');
+    }
     return '<div class="card hoverable"><div class="top"><div>'
       + '<h3>'+esc(m.name)+liveChip+'</h3><div class="meta">'+bits+'</div>'+liveMeta+'</div>'
       + '<button class="btn danger small" onclick="confirmDelete(\''+esc(m.name).replace(/'/g,"\\'")+'\')">✕ Avinstallera</button>'
@@ -583,10 +828,11 @@ async function sendChat(){
   const send = document.getElementById('chatSend');
   send.textContent = 'Stoppa';
 
+  const backend = document.getElementById('chatBackend').value || undefined;
   chatController = new AbortController();
   try{
     const r = await api('/api/chat', {method:'POST', headers:headers(true),
-      body: JSON.stringify({model, messages: chatMessages.slice(0, idx)}),
+      body: JSON.stringify({model, backend, messages: chatMessages.slice(0, idx)}),
       signal: chatController.signal});
     if(!r.ok){ throw new Error('HTTP '+r.status); }
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
@@ -634,16 +880,102 @@ async function refreshRunning(){
     const pr = await fetch('/api/running', {headers: headers(false)});
     if(!pr.ok) return;
     const pd = await pr.json();
-    const next = new Map((pd.models||[]).map(m=>[m.name, m]));
-    const changed = next.size !== running.size
-      || [...next.keys()].some(k=>!running.has(k))
-      || [...running.keys()].some(k=>!next.has(k));
-    running = next;
-    if(changed) renderModels(lastModels);
+    const next = buildRunning(pd.models);
+    if(runSig(next) !== runSig(running)){ running = next; renderModels(lastModels); }
+    else running = next;
   }catch(e){ /* tyst – nästa intervall försöker igen */ }
 }
 setInterval(refreshRunning, 5000);
 
+/* ---- Backends (GPU-instanser) ---- */
+async function loadConfig(){
+  try{
+    const r = await fetch('/api/config', {headers: headers(false)});
+    if(r.ok) cfg = await r.json();
+  }catch(e){}
+  populateBackends();
+}
+function populateBackends(){
+  const sel = document.getElementById('chatBackend');
+  const lbl = document.getElementById('chatGpuLabel');
+  if(!sel) return;
+  if(cfg.multi && cfg.backends && cfg.backends.length > 1){
+    sel.innerHTML = cfg.backends.map(b=>
+      '<option value="'+esc(b.label)+'">'+esc(b.label)+'</option>').join('');
+    sel.style.display=''; lbl.style.display='';
+  }else{
+    sel.style.display='none'; lbl.style.display='none';
+  }
+}
+
+/* ---- System / GPU ---- */
+function mbSize(mb){ return humanSize((Number(mb)||0)*1024*1024); }
+function pctBar(frac, color){
+  const w = Math.max(0, Math.min(100, frac*100)).toFixed(1);
+  return '<div class="usebar"><div style="width:'+w+'%;background:'+(color||'var(--accent)')+'"></div></div>';
+}
+async function fetchSystem(){
+  try{
+    const r = await fetch('/api/system', {headers: headers(false)});
+    if(!r.ok){ document.getElementById('systemBody').innerHTML='<div class="sys-warn">Kunde inte hämta systeminfo.</div>'; return; }
+    renderSystem(await r.json());
+  }catch(e){}
+}
+function renderSystem(s){
+  const cpu = s.cpu||{}, mem = s.mem||{};
+  let html = '<div class="sysgrid">';
+  html += '<div class="metric"><div class="h"><span class="name">Processor (CPU)</span>'
+        + '<span class="val">'+(cpu.percent!=null?cpu.percent+'%':'–')+'</span></div>'
+        + pctBar((cpu.percent||0)/100)
+        + '<div class="sub">'+(cpu.cores?cpu.cores+' kärnor':'')
+        + (cpu.load?' · load '+cpu.load.map(x=>x.toFixed(2)).join(' / '):'')+'</div></div>';
+  const mfrac = (mem.total&&mem.used!=null)?mem.used/mem.total:0;
+  html += '<div class="metric"><div class="h"><span class="name">Minne (RAM)</span>'
+        + '<span class="val">'+(mem.total?humanSize(mem.used)+' / '+humanSize(mem.total):'–')+'</span></div>'
+        + pctBar(mfrac)
+        + '<div class="sub">'+(mem.total?(mfrac*100).toFixed(0)+'% använt':'')+'</div></div>';
+  html += '</div>';
+
+  html += '<div class="section-title" style="margin-top:14px">Grafikkort (GPU)</div>';
+  if(s.gpu_error) html += '<div class="sysnote">'+esc(s.gpu_error)+'</div>';
+  if(!s.gpus || !s.gpus.length){
+    if(!s.gpu_error) html += '<div class="sysnote">Inga GPU:er rapporterades.</div>';
+  } else {
+    for(const g of s.gpus){
+      const memFrac = g.mem_total_mb ? g.mem_used_mb/g.mem_total_mb : 0;
+      const utilFrac = g.util!=null ? g.util/100 : 0;
+      let title = '<div class="title"><span class="gidx">GPU '+g.index+'</span>'
+                + '<span class="gname">'+esc(g.name||'')+'</span>';
+      for(const bl of (g.backends||[])) title += '<span class="badge">'+esc(bl)+'</span>';
+      title += '</div>';
+      const hd = (t,v)=>'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--subtle);margin-bottom:6px"><span>'+t+'</span><span>'+v+'</span></div>';
+      const metrics = '<div class="gpu-metrics">'
+        + '<div>'+hd('Användning', g.util!=null?g.util+'%':'–')+pctBar(utilFrac)+'</div>'
+        + '<div>'+hd('VRAM', g.mem_total_mb?mbSize(g.mem_used_mb)+' / '+mbSize(g.mem_total_mb):'–')+pctBar(memFrac, g.mem_total_mb&&memFrac>0.9?'var(--danger)':'var(--accent)')+'</div>'
+        + '</div>';
+      let stats = '<div class="gpu-stats">';
+      if(g.temp!=null) stats += '<span>Temp: '+g.temp+' °C</span>';
+      if(g.power!=null) stats += '<span>Effekt: '+g.power.toFixed(0)+(g.power_limit?' / '+g.power_limit.toFixed(0):'')+' W</span>';
+      stats += '</div>';
+      let procs = '';
+      const plist = g.procs||[];
+      if(plist.length){
+        procs = '<div class="gpu-procs">';
+        for(const p of plist){
+          procs += '<div class="row'+(p.is_ollama?' oll':'')+'"><span>'+(p.is_ollama?'● ':'')
+                 + esc(p.name)+' (pid '+p.pid+')</span><span>'+(p.mem_mb!=null?mbSize(p.mem_mb):'')+'</span></div>';
+        }
+        procs += '</div>';
+      } else {
+        procs = '<div class="gpu-procs"><div class="row">Inga processer använder denna GPU just nu.</div></div>';
+      }
+      html += '<div class="gpu-card">'+title+metrics+stats+procs+'</div>';
+    }
+  }
+  document.getElementById('systemBody').innerHTML = html;
+}
+
+loadConfig();
 refresh();
 </script>
 </body>
@@ -681,10 +1013,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _upstream_get(self, path):
-        req = urllib.request.Request(OLLAMA_URL + path)
+    def _upstream_get(self, path, base=None):
+        req = urllib.request.Request((base or PRIMARY["url"]) + path)
         with urllib.request.urlopen(req, timeout=8) as resp:
             return json.loads(resp.read().decode("utf-8"))
+
+    def _running_union(self):
+        """Slå ihop /api/ps från alla backends; märk varje modell med backend + GPU."""
+        models = []
+        for b in BACKENDS:
+            try:
+                data = self._upstream_get("/api/ps", base=b["url"])
+            except Exception:
+                continue
+            for m in data.get("models", []):
+                m = dict(m)
+                m["backend"] = b["label"]
+                m["gpu"] = b.get("gpu")
+                models.append(m)
+        return {"models": models}
 
     # ---- GET ----
     def do_GET(self):
@@ -698,18 +1045,32 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        if path in ("/api/version", "/api/models", "/api/running"):
+        if path.startswith("/api/"):
             if not self._auth_ok():
                 return self._send_json({"error": "unauthorized"}, 401)
-            upstream = {
-                "/api/version": "/api/version",
-                "/api/models": "/api/tags",
-                "/api/running": "/api/ps",   # modeller som just nu är inlästa i minnet
-            }[path]
-            try:
-                return self._send_json(self._upstream_get(upstream))
-            except Exception as e:
-                return self._send_json({"error": str(e)}, 502)
+
+            if path == "/api/config":
+                return self._send_json({
+                    "backends": [{"label": b["label"], "gpu": b.get("gpu")} for b in BACKENDS],
+                    "multi": MULTI_BACKEND,
+                    "auth": bool(TOKEN),
+                })
+            if path == "/api/system":
+                try:
+                    return self._send_json(gather_system())
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 500)
+            if path == "/api/running":
+                try:
+                    return self._send_json(self._running_union())
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 502)
+            if path in ("/api/version", "/api/models"):
+                upstream = "/api/version" if path == "/api/version" else "/api/tags"
+                try:
+                    return self._send_json(self._upstream_get(upstream))
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 502)
 
         self.send_error(404, "Not found")
 
@@ -732,7 +1093,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "name saknas"}, 400)
             try:
                 body = json.dumps({"name": name}).encode()
-                req = urllib.request.Request(OLLAMA_URL + "/api/delete", data=body,
+                req = urllib.request.Request(PRIMARY["url"] + "/api/delete", data=body,
                                              method="DELETE",
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=30) as resp:
@@ -753,19 +1114,23 @@ class Handler(BaseHTTPRequestHandler):
             messages = data.get("messages") or []
             if not model or not messages:
                 return self._send_json({"error": "model och messages krävs"}, 400)
+            # Välj backend (GPU-instans) att köra chatten på
+            base = backend_url(data.get("backend"))
             return self._proxy_stream("/api/chat",
-                                      {"model": model, "messages": messages, "stream": True})
+                                      {"model": model, "messages": messages, "stream": True},
+                                      base=base)
 
         self.send_error(404, "Not found")
 
     def _stream_pull(self, name):
         return self._proxy_stream("/api/pull", {"name": name, "stream": True})
 
-    def _proxy_stream(self, upstream_path, payload):
-        """POSTa till Ollama och strömma NDJSON-svaret rad för rad vidare till webbläsaren."""
+    def _proxy_stream(self, upstream_path, payload, base=None):
+        """POSTa till en Ollama-backend och strömma NDJSON-svaret rad för rad till webbläsaren."""
         try:
             body = json.dumps(payload).encode()
-            req = urllib.request.Request(OLLAMA_URL + upstream_path, data=body, method="POST",
+            req = urllib.request.Request((base or PRIMARY["url"]) + upstream_path, data=body,
+                                         method="POST",
                                          headers={"Content-Type": "application/json"})
             upstream = urllib.request.urlopen(req, timeout=120)
         except Exception as e:
@@ -816,7 +1181,15 @@ def main():
     print(" %s Web  v%s" % (APP_TITLE, APP_VERSION))
     print("=" * 60)
     print(" Lyssnar på:     %s:%d" % (LISTEN_HOST, LISTEN_PORT))
-    print(" Pratar med:     %s  (%s)" % (OLLAMA_URL, "OK" if ollama_ok else "svarar inte just nu"))
+    if MULTI_BACKEND:
+        print(" Backends (%d):" % len(BACKENDS))
+        for b in BACKENDS:
+            gpu = (" · GPU %s" % b["gpu"]) if b.get("gpu") is not None else ""
+            print("     %-10s %s%s" % (b["label"], b["url"], gpu))
+    else:
+        print(" Pratar med:     %s  (%s)" % (OLLAMA_URL, "OK" if ollama_ok else "svarar inte just nu"))
+    print(" GPU-info:       %s" % ("nvidia-smi tillgängligt" if shutil.which("nvidia-smi")
+                                   else "nvidia-smi saknas (GPU-vyn visar då bara CPU/RAM)"))
     print(" Åtkomstskydd:   %s" % ("token krävs (OLLAMA_STUDIO_TOKEN)" if TOKEN else "AV (öppet på nätverket)"))
     print("")
     print(" Öppna i webbläsaren från en annan dator:")

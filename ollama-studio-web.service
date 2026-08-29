@@ -25,6 +25,9 @@ Environment=OLLAMA_STUDIO_PORT=8080
 Environment=OLLAMA_URL=http://localhost:11434
 # Rekommenderas starkt på ett nätverk – kräver ett lösenord för att hantera modeller:
 # Environment=OLLAMA_STUDIO_TOKEN=byt-till-nagot-hemligt
+# Kör du en Ollama-instans per GPU (se ollama-gpu@.service)? Lista dem här som
+# "label,url,gpu ; label,url,gpu" så får du en GPU-väljare i chatten:
+# Environment=OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1
 
 # Kör gärna som en egen användare i stället för root om du vill:
 # User=ollama
