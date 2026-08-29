@@ -156,6 +156,16 @@ class OllamaClient:
             data = json.loads(resp.read().decode())
         return data.get("models", [])
 
+    def running_models(self, timeout=6):
+        """Lista modeller som just nu är inlästa i minnet (aktiva). Tom lista vid fel."""
+        try:
+            req = urllib.request.Request(self._url("/api/ps"))
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode())
+            return data.get("models", [])
+        except Exception:
+            return []
+
     def delete(self, name, timeout=30):
         """Ta bort en modell. Kastar undantag vid fel."""
         body = json.dumps({"name": name}).encode()
@@ -244,10 +254,12 @@ class OllamaManagerApp:
 
         self.installed = []            # lista över installerade modeller
         self.installed_names = set()   # snabb koll: är modellen installerad?
+        self.running_info = {}         # namn -> info om modeller inlästa i minnet (aktiva)
         self.server_ok = False
         self.pull_thread = None
         self.cancel_event = threading.Event()
         self.current_view = "models"
+        self._poll_job = None
 
         self._build_fonts()
         self._build_window()
@@ -255,6 +267,7 @@ class OllamaManagerApp:
 
         self._show_view("models")
         self.refresh_all()
+        self._schedule_running_poll()
 
     # ---- Grund ------------------------------------------------------------
     def _build_fonts(self):
@@ -541,20 +554,24 @@ class OllamaManagerApp:
         except Exception as e:
             self.root.after(0, lambda: self._on_server_down(str(e)))
             return
-        self.root.after(0, lambda: self._on_models_loaded(version, models))
+        running = self.client.running_models()
+        self.root.after(0, lambda: self._on_models_loaded(version, models, running))
 
     def _on_server_down(self, detail=None):
         self.server_ok = False
         self.installed = []
         self.installed_names = set()
+        self.running_info = {}
         self._set_status("Ollama körs inte", C["danger"])
         self._render_models_offline()
         self._render_catalog()
 
-    def _on_models_loaded(self, version, models):
+    def _on_models_loaded(self, version, models, running=None):
         self.server_ok = True
         self.installed = sorted(models, key=lambda m: m.get("name", "").lower())
         self.installed_names = {m.get("name", "") for m in models}
+        if running is not None:
+            self.running_info = {r.get("name", ""): r for r in running}
         self._set_status(f"Ansluten · v{version}", C["green"])
         self._render_models()
         self._render_catalog()
@@ -579,11 +596,53 @@ class OllamaManagerApp:
             return
 
         total = sum(m.get("size", 0) for m in self.installed)
-        self.models_summary.configure(
-            text=f"{len(self.installed)} modeller · {human_size(total)} totalt")
+        active = [m.get("name", "") for m in self.installed
+                  if m.get("name", "") in self.running_info]
+        summ = f"{len(self.installed)} modeller · {human_size(total)} totalt"
+        if active:
+            summ += f" · {len(active)} körs nu"
+        self.models_summary.configure(text=summ)
+
+        # Banner högst upp: vilken modell är aktiv (inläst i minnet) just nu?
+        if active:
+            banner = tk.Label(self.models_list,
+                              text="●  Aktiv i minnet just nu:  " + ", ".join(active),
+                              font=self.f_small, bg=C["card"], fg=C["green"],
+                              anchor="w", justify="left", padx=14, pady=9,
+                              highlightbackground=C["green"], highlightthickness=1)
+            banner.pack(fill="x", pady=(0, 6), padx=2)
+        else:
+            tk.Label(self.models_list,
+                     text="Ingen modell är inläst i minnet just nu "
+                          "(en modell blir aktiv när den används).",
+                     font=self.f_small, bg=C["bg"], fg=C["faint"],
+                     anchor="w").pack(fill="x", pady=(0, 6), padx=4)
 
         for m in self.installed:
             self._model_card(m)
+
+    # ---- Poll: håll "aktiv modell" uppdaterad -----------------------------
+    def _schedule_running_poll(self):
+        self._poll_job = self.root.after(5000, self._poll_running)
+
+    def _poll_running(self):
+        if not self.server_ok:
+            self._schedule_running_poll()
+            return
+
+        def worker():
+            running = self.client.running_models()
+            self.root.after(0, lambda: self._apply_running(running))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_running(self, running):
+        new = {r.get("name", ""): r for r in running}
+        changed = set(new) != set(self.running_info)
+        self.running_info = new
+        if changed and self.server_ok and self.current_view == "models":
+            self._render_models()
+        self._schedule_running_poll()
 
     def _model_card(self, m):
         name = m.get("name", "okänd")
@@ -599,16 +658,18 @@ class OllamaManagerApp:
         card.pack(fill="x", pady=5, padx=2)
 
         def _hover(on):
+            # Färga om alla ytor som har kortets bakgrund; låt "pillar"/knappar behålla sina färger
             col = C["card_hover"] if on else C["card"]
-            card.configure(bg=col)
-            inner.configure(bg=col)
-            left.configure(bg=col)
-            titlerow.configure(bg=col)
-            nlbl.configure(bg=col)
-            meta.configure(bg=col)
-            for c in meta.winfo_children():
-                c.configure(bg=col)
-            right.configure(bg=col)
+
+            def paint(w):
+                try:
+                    if w.cget("bg") in (C["card"], C["card_hover"]):
+                        w.configure(bg=col)
+                except Exception:
+                    pass
+                for c in w.winfo_children():
+                    paint(c)
+            paint(card)
         card.bind("<Enter>", lambda e: _hover(True))
         card.bind("<Leave>", lambda e: _hover(False))
 
@@ -618,10 +679,15 @@ class OllamaManagerApp:
         left = tk.Frame(inner, bg=C["card"])
         left.pack(side="left", fill="x", expand=True)
 
+        running = self.running_info.get(name)
+
         titlerow = tk.Frame(left, bg=C["card"])
         titlerow.pack(anchor="w", fill="x")
         nlbl = tk.Label(titlerow, text=name, font=self.f_h2, bg=C["card"], fg=C["text"])
         nlbl.pack(side="left")
+        if running:
+            tk.Label(titlerow, text=" ● Körs nu ", font=self.f_chip,
+                     bg=C["chip"], fg=C["green"]).pack(side="left", padx=(10, 0))
 
         meta = tk.Frame(left, bg=C["card"])
         meta.pack(anchor="w", pady=(5, 0))
@@ -638,11 +704,48 @@ class OllamaManagerApp:
         tk.Label(meta, text="     ·     ".join(bits), font=self.f_small,
                  bg=C["card"], fg=C["subtle"]).pack(side="left")
 
+        if running:
+            tk.Label(left, text="● " + self._run_meta(running), font=self.f_small,
+                     bg=C["card"], fg=C["green"]).pack(anchor="w", pady=(4, 0))
+
         right = tk.Frame(inner, bg=C["card"])
         right.pack(side="right", padx=(12, 0))
         self._button(right, "✕  Avinstallera",
                      lambda n=name: self._confirm_delete(n),
                      kind="danger", small=True).pack()
+
+    @staticmethod
+    def _run_meta(r):
+        """Beskriv hur en inläst (aktiv) modell använder minne + när den frigörs."""
+        parts = []
+        vram = r.get("size_vram") or 0
+        size = r.get("size") or 0
+        if vram <= 0:
+            parts.append("körs på CPU/RAM")
+        elif vram >= size:
+            parts.append(f"helt på GPU · {human_size(vram)} VRAM")
+        else:
+            parts.append(f"GPU+CPU · {human_size(vram)} i VRAM")
+        exp = r.get("expires_at")
+        if exp:
+            try:
+                s = exp.replace("Z", "+00:00")
+                if "." in s:
+                    head, tail = s.split(".", 1)
+                    tz = ""
+                    for sign in ("+", "-"):
+                        if sign in tail:
+                            frac, tz = tail.split(sign, 1)
+                            tz = sign + tz
+                            break
+                    else:
+                        frac = tail
+                    s = f"{head}.{frac[:6]}{tz}"
+                dt = datetime.fromisoformat(s)
+                parts.append("frigörs " + dt.astimezone().strftime("%H:%M"))
+            except Exception:
+                pass
+        return "  ·  ".join(parts)
 
     def _render_models_offline(self):
         for w in self.models_list.winfo_children():

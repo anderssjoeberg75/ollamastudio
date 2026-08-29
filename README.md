@@ -50,6 +50,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   [ollama.com/library](https://ollama.com/library).
 - **Nedladdning i realtid** – progressbar med procent, storlek och status medan modellen
   laddas ner. Går att avbryta.
+- **Aktiv modell** – se vilken modell som just nu är inläst i minnet ("körs nu"), inklusive
+  om den ligger på GPU/CPU, hur mycket VRAM den använder och när den frigörs. Uppdateras
+  automatiskt.
 - **Mörkt, modernt tema** i LM Studio-stil.
 - **Inga externa beroenden** – bygger enbart på Pythons standardbibliotek.
 
@@ -246,6 +249,14 @@ vänster.
 
 1. Klicka på **Mina modeller**.
 2. Klicka **✕ Avinstallera** och bekräfta. Modellfilerna raderas permanent från disken.
+
+### Se vilken modell som är aktiv
+
+Under **Mina modeller** markeras den modell som just nu är **inläst i minnet** med en grön
+**● Körs nu**-symbol och en banner högst upp ("Aktiv i minnet just nu"). Där ser du också
+om modellen körs på GPU eller CPU, hur mycket VRAM den använder och när den automatiskt
+frigörs. En modell blir aktiv när den används (t.ex. via `ollama run` eller ett chattanrop)
+och listan uppdateras automatiskt var femte sekund.
 
 ### Uppdatera listan
 

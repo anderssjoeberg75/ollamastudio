@@ -138,6 +138,10 @@ PAGE = r"""<!doctype html>
   .desc{color:var(--subtle);font-size:12px;margin-top:6px;max-width:640px}
   .meta{color:var(--faint);font-size:12px;margin-top:6px}
   .installed{color:var(--green);font-size:13px;font-weight:600;white-space:nowrap}
+  .chip.live{background:rgba(57,214,127,.14);color:var(--green)}
+  .meta.live{color:var(--green);margin-top:4px;font-weight:600}
+  .banner{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green);
+    border-radius:10px;padding:10px 14px;margin:4px 2px 6px;font-size:13px;font-weight:600}
 
   /* Knappar */
   .btn{border:none;border-radius:8px;font-weight:700;font-size:13px;padding:9px 15px;cursor:pointer;
@@ -253,6 +257,8 @@ const CATALOG = __CATALOG_JSON__;
 const AUTH = __AUTH_ENABLED__;
 let token = AUTH ? (localStorage.getItem('os_token') || '') : '';
 let installed = new Set();
+let running = new Map();   // namn -> info om modeller som just nu är inlästa i minnet
+let lastModels = [];       // senast hämtade modell-listan (för lätt omritning)
 let pullController = null;
 
 function headers(json){
@@ -305,6 +311,11 @@ async function refresh(){
     const mr = await api('/api/models'); const data = await mr.json();
     const models = (data.models||[]).sort((a,b)=>a.name.localeCompare(b.name));
     installed = new Set(models.map(m=>m.name));
+    try{
+      const pr = await api('/api/running'); const pd = await pr.json();
+      running = new Map((pd.models||[]).map(m=>[m.name, m]));
+    }catch(e){ running = new Map(); }
+    lastModels = models;
     setStatus('Ansluten · v'+(v.version||'?'), 'var(--green)');
     renderModels(models);
   }catch(e){
@@ -314,6 +325,19 @@ async function refresh(){
   renderCatalog();
 }
 
+function runMeta(r){
+  // Beskriv hur en inläst modell använder minne + när den frigörs
+  const parts = [];
+  const vram = Number(r.size_vram)||0, size = Number(r.size)||0;
+  if(vram <= 0) parts.push('körs på CPU/RAM');
+  else if(vram >= size) parts.push('helt på GPU · '+humanSize(vram)+' VRAM');
+  else parts.push('GPU+CPU · '+humanSize(vram)+' i VRAM');
+  if(r.expires_at){
+    const d = new Date(r.expires_at);
+    if(!isNaN(d)) parts.push('frigörs '+d.toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'}));
+  }
+  return parts.join(' · ');
+}
 function renderModels(models){
   const box = document.getElementById('modelsList');
   if(!models.length){
@@ -324,16 +348,33 @@ function renderModels(models){
     return;
   }
   const total = models.reduce((s,m)=>s+(m.size||0),0);
-  document.getElementById('summary').textContent = models.length+' modeller · '+humanSize(total)+' totalt';
-  box.innerHTML = models.map(m=>{
+  const activeNames = models.filter(m=>running.has(m.name)).map(m=>m.name);
+  let summary = models.length+' modeller · '+humanSize(total)+' totalt';
+  if(activeNames.length) summary += ' · '+activeNames.length+' körs nu';
+  document.getElementById('summary').textContent = summary;
+
+  // Banner högst upp: vilken modell är aktiv just nu?
+  let banner;
+  if(activeNames.length){
+    banner = '<div class="banner">● Aktiv i minnet just nu: '+activeNames.map(esc).join(', ')+'</div>';
+  }else{
+    banner = '<div class="meta" style="margin:6px 2px 8px">Ingen modell är inläst i minnet just nu '
+           + '(en modell blir aktiv när den används, t.ex. via <code>ollama run</code> eller ett chattanrop).</div>';
+  }
+
+  const cards = models.map(m=>{
     const d = m.details||{};
     const bits = [d.parameter_size, d.quantization_level, d.family, humanSize(m.size),
                   (m.modified_at||'').slice(0,10)].filter(Boolean).map(esc).join('     ·     ');
+    const r = running.get(m.name);
+    const liveChip = r ? '<span class="chip live">● Körs nu</span>' : '';
+    const liveMeta = r ? '<div class="meta live">'+esc(runMeta(r))+'</div>' : '';
     return '<div class="card hoverable"><div class="top"><div>'
-      + '<h3>'+esc(m.name)+'</h3><div class="meta">'+bits+'</div></div>'
+      + '<h3>'+esc(m.name)+liveChip+'</h3><div class="meta">'+bits+'</div>'+liveMeta+'</div>'
       + '<button class="btn danger small" onclick="confirmDelete(\''+esc(m.name).replace(/'/g,"\\'")+'\')">✕ Avinstallera</button>'
       + '</div></div>';
   }).join('');
+  box.innerHTML = banner + cards;
 }
 function renderOffline(){
   document.getElementById('summary').textContent = '';
@@ -460,6 +501,24 @@ document.getElementById('mConfirm').onclick = async ()=>{
   refresh();
 };
 
+// Uppdatera "aktiv modell" automatiskt var 5:e sekund (den kan laddas/frigöras när som helst)
+async function refreshRunning(){
+  if(AUTH && !token) return;         // undvik upprepade token-frågor
+  if(!lastModels.length) return;
+  try{
+    const pr = await fetch('/api/running', {headers: headers(false)});
+    if(!pr.ok) return;
+    const pd = await pr.json();
+    const next = new Map((pd.models||[]).map(m=>[m.name, m]));
+    const changed = next.size !== running.size
+      || [...next.keys()].some(k=>!running.has(k))
+      || [...running.keys()].some(k=>!next.has(k));
+    running = next;
+    if(changed) renderModels(lastModels);
+  }catch(e){ /* tyst – nästa intervall försöker igen */ }
+}
+setInterval(refreshRunning, 5000);
+
 refresh();
 </script>
 </body>
@@ -514,10 +573,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
-        if path in ("/api/version", "/api/models"):
+        if path in ("/api/version", "/api/models", "/api/running"):
             if not self._auth_ok():
                 return self._send_json({"error": "unauthorized"}, 401)
-            upstream = "/api/version" if path == "/api/version" else "/api/tags"
+            upstream = {
+                "/api/version": "/api/version",
+                "/api/models": "/api/tags",
+                "/api/running": "/api/ps",   # modeller som just nu är inlästa i minnet
+            }[path]
             try:
                 return self._send_json(self._upstream_get(upstream))
             except Exception as e:
