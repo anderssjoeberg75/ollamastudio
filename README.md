@@ -1,6 +1,6 @@
 # Ollama Studio
 
-Ett enkelt, fristående skrivbords-GUI för att hantera dina lokala **Ollama**-modeller –
+Ett enkelt, fristående GUI för att hantera dina lokala **Ollama**-modeller –
 inspirerat av LM Studio. Fokus ligger på det viktigaste: att **installera** och
 **avinstallera** modeller med ett klick.
 
@@ -9,28 +9,35 @@ inspirerat av LM Studio. Fokus ligger på det viktigaste: att **installera** och
 ![Plattform](https://img.shields.io/badge/plattform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
 ![Licens](https://img.shields.io/badge/licens-MIT-green)
 
+Ollama Studio finns i **två varianter** – välj den som passar dig:
+
+| Variant | Fil | När du väljer den |
+| --- | --- | --- |
+| 🌐 **Webbversion** | `ollama_web.py` | Ollama körs på en **server** (t.ex. utan skärm) och du vill nå det från en **annan dator via webbläsaren**. |
+| 🖥️ **Skrivbordsapp** | `ollama_studio.py` | Du kör och använder allt på **samma dator** som har ett skrivbord. |
+
+Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons standardbibliotek.
+
 ---
 
 ## Innehåll
 
-1. [Funktioner](#funktioner)
-2. [Systemkrav](#systemkrav)
-3. [Steg 1 – Installera Python och tkinter](#steg-1--installera-python-och-tkinter)
-4. [Steg 2 – Installera och starta Ollama](#steg-2--installera-och-starta-ollama)
-5. [Steg 3 – Hämta Ollama Studio](#steg-3--hämta-ollama-studio)
-6. [Steg 4 – Starta appen](#steg-4--starta-appen)
-7. [Lägg till i programmenyn (Linux)](#lägg-till-i-programmenyn-linux)
-8. [Använda appen](#använda-appen)
-   - [Installera en modell](#installera-en-modell)
-   - [Avinstallera en modell](#avinstallera-en-modell)
-   - [Uppdatera listan](#uppdatera-listan)
-9. [Rekommenderade modeller](#rekommenderade-modeller)
-10. [Ansluta till en annan Ollama-server](#ansluta-till-en-annan-ollama-server)
-11. [Uppdatera Ollama Studio](#uppdatera-ollama-studio)
-12. [Avinstallera Ollama Studio](#avinstallera-ollama-studio)
-13. [Felsökning](#felsökning)
-14. [Så fungerar det (teknik)](#så-fungerar-det-teknik)
-15. [Licens](#licens)
+- [Funktioner](#funktioner)
+- [🌐 Webbversion – åtkomst från en annan dator](#-webbversion--åtkomst-från-en-annan-dator)
+  - [Snabbstart](#snabbstart-webb)
+  - [Kör den permanent (systemd)](#kör-den-permanent-systemd)
+  - [Inställningar (miljövariabler)](#inställningar-miljövariabler)
+  - [Säkerhet](#säkerhet)
+- [🖥️ Skrivbordsapp – kör lokalt](#️-skrivbordsapp--kör-lokalt)
+  - [Steg 1 – Python och tkinter](#steg-1--installera-python-och-tkinter)
+  - [Steg 2 – Starta appen](#steg-2--starta-skrivbordsappen)
+  - [Lägg till i programmenyn](#lägg-till-i-programmenyn-linux)
+- [Installera Ollama (behövs för båda)](#installera-ollama-behövs-för-båda)
+- [Använda appen](#använda-appen)
+- [Rekommenderade modeller](#rekommenderade-modeller)
+- [Felsökning](#felsökning)
+- [Så fungerar det (teknik)](#så-fungerar-det-teknik)
+- [Licens](#licens)
 
 ---
 
@@ -43,29 +50,112 @@ inspirerat av LM Studio. Fokus ligger på det viktigaste: att **installera** och
   [ollama.com/library](https://ollama.com/library).
 - **Nedladdning i realtid** – progressbar med procent, storlek och status medan modellen
   laddas ner. Går att avbryta.
-- **Mörkt, modernt tema** i LM Studio-stil (använder plattformssäkra symboler så det ser
-  rätt ut även i Linux tkinter).
+- **Mörkt, modernt tema** i LM Studio-stil.
 - **Inga externa beroenden** – bygger enbart på Pythons standardbibliotek.
 
 ---
 
-## Systemkrav
+## 🌐 Webbversion – åtkomst från en annan dator
 
-| Krav | Detalj |
-| --- | --- |
-| **Python** | Version 3.8 eller senare, **med `tkinter`** |
-| **Ollama** | Installerat och igång (lokalt eller på en server du når) |
-| **Operativsystem** | Linux, macOS eller Windows |
-| **Internet** | Behövs bara när du laddar ner modeller |
+Det här är rätt variant om Ollama körs på en **server** (t.ex. en headless Linux-maskin
+utan skärm) och du vill hantera modellerna från din **egen dator via webbläsaren**.
 
-Guiden nedan är skriven för **Linux**. macOS/Windows-noteringar finns i varje steg.
+Så här funkar det: du kör `ollama_web.py` **på servern**. Den startar en liten webbserver
+som visar gränssnittet i webbläsaren och pratar med Ollama lokalt på servern
+(`localhost:11434`). Du behöver alltså **inte** exponera Ollama självt på nätverket – bara
+webbappens port (standard 8080).
+
+> **Obs:** Webbversionen behöver **inte** `tkinter` – bara Python 3 och Ollama. Perfekt för
+> en server utan skrivbordsmiljö.
+
+### Snabbstart (webb)
+
+Kör detta **på servern** (exemplet utgår från att koden ligger i `/opt/ollamastudio`):
+
+```bash
+# 1. Hämta koden (om du inte redan gjort det)
+git clone https://github.com/anderssjoeberg75/ollamastudio.git /opt/ollamastudio
+cd /opt/ollamastudio
+
+# 2. Starta webbservern
+python3 ollama_web.py
+```
+
+Du ser då en utskrift med adresser, t.ex.:
+
+```
+ Öppna i webbläsaren från en annan dator:
+     http://192.168.1.50:8080
+     http://<serverns-namn>:8080
+```
+
+**Öppna den adressen i webbläsaren på din andra dator** – klart! Du kan nu installera och
+avinstallera modeller precis som i skrivbordsappen.
+
+> Om sidan inte laddas: kontrollera att serverns brandvägg tillåter porten, t.ex.
+> `sudo ufw allow 8080/tcp`.
+
+### Kör den permanent (systemd)
+
+För att webbappen ska starta automatiskt och fortsätta köra i bakgrunden finns en färdig
+systemd-tjänst med i projektet (`ollama-studio-web.service`):
+
+```bash
+# Kopiera in tjänsten
+sudo cp /opt/ollamastudio/ollama-studio-web.service /etc/systemd/system/
+
+# (Valfritt) justera sökväg, port och token
+sudo nano /etc/systemd/system/ollama-studio-web.service
+
+# Aktivera och starta
+sudo systemctl daemon-reload
+sudo systemctl enable --now ollama-studio-web
+
+# Kontrollera att den kör
+systemctl status ollama-studio-web
+journalctl -u ollama-studio-web -f     # följ loggen
+```
+
+Tjänsten är förinställd på sökvägen `/opt/ollamastudio` och port `8080`. Ligger koden någon
+annanstans – ändra `WorkingDirectory` och `ExecStart` i filen.
+
+### Inställningar (miljövariabler)
+
+Webbversionen styrs helt med miljövariabler (alla valfria):
+
+| Variabel | Standard | Betydelse |
+| --- | --- | --- |
+| `OLLAMA_STUDIO_HOST` | `0.0.0.0` | Adress att lyssna på (`0.0.0.0` = alla nätverkskort). |
+| `OLLAMA_STUDIO_PORT` | `8080` | Porten webbappen körs på. |
+| `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
+| `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
+
+Exempel – kör på port 9000 med lösenord:
+
+```bash
+OLLAMA_STUDIO_PORT=9000 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
+```
+
+### Säkerhet
+
+Webbappen låter vem som helst som når porten **installera och radera modeller**. Tänk på:
+
+- **Sätt ett token** (`OLLAMA_STUDIO_TOKEN`) om servern nås av andra än du. Då frågar
+  webbläsaren efter lösenordet första gången.
+- **Begränsa med brandvägg** så bara ditt nätverk kommer åt porten.
+- **Exponera inte rakt mot internet.** Vill du nå den utifrån, lägg den bakom en
+  reverse proxy (t.ex. Nginx eller Caddy) med HTTPS och inloggning.
 
 ---
 
-## Steg 1 – Installera Python och tkinter
+## 🖥️ Skrivbordsapp – kör lokalt
 
-På de flesta Linux-distributioner ingår `tkinter` **inte** automatiskt i Python utan
-installeras som ett separat paket. Välj raden för din distribution:
+Det här är varianten om du sitter vid datorn som har ett skrivbord (Linux/macOS/Windows)
+och vill köra allt lokalt.
+
+### Steg 1 – Installera Python och tkinter
+
+Skrivbordsappen använder `tkinter`, som på de flesta Linux-distar installeras separat:
 
 | Distribution | Kommando |
 | --- | --- |
@@ -74,23 +164,38 @@ installeras som ett separat paket. Välj raden för din distribution:
 | Arch / Manjaro / EndeavourOS | `sudo pacman -S python tk` |
 | openSUSE | `sudo zypper install python3 python3-tk` |
 
-Kontrollera att det fungerar:
+Kontrollera: `python3 -c "import tkinter; print('tkinter OK')"`
+
+> **macOS/Windows:** Ladda ner Python från [python.org](https://www.python.org/downloads/) –
+> där ingår `tkinter` automatiskt.
+
+### Steg 2 – Starta skrivbordsappen
 
 ```bash
-python3 -c "import tkinter; print('tkinter OK')"
+git clone https://github.com/anderssjoeberg75/ollamastudio.git
+cd ollamastudio
+./run.sh
 ```
 
-Får du `tkinter OK` är du redo.
+`run.sh` kontrollerar att Python, `tkinter` och Ollama finns. Du kan också starta direkt
+med `python3 ollama_studio.py`. På **Windows**: dubbelklicka på `run.bat`.
 
-> **macOS/Windows:** Ladda ner Python från [python.org](https://www.python.org/downloads/).
-> Där ingår `tkinter` automatiskt – inget extra behöver installeras.
+### Lägg till i programmenyn (Linux)
+
+Vill du starta appen från din vanliga programmeny (GNOME/KDE/XFCE m.fl.):
+
+```bash
+./install-linux.sh
+```
+
+Det skapar en genväg (`~/.local/share/applications/ollama-studio.desktop`). Ta bort den
+igen med `rm ~/.local/share/applications/ollama-studio.desktop`.
 
 ---
 
-## Steg 2 – Installera och starta Ollama
+## Installera Ollama (behövs för båda)
 
-Ollama Studio är bara ett skal ovanpå **Ollama** – själva motorn som kör modellerna.
-Du behöver därför ha Ollama installerat.
+Ollama Studio är bara ett skal ovanpå **Ollama** – motorn som kör modellerna.
 
 **Installera (Linux):**
 
@@ -98,16 +203,15 @@ Du behöver därför ha Ollama installerat.
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-> **macOS/Windows:** Hämta installationsprogrammet från [ollama.com](https://ollama.com).
+> **macOS/Windows:** hämta installationsprogrammet från [ollama.com](https://ollama.com).
 
-**Starta servern.** På de flesta Linux-system startar installationsprogrammet Ollama
-automatiskt som en systemtjänst. Om inte, starta den manuellt i en terminal:
+**Starta servern** (görs oftast automatiskt vid installation, annars):
 
 ```bash
 ollama serve
 ```
 
-**Låt Ollama starta automatiskt vid uppstart (Linux med systemd):**
+**Autostart vid uppstart (Linux med systemd):**
 
 ```bash
 sudo systemctl enable --now ollama
@@ -119,128 +223,44 @@ sudo systemctl enable --now ollama
 curl http://localhost:11434/api/version
 ```
 
-Får du tillbaka ett versionsnummer (t.ex. `{"version":"0.x.x"}`) körs Ollama korrekt.
-
----
-
-## Steg 3 – Hämta Ollama Studio
-
-**Alternativ A – med git (rekommenderas):**
-
-```bash
-git clone https://github.com/anderssjoeberg75/ollamastudio.git
-cd ollamastudio
-```
-
-**Alternativ B – utan git:** Gå till
-[github.com/anderssjoeberg75/ollamastudio](https://github.com/anderssjoeberg75/ollamastudio),
-klicka **Code → Download ZIP**, packa upp och öppna en terminal i mappen.
-
-Projektet innehåller bara några få filer:
-
-| Fil | Vad den gör |
-| --- | --- |
-| `ollama_studio.py` | Själva appen |
-| `run.sh` | Startskript för Linux/macOS (kollar Python, tkinter och Ollama) |
-| `run.bat` | Startskript för Windows |
-| `install-linux.sh` | Lägger appen i Linux programmeny |
-| `icon.svg` | Appikon |
-| `README.md` / `LICENSE` | Dokumentation och licens |
-
----
-
-## Steg 4 – Starta appen
-
-**Linux/macOS:**
-
-```bash
-./run.sh
-```
-
-Första gången kan du behöva göra skriptet körbart:
-
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-`run.sh` kontrollerar att Python och `tkinter` finns, och varnar om Ollama inte verkar
-köra – men startar ändå appen.
-
-**Starta direkt utan skript (alla plattformar):**
-
-```bash
-python3 ollama_studio.py
-```
-
-**Windows:** dubbelklicka på `run.bat` (eller kör `python ollama_studio.py`).
-
-När appen startar ser du längst ner till vänster en statusindikator:
-
-- 🟢 **Ansluten · v0.x.x** – allt fungerar.
-- 🔴 **Ollama körs inte** – starta Ollama (se [Steg 2](#steg-2--installera-och-starta-ollama))
-  och klicka på **Försök igen**.
-
----
-
-## Lägg till i programmenyn (Linux)
-
-Vill du starta appen från din vanliga programmeny (GNOME, KDE, XFCE m.fl.) i stället för
-från terminalen:
-
-```bash
-./install-linux.sh
-```
-
-Det skapar en genväg i `~/.local/share/applications/ollama-studio.desktop`, så att
-**Ollama Studio** dyker upp bland dina program med rätt ikon.
-
-För att ta bort genvägen igen:
-
-```bash
-rm ~/.local/share/applications/ollama-studio.desktop
-```
+Får du tillbaka ett versionsnummer körs Ollama korrekt.
 
 ---
 
 ## Använda appen
 
-Appen har två vyer som du växlar mellan i menyn till vänster.
+Gränssnittet är detsamma i både webb- och skrivbordsversionen, med två vyer i menyn till
+vänster.
 
 ### Installera en modell
 
-1. Klicka på **Upptäck / Installera** i menyn.
-2. Välj ett av två sätt:
-   - **Från listan:** klicka **↓ Installera** på någon av de populära modellerna.
-   - **Valfri modell:** skriv ett exakt modellnamn i fältet högst upp – t.ex. `llama3.2`,
-     `qwen2.5:7b` eller `mistral-nemo` (namn hittar du på
-     [ollama.com/library](https://ollama.com/library)) – och klicka **↓ Ladda ner**.
-3. En panel längst ner visar nedladdningen i realtid (procent och storlek). Du kan
-   **Avbryta** när som helst.
+1. Klicka på **Upptäck / Installera**.
+2. Antingen:
+   - klicka **↓ Installera** på en modell i listan, **eller**
+   - skriv ett exakt modellnamn (t.ex. `llama3.2` eller `qwen2.5:7b`) i fältet högst upp
+     och klicka **↓ Ladda ner**.
+3. En panel längst ner visar nedladdningen i realtid. Du kan **Avbryta** när som helst.
 4. När den är klar hittar du modellen under **Mina modeller**.
 
 ### Avinstallera en modell
 
-1. Klicka på **Mina modeller** i menyn.
-2. Klicka **✕ Avinstallera** på den modell du vill ta bort.
-3. Bekräfta i rutan. Modellfilerna raderas permanent från disken (du kan alltid ladda ner
-   dem igen senare).
+1. Klicka på **Mina modeller**.
+2. Klicka **✕ Avinstallera** och bekräfta. Modellfilerna raderas permanent från disken.
 
 ### Uppdatera listan
 
-Klicka **↻ Uppdatera** uppe till höger för att läsa om listan från Ollama (t.ex. efter att
-du installerat en modell via terminalen med `ollama pull`).
+Klicka **↻ Uppdatera** uppe till höger (t.ex. efter att du kört `ollama pull` i terminalen).
 
 ---
 
 ## Rekommenderade modeller
 
-Osäker på var du ska börja? Här är några bra val (storlekar är ungefärliga):
+Osäker på var du ska börja? (Storlekar är ungefärliga.)
 
 | Modell | Namn att skriva | Storlek | Bra för |
 | --- | --- | --- | --- |
 | Llama 3.2 1B | `llama3.2:1b` | ~1.3 GB | Svaga datorer, maxfart |
-| Llama 3.2 3B | `llama3.2` | ~2.0 GB | Allround, rekommenderad start |
+| Llama 3.2 3B | `llama3.2` | ~2.0 GB | Allround, bra att börja med |
 | Qwen 2.5 7B | `qwen2.5` | ~4.7 GB | Bra på svenska/flerspråkigt |
 | Gemma 2 2B | `gemma2:2b` | ~1.6 GB | Liten och pigg (Google) |
 | Mistral 7B | `mistral` | ~4.1 GB | Populär allround |
@@ -249,56 +269,7 @@ Osäker på var du ska börja? Här är några bra val (storlekar är ungefärli
 | Code Llama 7B | `codellama` | ~3.8 GB | Programmering |
 
 > **Tumregel:** en modell behöver ungefär lika mycket ledigt RAM/VRAM som filstorleken.
-> Har du en vanlig laptop utan kraftigt grafikkort – börja med en 1–3B-modell.
-
----
-
-## Ansluta till en annan Ollama-server
-
-Appen ansluter som standard till `http://localhost:11434`. Kör du Ollama på en annan dator
-eller port, ändra raden högst upp i `ollama_studio.py`:
-
-```python
-DEFAULT_HOST = "http://localhost:11434"
-```
-
-Byt t.ex. till `http://192.168.1.50:11434` för en Ollama-server på ditt nätverk.
-
-> **Obs:** För att en Ollama-server ska gå att nå från andra datorer måste den lyssna på
-> nätverket. På servern sätter du miljövariabeln `OLLAMA_HOST=0.0.0.0` innan du startar
-> `ollama serve` (på systemd: `sudo systemctl edit ollama` och lägg till
-> `Environment="OLLAMA_HOST=0.0.0.0"`).
-
----
-
-## Uppdatera Ollama Studio
-
-Har du klonat med git:
-
-```bash
-cd ollamastudio
-git pull
-```
-
-Laddade du ner en ZIP – hämta en ny ZIP och ersätt filerna.
-
----
-
-## Avinstallera Ollama Studio
-
-Appen installerar inga systemfiler – den ligger bara i sin mapp. För att ta bort helt:
-
-```bash
-# Ta bort menygenvägen (om du kört install-linux.sh)
-rm -f ~/.local/share/applications/ollama-studio.desktop
-
-# Ta bort programmappen
-rm -rf /sökväg/till/ollamastudio
-```
-
-Dina nedladdade Ollama-modeller påverkas inte av detta (de hanteras av Ollama, inte av
-appen). Vill du frigöra diskutrymme – avinstallera modellerna i appen först, eller kör
-`ollama rm <modell>`.
+> Utan kraftigt grafikkort – börja med en 1–3B-modell.
 
 ---
 
@@ -306,31 +277,42 @@ appen). Vill du frigöra diskutrymme – avinstallera modellerna i appen först,
 
 | Problem | Lösning |
 | --- | --- |
-| **"Ollama körs inte"** i appen | Starta Ollama: `ollama serve` (eller `sudo systemctl start ollama`). Testa `curl http://localhost:11434/api/version`. Klicka sedan **Försök igen** i appen. |
-| `ModuleNotFoundError: No module named 'tkinter'` | Installera tkinter enligt [Steg 1](#steg-1--installera-python-och-tkinter), t.ex. `sudo apt install python3-tk`. |
+| **Webb:** sidan laddas inte från andra datorn | Kontrollera att webbservern kör (`systemctl status ollama-studio-web`) och att brandväggen tillåter porten (`sudo ufw allow 8080/tcp`). Testa `curl http://localhost:8080/` på servern. |
+| **Webb:** "Ollama körs inte" i gränssnittet | Ollama svarar inte på servern. Kör `ollama serve` / `systemctl start ollama` och testa `curl http://localhost:11434/api/version`. |
+| **Webb:** frågar efter token hela tiden | Du har satt `OLLAMA_STUDIO_TOKEN`. Ange samma token som i tjänsten; fel token nollställs automatiskt. |
+| **Skrivbord:** `no display name and no $DISPLAY` | Du kör skrivbordsappen på en maskin utan grafik. Använd **webbversionen** i stället (se ovan). |
+| **Skrivbord:** `ModuleNotFoundError: No module named 'tkinter'` | Installera tkinter enligt [Steg 1](#steg-1--installera-python-och-tkinter). |
 | `./run.sh: Permission denied` | Gör skriptet körbart: `chmod +x run.sh`. |
-| `python3: command not found` | Installera Python: `sudo apt install python3` (eller motsvarande för din distro). |
-| Fönstret startar men texten ser konstig ut / rutor | Installera en grundfont: `sudo apt install fonts-dejavu` (finns oftast redan). |
-| Nedladdningen fastnar eller misslyckas | Kontrollera internet och att modellnamnet finns på [ollama.com/library](https://ollama.com/library). Namnet måste stämma exakt, inklusive eventuell tagg efter `:`. |
-| En modell jag installerade i terminalen syns inte | Klicka **↻ Uppdatera** uppe till höger. |
-| Appen når inte Ollama på en annan dator | Se [Ansluta till en annan Ollama-server](#ansluta-till-en-annan-ollama-server) – servern måste lyssna på nätverket (`OLLAMA_HOST=0.0.0.0`) och brandväggen tillåta port 11434. |
+| Nedladdningen fastnar eller misslyckas | Kontrollera internet och att modellnamnet finns exakt på [ollama.com/library](https://ollama.com/library) (inkl. eventuell tagg efter `:`). |
+| En modell du hämtade i terminalen syns inte | Klicka **↻ Uppdatera**. |
 
 ---
 
 ## Så fungerar det (teknik)
 
-Ollama Studio pratar med Ollamas lokala HTTP-API och lägger ett gränssnitt ovanpå:
+Båda varianterna pratar med Ollamas HTTP-API:
 
-| Funktion i appen | Ollama-API som används |
+| Funktion | Ollama-API |
 | --- | --- |
 | Statusindikator | `GET /api/version` |
 | Lista "Mina modeller" | `GET /api/tags` |
 | Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
 | Avinstallera | `DELETE /api/delete` |
 
-All kod finns i en enda fil (`ollama_studio.py`) och använder bara Pythons
-standardbibliotek (`tkinter` för gränssnittet och `urllib` för nätverk) – inga
-`pip install` behövs.
+- **Skrivbordsappen** (`ollama_studio.py`) använder `tkinter` för gränssnittet och `urllib`
+  för nätverk.
+- **Webbversionen** (`ollama_web.py`) är en liten webbserver byggd på `http.server` som
+  serverar ett HTML/JS-gränssnitt och proxar anropen vidare till Ollama.
+
+Allt bygger enbart på Pythons standardbibliotek – inga `pip install` behövs.
+
+| Fil | Beskrivning |
+| --- | --- |
+| `ollama_web.py` | Webbversionen (server + inbyggt webb-UI) |
+| `ollama_studio.py` | Skrivbordsappen (tkinter) |
+| `ollama-studio-web.service` | systemd-tjänst för webbversionen |
+| `run.sh` / `run.bat` | Startskript för skrivbordsappen (Linux-mac / Windows) |
+| `install-linux.sh` / `icon.svg` | Menygenväg + ikon (skrivbordsappen på Linux) |
 
 ---
 
