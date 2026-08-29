@@ -149,9 +149,13 @@ def parse_gpu_csv(text):
     """Tolka nvidia-smi --query-gpu CSV (index,uuid,name,util,mem_used,mem_total,temp,power,power_limit)."""
     gpus = []
     for line in (text or "").strip().splitlines():
-        c = [p.strip() for p in line.split(",")]
-        if len(c) < 9:
+        if not line.strip():
             continue
+        c = [p.strip() for p in line.split(",")]
+        if len(c) < 3:      # behöver minst index, uuid, namn
+            continue
+        while len(c) < 9:   # äldre kort/drivrutiner kan sakna fält – tappa inte kortet
+            c.append("")
         gpus.append({
             "index": int(_num(c[0]) or 0),
             "uuid": c[1],
@@ -194,13 +198,17 @@ def nvidia_gpus():
               "temperature.gpu,power.draw,power.limit")
         gout = subprocess.run(
             ["nvidia-smi", "--query-gpu=" + gq, "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=6)
+            capture_output=True, text=True, timeout=8)
         gpus = parse_gpu_csv(gout.stdout)
+        # Fånga upp varningar/fel från nvidia-smi (t.ex. ett kort som inte kan läsas)
+        err = (gout.stderr or "").strip() or None
+        if err is None and gout.returncode != 0:
+            err = "nvidia-smi avslutades med kod %d" % gout.returncode
         by_uuid = {g["uuid"]: g for g in gpus}
         pout = subprocess.run(
             ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
              "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=6)
+            capture_output=True, text=True, timeout=8)
         for p in parse_procs_csv(pout.stdout):
             g = by_uuid.get(p["uuid"])
             if g:
@@ -208,7 +216,7 @@ def nvidia_gpus():
         # Koppla in vilka Studio-backends (GPU-instanser) som pekar på varje GPU-index
         for g in gpus:
             g["backends"] = [b["label"] for b in BACKENDS if str(b.get("gpu")) == str(g["index"])]
-        return gpus, None
+        return gpus, err
     except Exception as e:
         return None, str(e)
 
