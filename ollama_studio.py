@@ -211,14 +211,16 @@ class ProgressBar(tk.Canvas):
     def __init__(self, parent, width=320, height=8, **kw):
         super().__init__(parent, width=width, height=height,
                          bg=C["border"], highlightthickness=0, **kw)
-        self._w = width
-        self._h = height
+        # OBS: använd INTE self._w / self._h – tkinter använder self._w internt
+        # för widgetens Tcl-namn. Egna attribut måste ha andra namn.
+        self._barw = width
+        self._barh = height
         self._frac = 0.0
         self._fill = self.create_rectangle(0, 0, 0, height, fill=C["accent"], width=0)
         self.bind("<Configure>", self._on_resize)
 
     def _on_resize(self, event):
-        self._w = event.width
+        self._barw = event.width
         self._redraw()
 
     def set(self, frac):
@@ -229,7 +231,7 @@ class ProgressBar(tk.Canvas):
         self.itemconfig(self._fill, fill=col)
 
     def _redraw(self):
-        self.coords(self._fill, 0, 0, int(self._w * self._frac), self._h)
+        self.coords(self._fill, 0, 0, int(self._barw * self._frac), self._barh)
 
 
 # --------------------------------------------------------------------------
@@ -256,17 +258,18 @@ class OllamaManagerApp:
 
     # ---- Grund ------------------------------------------------------------
     def _build_fonts(self):
-        base = "Segoe UI"
+        # Välj första tillgängliga font – täcker Windows, macOS och vanliga Linux-distar
         families = set(tkfont.families())
-        if base not in families:
-            base = "Helvetica" if "Helvetica" in families else "TkDefaultFont"
+        preferred = ["Segoe UI", "Ubuntu", "Cantarell", "Noto Sans",
+                     "DejaVu Sans", "Liberation Sans", "Helvetica", "Arial"]
+        base = next((f for f in preferred if f in families), "TkDefaultFont")
         self.f_title  = tkfont.Font(family=base, size=17, weight="bold")
         self.f_h2     = tkfont.Font(family=base, size=12, weight="bold")
         self.f_body   = tkfont.Font(family=base, size=10)
         self.f_small  = tkfont.Font(family=base, size=9)
         self.f_chip   = tkfont.Font(family=base, size=8, weight="bold")
         self.f_btn    = tkfont.Font(family=base, size=10, weight="bold")
-        self.f_nav    = tkfont.Font(family=base, size=11, weight="bold")
+        self.f_nav    = tkfont.Font(family=base, size=10, weight="bold")
 
     def _build_window(self):
         self.root.title(f"{APP_TITLE}")
@@ -276,22 +279,26 @@ class OllamaManagerApp:
 
     def _build_layout(self):
         # Sidomeny
-        self.sidebar = tk.Frame(self.root, bg=C["sidebar"], width=210)
+        self.sidebar = tk.Frame(self.root, bg=C["sidebar"], width=240)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
         # Logotyp / titel
         head = tk.Frame(self.sidebar, bg=C["sidebar"])
         head.pack(fill="x", padx=18, pady=(22, 24))
-        tk.Label(head, text="🦙  Ollama", font=self.f_title,
-                 bg=C["sidebar"], fg=C["text"]).pack(anchor="w")
-        tk.Label(head, text="Studio", font=self.f_small,
-                 bg=C["sidebar"], fg=C["subtle"]).pack(anchor="w")
+        logorow = tk.Frame(head, bg=C["sidebar"])
+        logorow.pack(anchor="w")
+        tk.Label(logorow, text="◆", font=self.f_title,
+                 bg=C["sidebar"], fg=C["accent"]).pack(side="left", padx=(0, 8))
+        tk.Label(logorow, text="Ollama", font=self.f_title,
+                 bg=C["sidebar"], fg=C["text"]).pack(side="left")
+        tk.Label(head, text="S T U D I O", font=self.f_small,
+                 bg=C["sidebar"], fg=C["subtle"]).pack(anchor="w", pady=(2, 0))
 
-        # Navigering
+        # Navigering (● som markör – renderas säkert på alla plattformar)
         self.nav_buttons = {}
-        self._nav_item("models", "🗂", "Mina modeller")
-        self._nav_item("discover", "🔍", "Upptäck / Installera")
+        self._nav_item("models", "●", "Mina modeller")
+        self._nav_item("discover", "●", "Upptäck / Installera")
 
         # Serverstatus längst ned
         status = tk.Frame(self.sidebar, bg=C["sidebar"])
@@ -301,7 +308,7 @@ class OllamaManagerApp:
         self.status_dot.pack(side="left")
         self.status_text = tk.Label(status, text="Kontrollerar…", font=self.f_small,
                                     bg=C["sidebar"], fg=C["subtle"], anchor="w",
-                                    justify="left", wraplength=150)
+                                    justify="left", wraplength=185)
         self.status_text.pack(side="left", padx=(6, 0))
 
         # Innehållsyta
@@ -319,8 +326,9 @@ class OllamaManagerApp:
         inner.pack(fill="x", padx=8, pady=9)
         ic = tk.Label(inner, text=icon, font=self.f_nav, bg=C["sidebar"], fg=C["subtle"])
         ic.pack(side="left", padx=(4, 10))
-        lbl = tk.Label(inner, text=label, font=self.f_nav, bg=C["sidebar"], fg=C["subtle"])
-        lbl.pack(side="left")
+        lbl = tk.Label(inner, text=label, font=self.f_nav, bg=C["sidebar"],
+                       fg=C["subtle"], anchor="w")
+        lbl.pack(side="left", fill="x", expand=True)
 
         widgets = [btn, inner, ic, lbl]
         for w in widgets:
@@ -411,7 +419,7 @@ class OllamaManagerApp:
                                      highlightbackground=C["border"], highlightthickness=1)
         self.custom_entry.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 10))
         self.custom_entry.bind("<Return>", lambda e: self._pull_custom())
-        self._button(row, "⬇  Ladda ner", self._pull_custom, kind="accent").pack(side="left")
+        self._button(row, "↓  Ladda ner", self._pull_custom, kind="accent").pack(side="left")
 
         # Populära modeller
         tk.Label(view, text="Populära modeller", font=self.f_h2,
@@ -484,7 +492,7 @@ class OllamaManagerApp:
             tk.Label(right, text="✓ Installerad", font=self.f_small,
                      bg=C["card"], fg=C["green"]).pack()
         else:
-            self._button(right, "⬇  Installera",
+            self._button(right, "↓  Installera",
                          lambda p=item["pull"]: self._start_pull(p),
                          kind="accent", small=False).pack()
 
@@ -565,7 +573,7 @@ class OllamaManagerApp:
                 self.models_list,
                 "Inga modeller installerade än",
                 "Gå till \"Upptäck / Installera\" i menyn för att ladda ner din första modell.",
-                action=("🔍  Öppna Upptäck", lambda: self._show_view("discover")),
+                action=("Öppna Upptäck / Installera", lambda: self._show_view("discover")),
             )
             self.models_summary.configure(text="0 modeller")
             return
@@ -619,21 +627,20 @@ class OllamaManagerApp:
         meta.pack(anchor="w", pady=(5, 0))
         bits = []
         if params:
-            bits.append(f"⚙ {params}")
+            bits.append(params)
         if quant:
-            bits.append(f"◆ {quant}")
+            bits.append(quant)
         if family:
-            bits.append(f"⌘ {family}")
-        bits.append(f"💾 {size}")
+            bits.append(family)
+        bits.append(size)
         if modified:
-            bits.append(f"🕐 {modified}")
-        for i, b in enumerate(bits):
-            tk.Label(meta, text=b, font=self.f_small, bg=C["card"],
-                     fg=C["subtle"]).pack(side="left", padx=(0 if i == 0 else 14, 0))
+            bits.append(modified)
+        tk.Label(meta, text="     ·     ".join(bits), font=self.f_small,
+                 bg=C["card"], fg=C["subtle"]).pack(side="left")
 
         right = tk.Frame(inner, bg=C["card"])
         right.pack(side="right", padx=(12, 0))
-        self._button(right, "🗑  Avinstallera",
+        self._button(right, "✕  Avinstallera",
                      lambda n=name: self._confirm_delete(n),
                      kind="danger", small=True).pack()
 
@@ -665,7 +672,7 @@ class OllamaManagerApp:
         Modal(self.root, self,
               title="Avinstallera modell?",
               body=f"Vill du ta bort \"{name}\"?\n\nModellfilerna raderas permanent från disken.\nDu kan alltid ladda ner den igen senare.",
-              confirm_text="🗑  Avinstallera",
+              confirm_text="✕  Avinstallera",
               confirm_kind="danger",
               on_confirm=lambda: self._do_delete(name))
 
@@ -791,7 +798,7 @@ class OllamaManagerApp:
         t.overrideredirect(True)
         t.configure(bg=C["danger"] if error else C["green"])
         t.attributes("-topmost", True)
-        lbl = tk.Label(t, text=("⚠  " if error else "✓  ") + text, font=self.f_body,
+        lbl = tk.Label(t, text=("×  " if error else "✓  ") + text, font=self.f_body,
                        bg=(C["danger"] if error else C["green"]), fg="#0f1115",
                        padx=18, pady=10)
         lbl.pack()
@@ -813,6 +820,7 @@ class Modal(tk.Toplevel):
         super().__init__(parent)
         self.app = app
         self.on_confirm = on_confirm
+        self.transient(parent)          # låter fönsterhanteraren (t.ex. på Linux) hålla den ovanpå
         self.overrideredirect(True)
         self.configure(bg=C["border"])
         self.attributes("-topmost", True)
