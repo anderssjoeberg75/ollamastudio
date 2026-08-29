@@ -125,7 +125,25 @@ PAGE = r"""<!doctype html>
   .header h1{font-size:22px;margin:0}
   .header .right{display:flex;align-items:center;gap:14px;color:var(--subtle);font-size:13px}
   .view{flex:1;overflow-y:auto;padding:8px 24px 24px}
-  .view.hidden{display:none}
+  .view.hidden{display:none!important}
+
+  /* Chatt */
+  .view.chat{display:flex;flex-direction:column;overflow:hidden;padding:8px 24px 16px}
+  .chatbar{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+  .chatbar select{background:var(--card);color:var(--text);border:1px solid var(--border);
+    border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;min-width:180px}
+  .chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:6px 2px}
+  .msg{max-width:80%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;
+    white-space:pre-wrap;overflow-wrap:anywhere}
+  .msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+  .msg.assistant{align-self:flex-start;background:var(--card);border:1px solid var(--border);
+    border-bottom-left-radius:4px}
+  .chat-empty{color:var(--faint);text-align:center;margin:auto;font-size:14px;max-width:360px}
+  .chat-input{display:flex;gap:10px;margin-top:8px}
+  .chat-input textarea{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:10px 12px;font-size:14px;font-family:inherit;resize:none;
+    max-height:160px;line-height:1.4}
+  .chat-input textarea:focus{outline:none;border-color:var(--accent)}
 
   /* Kort */
   .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:8px 2px}
@@ -203,6 +221,7 @@ PAGE = r"""<!doctype html>
     <div class="nav">
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
+      <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
     </div>
     <div class="status"><span class="dot" id="statusDot">●</span><span id="statusText">Kontrollerar…</span></div>
   </div>
@@ -239,6 +258,19 @@ PAGE = r"""<!doctype html>
         <div class="st" id="dlStatus"></div>
       </div>
     </div>
+
+    <div id="view-chat" class="view chat hidden">
+      <div class="chatbar">
+        <label style="color:var(--subtle);font-size:13px">Modell:</label>
+        <select id="chatModel"></select>
+        <button class="btn ghost small" onclick="clearChat()">Rensa</button>
+      </div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div class="chat-input">
+        <textarea id="chatInput" rows="1" placeholder="Skriv ett meddelande…  (Enter skickar, Shift+Enter ny rad)"></textarea>
+        <button class="btn accent" id="chatSend">Skicka</button>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -260,6 +292,8 @@ let installed = new Set();
 let running = new Map();   // namn -> info om modeller som just nu är inlästa i minnet
 let lastModels = [];       // senast hämtade modell-listan (för lätt omritning)
 let pullController = null;
+let chatMessages = [];     // konversationshistorik: {role, content}
+let chatController = null;
 
 function headers(json){
   const h = json ? {'Content-Type':'application/json'} : {};
@@ -286,12 +320,14 @@ function humanSize(b){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta'};
 function showView(v){
-  document.getElementById('nav-models').classList.toggle('active', v==='models');
-  document.getElementById('nav-discover').classList.toggle('active', v==='discover');
-  document.getElementById('view-models').classList.toggle('hidden', v!=='models');
-  document.getElementById('view-discover').classList.toggle('hidden', v!=='discover');
-  document.getElementById('title').textContent = v==='models' ? 'Mina modeller' : 'Upptäck / Installera';
+  for(const k of ['models','discover','chat']){
+    document.getElementById('nav-'+k).classList.toggle('active', v===k);
+    document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
+  }
+  document.getElementById('title').textContent = TITLES[v] || '';
+  if(v==='chat'){ populateChatModels(); renderChat(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
 }
 function setStatus(text, color){
   document.getElementById('statusDot').style.color = color;
@@ -316,6 +352,7 @@ async function refresh(){
       running = new Map((pd.models||[]).map(m=>[m.name, m]));
     }catch(e){ running = new Map(); }
     lastModels = models;
+    populateChatModels();
     setStatus('Ansluten · v'+(v.version||'?'), 'var(--green)');
     renderModels(models);
   }catch(e){
@@ -501,6 +538,94 @@ document.getElementById('mConfirm').onclick = async ()=>{
   refresh();
 };
 
+/* ---- Chatt ---- */
+function populateChatModels(){
+  const sel = document.getElementById('chatModel');
+  if(!sel) return;
+  const names = lastModels.map(m=>m.name);
+  const cur = sel.value;
+  if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
+  sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
+  if(cur && names.includes(cur)) sel.value = cur;
+  else{
+    const active = [...running.keys()][0];   // föreslå den som redan är i minnet
+    sel.value = (active && names.includes(active)) ? active : names[0];
+  }
+}
+function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
+function renderChat(){
+  const box = document.getElementById('chatMessages');
+  if(!chatMessages.length){
+    box.innerHTML = '<div class="chat-empty">Välj en modell och skriv ett meddelande för att börja chatta.</div>';
+    return;
+  }
+  box.innerHTML = chatMessages.map(m=>'<div class="msg '+m.role+'">'+esc(m.content||'…')+'</div>').join('');
+  box.scrollTop = box.scrollHeight;
+}
+function clearChat(){
+  if(chatController) chatController.abort();
+  chatMessages = [];
+  renderChat();
+}
+async function sendChat(){
+  const model = document.getElementById('chatModel').value;
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if(!model){ toast('Ingen modell vald', true); return; }
+  if(!text || chatController) return;
+
+  chatMessages.push({role:'user', content:text});
+  input.value=''; autoGrow(input);
+  chatMessages.push({role:'assistant', content:''});
+  const idx = chatMessages.length - 1;
+  renderChat();
+  const box = document.getElementById('chatMessages');
+  const send = document.getElementById('chatSend');
+  send.textContent = 'Stoppa';
+
+  chatController = new AbortController();
+  try{
+    const r = await api('/api/chat', {method:'POST', headers:headers(true),
+      body: JSON.stringify({model, messages: chatMessages.slice(0, idx)}),
+      signal: chatController.signal});
+    if(!r.ok){ throw new Error('HTTP '+r.status); }
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while((i = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0,i).trim(); buf = buf.slice(i+1);
+        if(!line) continue;
+        try{
+          const msg = JSON.parse(line);
+          if(msg.message && msg.message.content){
+            chatMessages[idx].content += msg.message.content;
+            if(box.lastChild) box.lastChild.textContent = chatMessages[idx].content;
+            box.scrollTop = box.scrollHeight;
+          }
+          if(msg.error){ chatMessages[idx].content += '\n[Fel: '+msg.error+']'; }
+        }catch(e){}
+      }
+    }
+    if(!chatMessages[idx].content) chatMessages[idx].content = '(inget svar)';
+    renderChat();
+  }catch(e){
+    if(e.name === 'AbortError') chatMessages[idx].content += '  [avbruten]';
+    else { chatMessages[idx].content = '[Fel: '+e.message+']'; toast('Chatt misslyckades', true); }
+    renderChat();
+  }finally{
+    chatController = null;
+    document.getElementById('chatSend').textContent = 'Skicka';
+  }
+}
+document.getElementById('chatSend').onclick = ()=>{ if(chatController) chatController.abort(); else sendChat(); };
+document.getElementById('chatInput').addEventListener('input', e=>autoGrow(e.target));
+document.getElementById('chatInput').addEventListener('keydown', e=>{
+  if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
+});
+
 // Uppdatera "aktiv modell" automatiskt var 5:e sekund (den kan laddas/frigöras när som helst)
 async function refreshRunning(){
   if(AUTH && !token) return;         // undvik upprepade token-frågor
@@ -623,15 +748,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "name saknas"}, 400)
             return self._stream_pull(name)
 
+        if path == "/api/chat":
+            model = (data.get("model") or "").strip()
+            messages = data.get("messages") or []
+            if not model or not messages:
+                return self._send_json({"error": "model och messages krävs"}, 400)
+            return self._proxy_stream("/api/chat",
+                                      {"model": model, "messages": messages, "stream": True})
+
         self.send_error(404, "Not found")
 
     def _stream_pull(self, name):
-        """Strömma NDJSON-status från Ollamas /api/pull vidare till webbläsaren."""
+        return self._proxy_stream("/api/pull", {"name": name, "stream": True})
+
+    def _proxy_stream(self, upstream_path, payload):
+        """POSTa till Ollama och strömma NDJSON-svaret rad för rad vidare till webbläsaren."""
         try:
-            body = json.dumps({"name": name, "stream": True}).encode()
-            req = urllib.request.Request(OLLAMA_URL + "/api/pull", data=body, method="POST",
+            body = json.dumps(payload).encode()
+            req = urllib.request.Request(OLLAMA_URL + upstream_path, data=body, method="POST",
                                          headers={"Content-Type": "application/json"})
-            upstream = urllib.request.urlopen(req, timeout=60)
+            upstream = urllib.request.urlopen(req, timeout=120)
         except Exception as e:
             return self._send_json({"error": str(e)}, 502)
 

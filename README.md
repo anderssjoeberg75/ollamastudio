@@ -53,6 +53,8 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Aktiv modell** – se vilken modell som just nu är inläst i minnet ("körs nu"), inklusive
   om den ligger på GPU/CPU, hur mycket VRAM den använder och när den frigörs. Uppdateras
   automatiskt.
+- **Chatta** (webbversionen) – prata med en modell direkt i webbläsaren, med streamande
+  svar token för token och sparad konversationshistorik.
 - **Mörkt, modernt tema** i LM Studio-stil.
 - **Inga externa beroenden** – bygger enbart på Pythons standardbibliotek.
 
@@ -262,6 +264,15 @@ och listan uppdateras automatiskt var femte sekund.
 
 Klicka **↻ Uppdatera** uppe till höger (t.ex. efter att du kört `ollama pull` i terminalen).
 
+### Chatta med en modell (webbversionen)
+
+Öppna fliken **Chatta** i menyn (finns i webbversionen). Välj en modell i listan högst upp
+och skriv ett meddelande – tryck **Enter** för att skicka (**Shift+Enter** för ny rad).
+Svaret strömmas fram token för token, och konversationen behålls så modellen minns
+sammanhanget. Klicka **Rensa** för att börja om, eller **Stoppa** för att avbryta ett svar
+som är på väg. Skickar första meddelandet till en modell som inte redan är laddad tar det
+någon sekund extra medan Ollama läser in den i minnet.
+
 ---
 
 ## Rekommenderade modeller
@@ -307,8 +318,10 @@ Båda varianterna pratar med Ollamas HTTP-API:
 | --- | --- |
 | Statusindikator | `GET /api/version` |
 | Lista "Mina modeller" | `GET /api/tags` |
+| Aktiv modell ("körs nu") | `GET /api/ps` |
 | Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
 | Avinstallera | `DELETE /api/delete` |
+| Chatta (webbversionen) | `POST /api/chat` (strömmar svaret) |
 
 - **Skrivbordsappen** (`ollama_studio.py`) använder `tkinter` för gränssnittet och `urllib`
   för nätverk.
