@@ -1177,6 +1177,11 @@ def _local_ips():
 
 
 def main():
+    # Radbuffra stdout så startutskriften syns direkt i journalctl (annars buffras den)
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     # Kontrollera att Ollama går att nå (varning, inte stopp)
     try:
         urllib.request.urlopen(OLLAMA_URL + "/api/version", timeout=3).read()
