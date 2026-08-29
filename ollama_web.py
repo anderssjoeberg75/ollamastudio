@@ -332,6 +332,10 @@ PAGE = r"""<!doctype html>
     color:var(--text);padding:10px 12px;font-size:14px;font-family:inherit;resize:none;
     max-height:160px;line-height:1.4}
   .chat-input textarea:focus{outline:none;border-color:var(--accent)}
+  .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
+  .chatwarn.ok{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green)}
+  .chatwarn.warn{background:rgba(255,180,84,.10);border:1px solid rgba(255,180,84,.45);color:var(--amber)}
+  .chatwarn.err{background:var(--danger-dim);border:1px solid var(--danger);color:var(--danger)}
 
   /* System / GPU */
   .sysgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 2px}
@@ -482,6 +486,7 @@ PAGE = r"""<!doctype html>
         <select id="chatBackend" style="display:none"></select>
         <button class="btn ghost small" onclick="clearChat()">Rensa</button>
       </div>
+      <div id="chatWarn" class="chatwarn"></div>
       <div id="chatMessages" class="chat-messages"></div>
       <div class="chat-input">
         <textarea id="chatInput" rows="1" placeholder="Skriv ett meddelande…  (Enter skickar, Shift+Enter ny rad)"></textarea>
@@ -515,6 +520,7 @@ let chatMessages = [];     // konversationshistorik: {role, content}
 let chatController = null;
 let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false};   // /api/config
 let systemTimer = null;    // intervall för System-vyn
+let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
 
 function buildRunning(list){
   const map = new Map();
@@ -567,7 +573,7 @@ function showView(v){
     document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
   }
   document.getElementById('title').textContent = TITLES[v] || '';
-  if(v==='chat'){ populateChatModels(); renderChat(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
+  if(v==='chat'){ populateChatModels(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -880,6 +886,68 @@ document.getElementById('chatInput').addEventListener('keydown', e=>{
   if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
 });
 
+/* ---- Varning: får modellen plats på vald GPU? ---- */
+function modelSizeBytes(name){
+  const m = lastModels.find(x=>x.name===name);
+  return m ? (Number(m.size)||0) : 0;
+}
+function selectedBackendGpu(){
+  const sel = document.getElementById('chatBackend');
+  const b = (cfg.backends||[]).find(x=>x.label === (sel ? sel.value : ''));
+  if(b) return b.gpu;
+  if(cfg.backends && cfg.backends.length === 1) return cfg.backends[0].gpu;
+  return null;
+}
+async function updateChatWarning(){
+  const el = document.getElementById('chatWarn');
+  if(!el) return;
+  el.style.display = 'none'; el.innerHTML = '';
+  const model = document.getElementById('chatModel').value;
+  const size = modelSizeBytes(model);
+  if(!model || !size) return;
+
+  try{
+    const r = await fetch('/api/system', {headers: headers(false)});
+    if(r.ok) lastSystem = await r.json();
+  }catch(e){}
+  const gpus = (lastSystem && lastSystem.gpus) || [];
+  if(!gpus.length) return;                       // ingen GPU-info -> ingen varning
+
+  let g = null;
+  const idx = selectedBackendGpu();
+  if(idx !== null && idx !== undefined && idx !== '') g = gpus.find(x=>String(x.index)===String(idx));
+  else if(gpus.length === 1) g = gpus[0];
+  if(!g || !g.mem_total_mb) return;
+
+  const totalB = g.mem_total_mb * 1024*1024;
+  const usedB  = (g.mem_used_mb || 0) * 1024*1024;
+  const freeB  = Math.max(0, totalB - usedB);
+  const needB  = size * 1.15;                     // uppskattat: vikter + lite overhead
+  const label  = (document.getElementById('chatBackend').value) || (g.name || ('GPU '+g.index));
+
+  let cls, msg;
+  if(needB > totalB){
+    cls = 'err';
+    msg = '⚠ Modellen får inte plats på ' + esc(label) + ' (' + humanSize(totalB) + '). '
+        + 'Den behöver ~' + humanSize(needB) + ' och skulle då köras delvis på CPU (långsamt). '
+        + 'Välj en mindre modell eller ett kort med mer VRAM.';
+  } else if(needB > freeB){
+    cls = 'warn';
+    msg = '⚠ Kan bli trångt på ' + esc(label) + ': ~' + humanSize(needB) + ' behövs men bara '
+        + humanSize(freeB) + ' ledigt just nu (' + humanSize(totalB) + ' totalt). '
+        + 'Frigör en modell eller välj en annan GPU.';
+  } else {
+    cls = 'ok';
+    msg = '✓ Får plats på ' + esc(label) + ': ~' + humanSize(needB) + ' behövs, '
+        + humanSize(freeB) + ' ledigt av ' + humanSize(totalB) + '.';
+  }
+  el.className = 'chatwarn ' + cls;
+  el.innerHTML = msg;
+  el.style.display = 'block';
+}
+document.getElementById('chatModel').addEventListener('change', updateChatWarning);
+document.getElementById('chatBackend').addEventListener('change', updateChatWarning);
+
 // Uppdatera "aktiv modell" automatiskt var 5:e sekund (den kan laddas/frigöras när som helst)
 async function refreshRunning(){
   if(AUTH && !token) return;         // undvik upprepade token-frågor
@@ -926,7 +994,8 @@ async function fetchSystem(){
   try{
     const r = await fetch('/api/system', {headers: headers(false)});
     if(!r.ok){ document.getElementById('systemBody').innerHTML='<div class="sys-warn">Kunde inte hämta systeminfo.</div>'; return; }
-    renderSystem(await r.json());
+    lastSystem = await r.json();
+    renderSystem(lastSystem);
   }catch(e){}
 }
 function renderSystem(s){

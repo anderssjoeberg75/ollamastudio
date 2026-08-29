@@ -59,6 +59,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
   vilken GPU en modell ska köras på.
+- **VRAM-varning** (webbversionen) – i chatten visas grönt/gult/rött om den valda modellen
+  får plats på det valda kortets VRAM (jämför modellens storlek mot GPU:ns lediga/totala
+  minne) innan du skickar.
 - **Mörkt, modernt tema** i LM Studio-stil.
 - **Inga externa beroenden** – bygger enbart på Pythons standardbibliotek.
 
@@ -323,6 +326,12 @@ Svaret strömmas fram token för token, och konversationen behålls så modellen
 sammanhanget. Klicka **Rensa** för att börja om, eller **Stoppa** för att avbryta ett svar
 som är på väg. Skickar första meddelandet till en modell som inte redan är laddad tar det
 någon sekund extra medan Ollama läser in den i minnet.
+
+Kör du flera GPU:er visas en **VRAM-varning** ovanför chatten: grön om modellen får plats
+på det valda kortet, gul om det är ont om ledigt VRAM just nu, och röd om modellen är för
+stor för kortet (och då skulle spilla över till CPU och bli långsam). Behovet är en
+uppskattning utifrån modellens storlek – finjustera genom att välja en annan GPU eller en
+mindre/mer kvantiserad modell.
 
 ---
 
