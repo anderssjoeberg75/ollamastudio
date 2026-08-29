@@ -11,9 +11,10 @@
 #   3. Starta en instans per GPU:
 #        sudo systemctl enable --now ollama-gpu@0
 #        sudo systemctl enable --now ollama-gpu@1
-#   4. Peka Ollama Studio på instanserna (i ollama-studio-web.service):
-#        Environment=OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1
-#        sudo systemctl restart ollama-studio-web
+#   4. Peka Ollama Studio på instanserna (i ollama-studio-web.service). OBS: citattecken
+#      runt hela raden krävs eftersom värdet innehåller mellanslag:
+#        Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1"
+#        sudo systemctl daemon-reload && sudo systemctl restart ollama-studio-web
 #
 # Kontrollera:  systemctl status ollama-gpu@0   ·   journalctl -u ollama-gpu@0 -f
 # ---------------------------------------------------------------------------
