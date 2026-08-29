@@ -34,8 +34,13 @@ Environment=CUDA_VISIBLE_DEVICES=%i
 Environment=OLLAMA_MODELS=/usr/share/ollama/.ollama/models
 User=ollama
 Group=ollama
-# Lyssna på 127.0.0.1:(11434 + GPU-index). Ollama Studio pratar med den lokalt.
-ExecStart=/bin/sh -c 'OLLAMA_HOST=127.0.0.1:$((11434 + %i)) exec ollama serve'
+# Bind-adress. Standard 127.0.0.1 = bara lokalt på servern (räcker för Ollama Studio
+# som kör på samma maskin). Vill du nå instanserna från EN ANNAN dator (t.ex. en app
+# på nätverket) – byt till 0.0.0.0 så lyssnar de på alla nätverkskort. OBS: då kan vem
+# som helst på nätverket använda Ollama; begränsa med brandvägg.
+Environment=OLLAMA_BIND=127.0.0.1
+# Lyssnar på OLLAMA_BIND:(11434 + GPU-index).
+ExecStart=/bin/sh -c 'OLLAMA_HOST=${OLLAMA_BIND}:$((11434 + %i)) exec ollama serve'
 Restart=on-failure
 RestartSec=3
 
