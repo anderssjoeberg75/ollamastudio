@@ -57,6 +57,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   svar token för token och sparad konversationshistorik. Svaren renderas som **Markdown**
   (rubriker, listor, fetstil och kodblock med kopieringsknapp), och under varje svar visas
   **hastighet** (tokens/sekund), antal tokens och tid – smidigt för att jämföra olika GPU:er.
+  Under **⚙ Inställningar** kan du sätta systemprompt, temperatur och kontextlängd.
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -328,6 +329,11 @@ Svaret strömmas fram token för token, och konversationen behålls så modellen
 sammanhanget. Klicka **Rensa** för att börja om, eller **Stoppa** för att avbryta ett svar
 som är på väg. Skickar första meddelandet till en modell som inte redan är laddad tar det
 någon sekund extra medan Ollama läser in den i minnet.
+
+Klicka **⚙ Inställningar** i chatten för att sätta en **systemprompt** (ge modellen en roll,
+t.ex. "Du är en hjälpsam assistent som svarar kortfattat på svenska"), **temperatur** (lägre
+= mer fokuserat/förutsägbart) och **kontextlängd** (`num_ctx`). Inställningarna sparas i
+webbläsaren och skickas med som Ollama-`options` vid varje meddelande.
 
 Kör du flera GPU:er visas en **VRAM-varning** ovanför chatten: grön om modellen får plats
 på det valda kortet, gul om det är ont om ledigt VRAM just nu, och röd om modellen är för

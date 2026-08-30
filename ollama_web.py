@@ -348,6 +348,16 @@ PAGE = r"""<!doctype html>
     color:var(--text);padding:10px 12px;font-size:14px;font-family:inherit;resize:none;
     max-height:160px;line-height:1.4}
   .chat-input textarea:focus{outline:none;border-color:var(--accent)}
+  .chat-settings{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:0 2px 8px}
+  .chat-settings .cs-row{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--subtle);margin-bottom:8px}
+  .cs-grid .cs-row{margin-bottom:0}
+  .chat-settings textarea{background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);
+    padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical}
+  .chat-settings textarea:focus,.chat-settings select:focus{outline:none;border-color:var(--accent)}
+  .chat-settings select{background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);
+    padding:7px 9px;font-size:13px;font-family:inherit}
+  .chat-settings input[type=range]{accent-color:var(--accent);width:100%}
+  .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
   .chatwarn.ok{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green)}
   .chatwarn.warn{background:rgba(255,180,84,.10);border:1px solid rgba(255,180,84,.45);color:var(--amber)}
@@ -500,7 +510,30 @@ PAGE = r"""<!doctype html>
         <select id="chatModel"></select>
         <label id="chatGpuLabel" style="color:var(--subtle);font-size:13px;display:none">GPU:</label>
         <select id="chatBackend" style="display:none"></select>
+        <button class="btn ghost small" onclick="toggleChatSettings()">⚙ Inställningar</button>
         <button class="btn ghost small" onclick="clearChat()">Rensa</button>
+      </div>
+      <div id="chatSettings" class="chat-settings" style="display:none">
+        <label class="cs-row">
+          <span>Systemprompt (modellens roll/instruktion)</span>
+          <textarea id="csSystem" rows="2" placeholder="T.ex. Du är en hjälpsam assistent som svarar kortfattat på svenska."></textarea>
+        </label>
+        <div class="cs-grid">
+          <label class="cs-row">
+            <span>Temperatur: <b id="csTempVal">0.8</b> <span style="color:var(--faint)">(lägre = mer fokuserat)</span></span>
+            <input id="csTemp" type="range" min="0" max="2" step="0.1" value="0.8">
+          </label>
+          <label class="cs-row">
+            <span>Kontextlängd (num_ctx)</span>
+            <select id="csCtx">
+              <option value="">Standard</option>
+              <option value="2048">2048</option>
+              <option value="4096">4096</option>
+              <option value="8192">8192</option>
+              <option value="16384">16384</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div id="chatWarn" class="chatwarn"></div>
       <div id="chatMessages" class="chat-messages"></div>
@@ -929,8 +962,11 @@ async function sendChat(){
   const backend = document.getElementById('chatBackend').value || undefined;
   chatController = new AbortController();
   try{
+    const sys = chatSystemPrompt();
+    const convo = chatMessages.slice(0, idx);
+    const msgs = sys ? [{role:'system', content:sys}].concat(convo) : convo;
     const r = await api('/api/chat', {method:'POST', headers:headers(true),
-      body: JSON.stringify({model, backend, messages: chatMessages.slice(0, idx)}),
+      body: JSON.stringify({model, backend, messages: msgs, options: chatOptions()}),
       signal: chatController.signal});
     if(!r.ok){ throw new Error('HTTP '+r.status); }
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
@@ -977,6 +1013,35 @@ document.getElementById('chatInput').addEventListener('input', e=>autoGrow(e.tar
 document.getElementById('chatInput').addEventListener('keydown', e=>{
   if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
 });
+
+/* ---- Chattinställningar: systemprompt, temperatur, kontextlängd ---- */
+function toggleChatSettings(){
+  const el = document.getElementById('chatSettings');
+  el.style.display = (el.style.display === 'none' || !el.style.display) ? 'block' : 'none';
+}
+function chatSystemPrompt(){ return document.getElementById('csSystem').value.trim(); }
+function chatOptions(){
+  const o = {};
+  const t = parseFloat(document.getElementById('csTemp').value);
+  if(!isNaN(t)) o.temperature = t;
+  const c = parseInt(document.getElementById('csCtx').value, 10);
+  if(c) o.num_ctx = c;
+  return o;
+}
+(function csInit(){
+  try{
+    const sys = localStorage.getItem('os_sys'); if(sys !== null) document.getElementById('csSystem').value = sys;
+    const t = localStorage.getItem('os_temp'); if(t !== null) document.getElementById('csTemp').value = t;
+    document.getElementById('csTempVal').textContent = document.getElementById('csTemp').value;
+    const c = localStorage.getItem('os_ctx'); if(c !== null) document.getElementById('csCtx').value = c;
+  }catch(e){}
+  const save = (k, v)=>{ try{ localStorage.setItem(k, v); }catch(e){} };
+  document.getElementById('csSystem').addEventListener('input', e=>save('os_sys', e.target.value));
+  document.getElementById('csTemp').addEventListener('input', e=>{
+    document.getElementById('csTempVal').textContent = e.target.value; save('os_temp', e.target.value);
+  });
+  document.getElementById('csCtx').addEventListener('change', e=>save('os_ctx', e.target.value));
+})();
 
 /* ---- Varning: får modellen plats på vald GPU? ---- */
 function modelSizeBytes(name){
@@ -1283,11 +1348,13 @@ class Handler(BaseHTTPRequestHandler):
             messages = data.get("messages") or []
             if not model or not messages:
                 return self._send_json({"error": "model och messages krävs"}, 400)
+            payload = {"model": model, "messages": messages, "stream": True}
+            opts = data.get("options")
+            if isinstance(opts, dict) and opts:
+                payload["options"] = opts   # t.ex. temperature, num_ctx
             # Välj backend (GPU-instans) att köra chatten på
             base = backend_url(data.get("backend"))
-            return self._proxy_stream("/api/chat",
-                                      {"model": model, "messages": messages, "stream": True},
-                                      base=base)
+            return self._proxy_stream("/api/chat", payload, base=base)
 
         self.send_error(404, "Not found")
 
