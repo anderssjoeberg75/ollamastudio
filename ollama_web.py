@@ -656,6 +656,7 @@ async function refresh(){
       const pr = await api('/api/running'); const pd = await pr.json();
       running = buildRunning(pd.models);
     }catch(e){ running = new Map(); }
+    try{ const sr = await api('/api/system'); if(sr.ok) lastSystem = await sr.json(); }catch(e){}
     lastModels = models;
     populateChatModels();
     setStatus('Ansluten · v'+(v.version||'?'), 'var(--green)');
@@ -736,16 +737,38 @@ function renderOffline(){
     + 'Kör:  <code>ollama serve</code>  (eller  <code>systemctl start ollama</code>).</p>'
     + '<button class="btn accent" onclick="refresh()">↻ Försök igen</button></div>';
 }
+function estBytesFromSizeStr(s){
+  const m = (''+s).match(/([\d.]+)\s*(TB|GB|MB)/i);
+  if(!m) return 0;
+  const n = parseFloat(m[1]);
+  const u = m[2].toUpperCase();
+  const mult = u==='TB' ? 1024**4 : (u==='GB' ? 1024**3 : 1024**2);
+  return n * mult;
+}
+function maxGpuVramBytes(){
+  const gpus = (lastSystem && lastSystem.gpus) || [];
+  let max = 0;
+  for(const g of gpus){ if(g.mem_total_mb) max = Math.max(max, g.mem_total_mb*1024*1024); }
+  return max;
+}
 function renderCatalog(){
+  const maxV = maxGpuVramBytes();
   document.getElementById('catalogList').innerHTML = CATALOG.map(it=>{
     const done = installed.has(it.pull) || installed.has(it.pull.split(':')[0]+':latest');
     const right = done ? '<span class="installed">✓ Installerad</span>'
       : '<button class="btn accent" onclick="startPull(\''+it.pull+'\')">↓ Installera</button>';
+    let fit = '';
+    const need = estBytesFromSizeStr(it.size) * 1.15;
+    if(maxV > 0 && need > 0){
+      fit = need <= maxV
+        ? '  ·  <span style="color:var(--green)">≈ passar din GPU</span>'
+        : '  ·  <span style="color:var(--amber)">≈ kan vara för stor för din GPU</span>';
+    }
     return '<div class="card"><div class="top"><div>'
       + '<h3>'+esc(it.name)+'<span class="chip">'+esc(it.tag)+'</span>'
       + '<span class="pull-name">'+esc(it.pull)+'</span></h3>'
       + '<div class="desc">'+esc(it.desc)+'</div>'
-      + '<div class="meta">Storlek: '+esc(it.size)+'</div></div>'
+      + '<div class="meta">Storlek: '+esc(it.size)+fit+'</div></div>'
       + '<div>'+right+'</div></div></div>';
   }).join('');
 }
