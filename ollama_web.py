@@ -325,7 +325,23 @@ PAGE = r"""<!doctype html>
     white-space:pre-wrap;overflow-wrap:anywhere}
   .msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px}
   .msg.assistant{align-self:flex-start;background:var(--card);border:1px solid var(--border);
-    border-bottom-left-radius:4px}
+    border-bottom-left-radius:4px;white-space:normal}
+  .msg.assistant p{margin:0 0 8px} .msg.assistant p:last-child{margin-bottom:0}
+  .msg.assistant h1,.msg.assistant h2,.msg.assistant h3,.msg.assistant h4{margin:10px 0 6px;line-height:1.3}
+  .msg.assistant h1{font-size:18px} .msg.assistant h2{font-size:16px}
+  .msg.assistant h3{font-size:15px} .msg.assistant h4{font-size:14px}
+  .msg.assistant ul,.msg.assistant ol{margin:4px 0 8px;padding-left:22px}
+  .msg.assistant li{margin:2px 0}
+  .msg.assistant a{color:var(--accent-hov)}
+  code.inline{background:rgba(255,255,255,.09);padding:1px 5px;border-radius:4px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+  pre.code{position:relative;background:#0d1017;border:1px solid var(--border);border-radius:8px;
+    padding:12px;margin:8px 0;overflow-x:auto}
+  pre.code code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;white-space:pre;color:#e7e9ee}
+  pre.code .copy{position:absolute;top:6px;right:6px;background:var(--card);border:1px solid var(--border);
+    color:var(--subtle);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer}
+  pre.code .copy:hover{color:var(--text);background:var(--card-hover)}
+  .msg-stats{margin-top:8px;font-size:11px;color:var(--faint);border-top:1px solid var(--border);padding-top:6px}
   .chat-empty{color:var(--faint);text-align:center;margin:auto;font-size:14px;max-width:360px}
   .chat-input{display:flex;gap:10px;margin-top:8px}
   .chat-input textarea{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;
@@ -818,8 +834,74 @@ function renderChat(){
     box.innerHTML = '<div class="chat-empty">Välj en modell och skriv ett meddelande för att börja chatta.</div>';
     return;
   }
-  box.innerHTML = chatMessages.map(m=>'<div class="msg '+m.role+'">'+esc(m.content||'…')+'</div>').join('');
+  box.innerHTML = chatMessages.map(m=>{
+    if(m.role === 'assistant'){
+      const body = m.content ? mdToHtml(m.content) : '…';
+      const st = m.stats ? '<div class="msg-stats">'+esc(fmtStats(m.stats))+'</div>' : '';
+      return '<div class="msg assistant">'+body+st+'</div>';
+    }
+    return '<div class="msg user">'+esc(m.content||'')+'</div>';
+  }).join('');
   box.scrollTop = box.scrollHeight;
+}
+
+/* ---- Enkel, säker Markdown-rendering (kod, rubriker, listor, fetstil m.m.) ---- */
+function fmtStats(s){
+  const p = [];
+  if(s.tps) p.push(s.tps.toFixed(1)+' tok/s');
+  if(s.tokens) p.push(s.tokens+' tokens');
+  if(s.secs) p.push(s.secs.toFixed(1)+' s');
+  if(s.gpu) p.push(s.gpu);
+  return p.join('  ·  ');
+}
+function mdInline(s){
+  // Dela på inline-kod (`...`) och formatera bara texten mellan – inga platshållare behövs
+  const parts = s.split(/(`[^`]+`)/g);
+  return parts.map(seg=>{
+    if(seg.length > 1 && seg[0] === '`' && seg[seg.length-1] === '`'){
+      return '<code class="inline">' + seg.slice(1,-1) + '</code>';
+    }
+    seg = seg.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    seg = seg.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    seg = seg.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    seg = seg.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    return seg;
+  }).join('');
+}
+function mdToHtml(src){
+  const lines = esc(src).split('\n');
+  let html = '', i = 0, inCode = false, codeBuf = [], listType = null;
+  const closeList = ()=>{ if(listType){ html += '</'+listType+'>'; listType = null; } };
+  while(i < lines.length){
+    const line = lines[i];
+    const fence = line.match(/^```(\w*)\s*$/);
+    if(fence){
+      if(!inCode){ inCode = true; codeBuf = []; }
+      else { inCode = false; closeList();
+        html += '<pre class="code"><button class="copy" onclick="copyCode(this)">Kopiera</button><code>'
+              + codeBuf.join('\n') + '</code></pre>'; }
+      i++; continue;
+    }
+    if(inCode){ codeBuf.push(line); i++; continue; }
+    let m;
+    if(m = line.match(/^(#{1,4})\s+(.*)$/)){ closeList(); const l = m[1].length; html += '<h'+l+'>'+mdInline(m[2])+'</h'+l+'>'; i++; continue; }
+    if(m = line.match(/^\s*[-*]\s+(.*)$/)){ if(listType!=='ul'){ closeList(); html+='<ul>'; listType='ul'; } html += '<li>'+mdInline(m[1])+'</li>'; i++; continue; }
+    if(m = line.match(/^\s*\d+\.\s+(.*)$/)){ if(listType!=='ol'){ closeList(); html+='<ol>'; listType='ol'; } html += '<li>'+mdInline(m[1])+'</li>'; i++; continue; }
+    if(line.trim()===''){ closeList(); i++; continue; }
+    closeList(); html += '<p>'+mdInline(line)+'</p>'; i++;
+  }
+  if(inCode){ html += '<pre class="code"><code>'+codeBuf.join('\n')+'</code></pre>'; }  // ofullständigt block
+  closeList();
+  return html;
+}
+function copyCode(btn){
+  const code = btn.parentElement.querySelector('code');
+  const text = code ? code.textContent : '';
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(text).then(()=>{
+      btn.textContent = 'Kopierat!'; setTimeout(()=>{ btn.textContent = 'Kopiera'; }, 1500);
+    }).catch(()=>{});
+  }
 }
 function clearChat(){
   if(chatController) chatController.abort();
@@ -841,6 +923,8 @@ async function sendChat(){
   const box = document.getElementById('chatMessages');
   const send = document.getElementById('chatSend');
   send.textContent = 'Stoppa';
+  // Under strömning visas råtext – behåll radbrytningar tills markdown renderas vid klar
+  if(box.lastChild) box.lastChild.style.whiteSpace = 'pre-wrap';
 
   const backend = document.getElementById('chatBackend').value || undefined;
   chatController = new AbortController();
@@ -864,6 +948,14 @@ async function sendChat(){
             chatMessages[idx].content += msg.message.content;
             if(box.lastChild) box.lastChild.textContent = chatMessages[idx].content;
             box.scrollTop = box.scrollHeight;
+          }
+          if(msg.done && msg.eval_count && msg.eval_duration){
+            chatMessages[idx].stats = {
+              tps: msg.eval_count / (msg.eval_duration/1e9),
+              tokens: msg.eval_count,
+              secs: (msg.total_duration||0)/1e9,
+              gpu: (document.getElementById('chatBackend').value || '')
+            };
           }
           if(msg.error){ chatMessages[idx].content += '\n[Fel: '+msg.error+']'; }
         }catch(e){}

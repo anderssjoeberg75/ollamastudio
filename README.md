@@ -54,7 +54,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   om den ligger på GPU/CPU, hur mycket VRAM den använder och när den frigörs. Uppdateras
   automatiskt.
 - **Chatta** (webbversionen) – prata med en modell direkt i webbläsaren, med streamande
-  svar token för token och sparad konversationshistorik.
+  svar token för token och sparad konversationshistorik. Svaren renderas som **Markdown**
+  (rubriker, listor, fetstil och kodblock med kopieringsknapp), och under varje svar visas
+  **hastighet** (tokens/sekund), antal tokens och tid – smidigt för att jämföra olika GPU:er.
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
