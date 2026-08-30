@@ -317,9 +317,10 @@ PAGE = r"""<!doctype html>
 
   /* Chatt */
   .view.chat{display:flex;flex-direction:column;overflow:hidden;padding:8px 24px 16px}
-  .chatbar{display:flex;gap:10px;align-items:center;margin-bottom:8px}
-  .chatbar select{background:var(--card);color:var(--text);border:1px solid var(--border);
+  .chatbar,.convobar{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+  .chatbar select,.convobar select{background:var(--card);color:var(--text);border:1px solid var(--border);
     border-radius:8px;padding:8px 10px;font-family:inherit;font-size:13px;min-width:180px}
+  .convobar select{flex:1;max-width:340px}
   .chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:6px 2px}
   .msg{max-width:80%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;
     white-space:pre-wrap;overflow-wrap:anywhere}
@@ -505,13 +506,19 @@ PAGE = r"""<!doctype html>
     </div>
 
     <div id="view-chat" class="view chat hidden">
+      <div class="convobar">
+        <label style="color:var(--subtle);font-size:13px">Konversation:</label>
+        <select id="convoSelect" onchange="onConvoSelect()"></select>
+        <button class="btn ghost small" onclick="newConversation()">＋ Ny</button>
+        <button class="btn ghost small" onclick="renameConversation()">Byt namn</button>
+        <button class="btn ghost small" onclick="deleteConversation()">Radera</button>
+      </div>
       <div class="chatbar">
         <label style="color:var(--subtle);font-size:13px">Modell:</label>
         <select id="chatModel"></select>
         <label id="chatGpuLabel" style="color:var(--subtle);font-size:13px;display:none">GPU:</label>
         <select id="chatBackend" style="display:none"></select>
         <button class="btn ghost small" onclick="toggleChatSettings()">⚙ Inställningar</button>
-        <button class="btn ghost small" onclick="clearChat()">Rensa</button>
       </div>
       <div id="chatSettings" class="chat-settings" style="display:none">
         <label class="cs-row">
@@ -622,7 +629,7 @@ function showView(v){
     document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
   }
   document.getElementById('title').textContent = TITLES[v] || '';
-  if(v==='chat'){ populateChatModels(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
+  if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -1006,6 +1013,7 @@ async function sendChat(){
   }finally{
     chatController = null;
     document.getElementById('chatSend').textContent = 'Skicka';
+    saveCurrentConvo();
   }
 }
 document.getElementById('chatSend').onclick = ()=>{ if(chatController) chatController.abort(); else sendChat(); };
@@ -1042,6 +1050,92 @@ function chatOptions(){
   });
   document.getElementById('csCtx').addEventListener('change', e=>save('os_ctx', e.target.value));
 })();
+
+/* ---- Sparade konversationer (localStorage) ---- */
+let conversations = [];
+let currentConvoId = null;
+function loadConvos(){
+  try{ conversations = JSON.parse(localStorage.getItem('os_convos') || '[]'); }catch(e){ conversations = []; }
+  if(!Array.isArray(conversations)) conversations = [];
+}
+function persistConvos(){
+  try{
+    conversations = conversations.slice(0, 50);   // behåll de 50 senaste
+    localStorage.setItem('os_convos', JSON.stringify(conversations));
+  }catch(e){}
+}
+function renderConvoSelect(){
+  const sel = document.getElementById('convoSelect');
+  if(!sel) return;
+  if(!conversations.length){ sel.innerHTML = '<option value="">(inga sparade)</option>'; sel.value = ''; return; }
+  const opts = conversations.map(c=>'<option value="'+c.id+'">'+esc(c.title||'Namnlös')+'</option>').join('');
+  sel.innerHTML = (currentConvoId ? '' : '<option value="">Ny konversation</option>') + opts;
+  sel.value = currentConvoId || '';
+}
+function convoTitleFrom(msgs){
+  const u = msgs.find(m=>m.role==='user');
+  let t = u ? u.content.trim().replace(/\s+/g,' ') : 'Ny konversation';
+  return t.length > 40 ? t.slice(0,40)+'…' : (t || 'Ny konversation');
+}
+function saveCurrentConvo(){
+  if(!chatMessages.length) return;
+  const now = Date.now();
+  let c = conversations.find(x=>x.id === currentConvoId);
+  if(!c){
+    c = { id: currentConvoId || (''+now), title: convoTitleFrom(chatMessages) };
+    currentConvoId = c.id;
+  } else {
+    conversations = conversations.filter(x=>x.id !== c.id);   // flytta överst
+  }
+  conversations.unshift(c);
+  c.messages = JSON.parse(JSON.stringify(chatMessages));
+  c.model = document.getElementById('chatModel').value;
+  c.backend = document.getElementById('chatBackend').value;
+  c.updatedAt = now;
+  persistConvos();
+  renderConvoSelect();
+}
+function newConversation(){
+  if(chatController) chatController.abort();
+  chatMessages = [];
+  currentConvoId = null;
+  renderChat();
+  renderConvoSelect();
+  updateChatWarning();
+  const inp = document.getElementById('chatInput'); if(inp) inp.focus();
+}
+function onConvoSelect(){
+  const id = document.getElementById('convoSelect').value;
+  if(id) loadConversation(id); else newConversation();
+}
+function loadConversation(id){
+  const c = conversations.find(x=>x.id === id);
+  if(!c) return;
+  if(chatController) chatController.abort();
+  chatMessages = JSON.parse(JSON.stringify(c.messages || []));
+  currentConvoId = id;
+  const ms = document.getElementById('chatModel');
+  if(c.model && [...ms.options].some(o=>o.value === c.model)) ms.value = c.model;
+  const bs = document.getElementById('chatBackend');
+  if(c.backend && [...bs.options].some(o=>o.value === c.backend)) bs.value = c.backend;
+  renderChat();
+  renderConvoSelect();
+  updateChatWarning();
+}
+function deleteConversation(){
+  if(!currentConvoId){ newConversation(); return; }
+  conversations = conversations.filter(x=>x.id !== currentConvoId);
+  persistConvos();
+  newConversation();
+}
+function renameConversation(){
+  if(!currentConvoId){ toast('Ingen sparad konversation vald', true); return; }
+  const c = conversations.find(x=>x.id === currentConvoId);
+  if(!c) return;
+  const t = prompt('Namn på konversationen:', c.title || '');
+  if(t !== null){ c.title = t.trim() || c.title; persistConvos(); renderConvoSelect(); }
+}
+loadConvos();
 
 /* ---- Varning: får modellen plats på vald GPU? ---- */
 function modelSizeBytes(name){
