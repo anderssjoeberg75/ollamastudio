@@ -57,7 +57,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   svar token för token och sparad konversationshistorik. Svaren renderas som **Markdown**
   (rubriker, listor, fetstil och kodblock med kopieringsknapp), och under varje svar visas
   **hastighet** (tokens/sekund), antal tokens och tid – smidigt för att jämföra olika GPU:er.
-  Under **⚙ Inställningar** kan du sätta systemprompt, temperatur och kontextlängd.
+  Under **⚙ Inställningar** kan du sätta systemprompt, temperatur och kontextlängd. Du kan
+  också **bifoga bilder** (📎) till vision-modeller som `llava`, och **spara/återuppta
+  namngivna konversationer**.
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -325,6 +327,9 @@ Klicka **↻ Uppdatera** uppe till höger (t.ex. efter att du kört `ollama pull
 
 Öppna fliken **Chatta** i menyn (finns i webbversionen). Välj en modell i listan högst upp
 och skriv ett meddelande – tryck **Enter** för att skicka (**Shift+Enter** för ny rad).
+Klicka **📎** för att bifoga en bild till en vision-modell (t.ex. `llava`). Med
+**Konversation**-väljaren högst upp sparar och byter du mellan namngivna trådar (sparas i
+webbläsaren).
 Svaret strömmas fram token för token, och konversationen behålls så modellen minns
 sammanhanget. Klicka **Rensa** för att börja om, eller **Stoppa** för att avbryta ett svar
 som är på väg. Skickar första meddelandet till en modell som inte redan är laddad tar det

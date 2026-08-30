@@ -349,6 +349,14 @@ PAGE = r"""<!doctype html>
     color:var(--text);padding:10px 12px;font-size:14px;font-family:inherit;resize:none;
     max-height:160px;line-height:1.4}
   .chat-input textarea:focus{outline:none;border-color:var(--accent)}
+  .chat-input #chatAttachBtn{font-size:16px;padding:8px 11px;align-self:flex-end}
+  .chat-attach{display:flex;gap:8px;flex-wrap:wrap;margin:0 2px 6px}
+  .chat-attach .thumb{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+  .chat-attach .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .chat-attach .thumb button{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;border:none;
+    border-radius:50%;width:18px;height:18px;font-size:11px;line-height:1;padding:0;cursor:pointer}
+  .msg .msg-imgs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .msg .msg-imgs img{max-width:170px;max-height:170px;border-radius:8px;display:block}
   .chat-settings{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:0 2px 8px}
   .chat-settings .cs-row{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--subtle);margin-bottom:8px}
   .cs-grid .cs-row{margin-bottom:0}
@@ -544,7 +552,11 @@ PAGE = r"""<!doctype html>
       </div>
       <div id="chatWarn" class="chatwarn"></div>
       <div id="chatMessages" class="chat-messages"></div>
+      <div id="chatAttachments" class="chat-attach" style="display:none"></div>
       <div class="chat-input">
+        <button class="btn ghost" id="chatAttachBtn" title="Bifoga bild (för vision-modeller som llava)"
+                onclick="document.getElementById('chatFile').click()">📎</button>
+        <input id="chatFile" type="file" accept="image/*" multiple style="display:none" onchange="onChatFiles(event)">
         <textarea id="chatInput" rows="1" placeholder="Skriv ett meddelande…  (Enter skickar, Shift+Enter ny rad)"></textarea>
         <button class="btn accent" id="chatSend">Skicka</button>
       </div>
@@ -891,6 +903,30 @@ function populateChatModels(){
   }
 }
 function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
+
+/* ---- Bildbilagor (vision-modeller, t.ex. llava) ---- */
+let pendingImages = [];   // dataUrls som väntar på att skickas
+function onChatFiles(ev){
+  const files = Array.from(ev.target.files || []);
+  files.forEach(f=>{
+    if(!f.type || f.type.indexOf('image/') !== 0) return;
+    const reader = new FileReader();
+    reader.onload = ()=>{ pendingImages.push(reader.result); renderAttachments(); };
+    reader.readAsDataURL(f);
+  });
+  ev.target.value = '';   // tillåt att välja samma fil igen
+}
+function removeAttachment(i){ pendingImages.splice(i, 1); renderAttachments(); }
+function renderAttachments(){
+  const el = document.getElementById('chatAttachments');
+  if(!el) return;
+  if(!pendingImages.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  el.innerHTML = pendingImages.map((d, i)=>
+    '<div class="thumb"><img src="'+d+'"><button title="Ta bort" onclick="removeAttachment('+i+')">✕</button></div>').join('');
+}
+function stripDataUrl(d){ return (''+d).replace(/^data:[^;]+;base64,/, ''); }
+
 function renderChat(){
   const box = document.getElementById('chatMessages');
   if(!chatMessages.length){
@@ -903,7 +939,9 @@ function renderChat(){
       const st = m.stats ? '<div class="msg-stats">'+esc(fmtStats(m.stats))+'</div>' : '';
       return '<div class="msg assistant">'+body+st+'</div>';
     }
-    return '<div class="msg user">'+esc(m.content||'')+'</div>';
+    const imgs = (m.images && m.images.length)
+      ? '<div class="msg-imgs">'+m.images.map(d=>'<img src="'+esc(d)+'">').join('')+'</div>' : '';
+    return '<div class="msg user">'+imgs+esc(m.content||'')+'</div>';
   }).join('');
   box.scrollTop = box.scrollHeight;
 }
@@ -976,10 +1014,14 @@ async function sendChat(){
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
   if(!model){ toast('Ingen modell vald', true); return; }
-  if(!text || chatController) return;
+  if(chatController) return;
+  if(!text && !pendingImages.length) return;
 
-  chatMessages.push({role:'user', content:text});
+  const userMsg = {role:'user', content:text};
+  if(pendingImages.length){ userMsg.images = pendingImages.slice(); }
+  chatMessages.push(userMsg);
   input.value=''; autoGrow(input);
+  pendingImages = []; renderAttachments();
   chatMessages.push({role:'assistant', content:''});
   const idx = chatMessages.length - 1;
   renderChat();
@@ -993,7 +1035,11 @@ async function sendChat(){
   chatController = new AbortController();
   try{
     const sys = chatSystemPrompt();
-    const convo = chatMessages.slice(0, idx);
+    const convo = chatMessages.slice(0, idx).map(m=>{
+      const mm = {role:m.role, content:m.content};
+      if(m.images && m.images.length) mm.images = m.images.map(stripDataUrl);  // Ollama vill ha rå base64
+      return mm;
+    });
     const msgs = sys ? [{role:'system', content:sys}].concat(convo) : convo;
     const r = await api('/api/chat', {method:'POST', headers:headers(true),
       body: JSON.stringify({model, backend, messages: msgs, options: chatOptions()}),
@@ -1111,7 +1157,8 @@ function saveCurrentConvo(){
     conversations = conversations.filter(x=>x.id !== c.id);   // flytta överst
   }
   conversations.unshift(c);
-  c.messages = JSON.parse(JSON.stringify(chatMessages));
+  // Spara text/statistik men inte bilddata (skulle snabbt fylla localStorage)
+  c.messages = JSON.parse(JSON.stringify(chatMessages)).map(m=>{ delete m.images; return m; });
   c.model = document.getElementById('chatModel').value;
   c.backend = document.getElementById('chatBackend').value;
   c.updatedAt = now;
