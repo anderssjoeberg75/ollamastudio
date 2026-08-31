@@ -105,6 +105,105 @@ Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 
 ---
 
+# Omgång 2 – buggar & förbättringar
+
+Ytterligare fynd från en djupare genomgång. Samma format och prioritetsskala.
+
+## 🟡 9. Otrevlig traceback när porten redan används
+
+- **Fil:** `ollama_web.py` → `main()` (ca rad 1584, `ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)`)
+- **Problem:** Om porten är upptagen kastas ett oformaterat `OSError`/traceback i stället för
+  ett begripligt meddelande.
+- **Att göra:** Fånga `OSError` runt serverstarten och skriv t.ex. "Port 8080 är redan
+  upptagen – välj en annan med OLLAMA_STUDIO_PORT". Avsluta med kod `1`.
+- **Acceptans:**
+  - [ ] Upptagen port ger ett tydligt meddelande, ingen traceback.
+  - [ ] Normal start påverkas inte.
+
+## 🟡 10. `render_page()` körs på varje sidladdning
+
+- **Fil:** `ollama_web.py` → `render_page()` (ca rad 1384) och `do_GET` (`/`, ca rad 1437)
+- **Problem:** Sidan är statisk efter start men två `.replace()` körs över ~40 KB HTML vid
+  varje GET av `/`.
+- **Att göra:** Beräkna den renderade sidan (och gärna dess kodade `bytes`) en gång vid
+  uppstart och återanvänd.
+- **Acceptans:**
+  - [ ] `/` serverar identiskt innehåll som förut.
+  - [ ] Ingen omrendering per request (t.ex. modulnivå-konstant eller cache).
+
+## 🟡 11. `nvidia-smi` anropas för ofta
+
+- **Fil:** `ollama_web.py` → `gather_system` / `nvidia_gpus` (ca rad 192–232) via `/api/system`
+- **Problem:** Systemvyn pollar `/api/system` var 2,5 s och chattens VRAM-varning hämtar också.
+  Varje anrop startar två `nvidia-smi`-subprocesser → onödig last.
+- **Att göra:** Lägg en kort TTL-cache (~1 s) på GPU-avläsningen, eller slå ihop de två
+  `nvidia-smi`-anropen.
+- **Acceptans:**
+  - [ ] Snabba, upprepade `/api/system`-anrop startar inte en ny subprocess varje gång.
+  - [ ] Värdena är fortfarande färska nog för live-vyn.
+
+## 🟡 12. `_running_union` stallar på en död backend
+
+- **Fil:** `ollama_web.py` → `Handler._running_union` (ca rad 1419) + `_upstream_get` (timeout 8 s)
+- **Problem:** Med flera GPU-instanser hämtas `/api/ps` sekventiellt med 8 s timeout var.
+  En nedlagd instans kan stalla `/api/running`-pollningen i upp till 8 s.
+- **Att göra:** Korta timeouten för `/api/ps` (t.ex. 2–3 s) och/eller hämta backends parallellt
+  (`concurrent.futures.ThreadPoolExecutor`, ingår i standardbiblioteket).
+- **Acceptans:**
+  - [ ] En död backend fördröjer inte hela `/api/running` mer än den korta timeouten.
+  - [ ] Fungerande backends rapporteras som förut.
+
+## 🟡 13. Enkel CI utan beroenden
+
+- **Fil:** nytt, `.github/workflows/ci.yml`
+- **Problem:** Ingen automatisk kontroll vid push/PR.
+- **Att göra:** GitHub Actions som kör `python -m py_compile ollama_web.py ollama_studio.py`
+  och `python -m unittest` (kräver inga pip-paket, i linje med projektets filosofi).
+  Kompletterar test-ticket **#6**.
+- **Acceptans:**
+  - [ ] Workflow körs på push och pull request.
+  - [ ] Grönt bygge på nuvarande kod (efter att #6 lagt tester).
+
+## ⚪ 14. Escaping-bugg i "Avinstallera"-knappen
+
+- **Fil:** `ollama_web.py` → `renderModels` (ca rad 739, `onclick="confirmDelete('...')"`)
+- **Problem:** Knappens `onclick` byggs som en sträng. Ett modellnamn med `'` bryter
+  JS-anropet (`esc()` gör `'`→`&#39;`, så den efterföljande citat-escapen missar).
+  Låg risk (Ollama-namn har sällan citattecken) men en äkta bugg.
+- **Att göra:** Byt till `data-name`-attribut + `addEventListener`, eller `JSON.stringify(name)`
+  i stället för handbyggd sträng.
+- **Acceptans:**
+  - [ ] Modellnamn med `'`/specialtecken kan avinstalleras utan JS-fel.
+
+## ⚪ 15. `/api/*`-404 returnerar HTML i stället för JSON
+
+- **Fil:** `ollama_web.py` → `do_GET`/`do_POST` (`self.send_error(404, ...)`, ca rad 1473, 1523)
+- **Problem:** Okända `/api/...`-vägar svarar med HTML-fel medan övriga API-svar är JSON.
+- **Att göra:** Returnera `{"error":"not found"}` med status 404 för vägar under `/api/`.
+- **Acceptans:**
+  - [ ] Okänd API-väg ger JSON med 404. Icke-API-vägar kan behålla HTML-404.
+
+## ⚪ 16. Ingen favicon-route (404-brus)
+
+- **Fil:** `ollama_web.py` → `do_GET`
+- **Problem:** Webbläsare begär `/favicon.ico` → 404 i loggen vid varje besök.
+- **Att göra:** Svara `204 No Content` på `/favicon.ico`, eller servera `icon.svg`.
+- **Acceptans:**
+  - [ ] Inget 404 för favicon i loggen.
+
+## ⚪ 17. Småfix (konsekvens/kosmetik)
+
+- **Filer:** diverse
+- **Att göra (var och en är fristående):**
+  - [ ] Inkonsekvent pull-timeout: `ollama_studio.py` använder 60 s, `ollama_web.py` 120 s – ena hållet.
+  - [ ] Webb-modellkortens datum visas som råsträng `((m.modified_at||'').slice(0,10))` medan
+        skrivbordsappen tidszonskonverterar (`human_date`). Gör visningen konsekvent.
+  - [ ] `install-linux.sh`: `.desktop`-genvägens `Exec=$DIR/run.sh` bryter om sökvägen
+        innehåller mellanslag – citera (`Exec="$DIR/run.sh"`), likaså `Icon`.
+  - [ ] Död parameter `detail` i `ollama_studio.py` → `_on_server_down` (tas emot men används aldrig).
+
+---
+
 ### Snabböversikt
 
 | # | Prio | Fil | Kärna |
@@ -117,3 +216,12 @@ Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 | 6 | 🟡 | `tests/` | Enhetstester för rena funktioner |
 | 7 | ⚪ | båda | Rätta docstrings |
 | 8 | ⚪ | båda | Katalog-duplicering |
+| 9 | 🟡 | `ollama_web.py` | Vänligt fel vid upptagen port |
+| 10 | 🟡 | `ollama_web.py` | Cacha `render_page()` |
+| 11 | 🟡 | `ollama_web.py` | Strypa/cacha `nvidia-smi` |
+| 12 | 🟡 | `ollama_web.py` | `_running_union` stallar på död backend |
+| 13 | 🟡 | `.github/` | CI-workflow (py_compile + unittest) |
+| 14 | ⚪ | `ollama_web.py` | Escaping-bugg i Avinstallera-knappen |
+| 15 | ⚪ | `ollama_web.py` | API-404 som JSON |
+| 16 | ⚪ | `ollama_web.py` | Favicon-route |
+| 17 | ⚪ | diverse | Småfix (timeout, datum, `.desktop`, död param) |
