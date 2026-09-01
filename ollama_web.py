@@ -53,6 +53,28 @@ TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
 WEBSEARCH_ENABLED = os.environ.get("OLLAMA_STUDIO_WEBSEARCH", "1").strip().lower() \
     not in ("0", "false", "no", "off", "")
 
+# --------------------------------------------------------------------------
+# Mem0 – delat långtidsminne (samma minne som t.ex. Freja använder)
+# --------------------------------------------------------------------------
+# Peka på SAMMA Mem0 som Freja + samma MEM0_USER_ID => de delar minne.
+#   OLLAMA_STUDIO_MEM0   Slå på minnet (1/0). Krävs, annars av.
+#   MEM0_API_KEY         API-nyckel (Mem0 Cloud). Tomt för självhostad utan nyckel.
+#   MEM0_BASE_URL        Bas-URL. Standard https://api.mem0.ai (byt för självhostad).
+#   MEM0_USER_ID         Identiteten minnet lagras under – SÄTT SAMMA som Freja.
+#   MEM0_API_VERSION     API-version i sökväg. Standard v1.
+#   MEM0_AUTH_SCHEME     Auth-schema i Authorization-headern. Standard "Token".
+#   MEM0_ORG_ID / MEM0_PROJECT_ID   Valfritt (Mem0 Cloud).
+MEM0_API_KEY = os.environ.get("MEM0_API_KEY", "").strip()
+MEM0_BASE_URL = os.environ.get("MEM0_BASE_URL", "https://api.mem0.ai").strip().rstrip("/")
+MEM0_USER_ID = os.environ.get("MEM0_USER_ID", "").strip() or "default_user"
+MEM0_API_VERSION = os.environ.get("MEM0_API_VERSION", "v1").strip().strip("/")
+MEM0_AUTH_SCHEME = os.environ.get("MEM0_AUTH_SCHEME", "Token").strip()
+MEM0_ORG_ID = os.environ.get("MEM0_ORG_ID", "").strip()
+MEM0_PROJECT_ID = os.environ.get("MEM0_PROJECT_ID", "").strip()
+_MEM0_ON = os.environ.get("OLLAMA_STUDIO_MEM0", "").strip().lower() in ("1", "true", "yes", "on")
+# Aktivt bara om påslaget och vi har antingen en nyckel eller en egen (självhostad) bas-URL.
+MEM0_ENABLED = _MEM0_ON and bool(MEM0_API_KEY or MEM0_BASE_URL != "https://api.mem0.ai")
+
 
 # --------------------------------------------------------------------------
 # Backends – en eller flera Ollama-instanser (t.ex. en per GPU)
@@ -351,6 +373,130 @@ def search_footer(query, results):
 
 
 # --------------------------------------------------------------------------
+# Mem0-klient (delat långtidsminne) – bara urllib, inga beroenden
+# --------------------------------------------------------------------------
+def _mem0_call(method, subpath, payload=None, query=None, timeout=12):
+    """Anropa Mem0:s REST-API. subpath t.ex. 'memories/' eller 'memories/search/'.
+    Returnerar tolkad JSON (dict/list) eller None. Kastar vid nätverksfel."""
+    url = "%s/%s/%s" % (MEM0_BASE_URL, MEM0_API_VERSION, subpath.lstrip("/"))
+    if query:
+        url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v})
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"}
+    if MEM0_API_KEY:
+        headers["Authorization"] = "%s %s" % (MEM0_AUTH_SCHEME, MEM0_API_KEY)
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", "replace")
+    if not raw.strip():
+        return None
+    return json.loads(raw)
+
+
+def _mem0_scope(payload):
+    """Lägg på user_id och (valfritt) org/project på en payload."""
+    payload = dict(payload or {})
+    payload.setdefault("user_id", MEM0_USER_ID)
+    if MEM0_ORG_ID:
+        payload["org_id"] = MEM0_ORG_ID
+    if MEM0_PROJECT_ID:
+        payload["project_id"] = MEM0_PROJECT_ID
+    return payload
+
+
+def _mem0_items(data):
+    """Plocka ut minneslistan ur olika svarsformer (list, {results:[…]}, {memories:[…]})."""
+    if isinstance(data, dict):
+        for key in ("results", "memories", "data"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _mem0_text(item):
+    """Texten i ett minne, oavsett fältnamn."""
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("memory", "text", "content", "name"):
+            v = item.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    return ""
+
+
+def mem0_search(query, limit=6):
+    """Hämta relevanta minnen för en fråga. Returnerar en lista med texter (tom vid fel)."""
+    if not (MEM0_ENABLED and query):
+        return []
+    try:
+        data = _mem0_call("POST", "memories/search/",
+                          _mem0_scope({"query": query, "limit": limit}))
+    except Exception:
+        return []
+    out = []
+    for it in _mem0_items(data):
+        t = _mem0_text(it)
+        if t:
+            out.append(t)
+    return out[:limit]
+
+
+def mem0_add(messages):
+    """Spara ett meddelandeutbyte i minnet så Mem0 kan extrahera fakta. True/False."""
+    if not (MEM0_ENABLED and messages):
+        return False
+    try:
+        _mem0_call("POST", "memories/", _mem0_scope({"messages": messages}))
+        return True
+    except Exception:
+        return False
+
+
+def mem0_list(limit=100):
+    """Lista sparade minnen (för minnesvyn). Returnerar [{id, text}, …]."""
+    if not MEM0_ENABLED:
+        return []
+    try:
+        data = _mem0_call("GET", "memories/",
+                          query=_mem0_scope({"page_size": limit}))
+    except Exception:
+        return []
+    out = []
+    for it in _mem0_items(data):
+        t = _mem0_text(it)
+        if not t:
+            continue
+        mid = it.get("id") or it.get("memory_id") or "" if isinstance(it, dict) else ""
+        out.append({"id": mid, "text": t})
+    return out[:limit]
+
+
+def mem0_delete(memory_id=None):
+    """Ta bort ett minne (id) eller alla för användaren (id=None). True/False."""
+    if not MEM0_ENABLED:
+        return False
+    try:
+        if memory_id:
+            _mem0_call("DELETE", "memories/%s/" % urllib.parse.quote(str(memory_id)))
+        else:
+            _mem0_call("DELETE", "memories/", query=_mem0_scope({}))
+        return True
+    except Exception:
+        return False
+
+
+def mem0_context(memories):
+    """Bygg system-texten som injiceras i chatten från hämtade minnen."""
+    lines = ["Det här minns du sedan tidigare om användaren (använd om det är relevant, "
+             "hitta inte på nytt):"]
+    for m in memories:
+        lines.append("- " + m)
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
 # Kurerad katalog över populära modeller (samma som i skrivbordsappen)
 # --------------------------------------------------------------------------
 CATALOG = [
@@ -488,6 +634,20 @@ PAGE = r"""<!doctype html>
   .chat-settings .cs-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;
     color:var(--subtle);cursor:pointer}
   .chat-settings .cs-check input{accent-color:var(--accent);width:16px;height:16px;flex:none;cursor:pointer}
+  .mem-panel{margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+  .mem-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;
+    color:var(--subtle);font-weight:700;margin-bottom:8px}
+  .mem-add{display:flex;gap:8px;margin-bottom:8px}
+  .mem-add input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:7px 10px;font-size:13px;font-family:inherit}
+  .mem-add input:focus{outline:none;border-color:var(--accent)}
+  .mem-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto}
+  .mem-item{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+    background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:13px}
+  .mem-item span{color:var(--text);overflow-wrap:anywhere}
+  .mem-item button{background:none;border:none;color:var(--faint);cursor:pointer;font-size:13px;flex:none}
+  .mem-item button:hover{color:var(--danger)}
+  .mem-empty{color:var(--faint);font-size:12px}
   .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
   .chatwarn.ok{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green)}
@@ -676,6 +836,29 @@ PAGE = r"""<!doctype html>
           <span>🌐 Sök på nätet när modellen är osäker
             <span style="color:var(--faint)">(svaret märks med källor)</span></span>
         </label>
+        <label class="cs-check" id="csMemoryRow" style="display:none">
+          <input id="csMemory" type="checkbox">
+          <span>🧠 Kom ihåg mig mellan konversationer
+            <span style="color:var(--faint)">(delat minne via Mem0)</span></span>
+        </label>
+        <div id="csMemoryTools" style="display:none;margin-top:8px">
+          <button class="btn ghost small" type="button" onclick="toggleMemoryPanel()">🧠 Visa minne</button>
+        </div>
+        <div id="memoryPanel" class="mem-panel" style="display:none">
+          <div class="mem-head">
+            <span>Sparade minnen <span id="memCount" style="color:var(--faint)"></span></span>
+            <div>
+              <button class="btn ghost small" type="button" onclick="loadMemories()">↻</button>
+              <button class="btn danger small" type="button" onclick="clearMemories()">Rensa alla</button>
+            </div>
+          </div>
+          <div class="mem-add">
+            <input id="memAddInput" placeholder="Lägg till något att komma ihåg…"
+                   onkeydown="if(event.key==='Enter')addMemory()">
+            <button class="btn accent small" type="button" onclick="addMemory()">Spara</button>
+          </div>
+          <div id="memList" class="mem-list"></div>
+        </div>
       </div>
       <div id="chatWarn" class="chatwarn"></div>
       <div id="chatMessages" class="chat-messages"></div>
@@ -713,7 +896,7 @@ let lastModels = [];       // senast hämtade modell-listan (för lätt omritnin
 let pullController = null;
 let chatMessages = [];     // konversationshistorik: {role, content}
 let chatController = null;
-let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false, websearch:false};   // /api/config
+let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false, websearch:false, memory:false};   // /api/config
 let systemTimer = null;    // intervall för System-vyn
 let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
 
@@ -1170,8 +1353,10 @@ async function sendChat(){
     const msgs = sys ? [{role:'system', content:sys}].concat(convo) : convo;
     const wsEl = document.getElementById('csWebsearch');
     const websearch = !!(cfg.websearch && wsEl && wsEl.checked);
+    const memEl = document.getElementById('csMemory');
+    const memory = !!(cfg.memory && memEl && memEl.checked);
     const r = await api('/api/chat', {method:'POST', headers:headers(true),
-      body: JSON.stringify({model, backend, messages: msgs, options: chatOptions(), websearch}),
+      body: JSON.stringify({model, backend, messages: msgs, options: chatOptions(), websearch, memory}),
       signal: chatController.signal});
     if(!r.ok){ throw new Error('HTTP '+r.status); }
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
@@ -1210,6 +1395,7 @@ async function sendChat(){
     }
     if(!chatMessages[idx].content) chatMessages[idx].content = '(inget svar)';
     renderChat();
+    if(memory) memWrite(text, chatMessages[idx].content);   // spara utbytet i delat minne
   }catch(e){
     if(e.name === 'AbortError') chatMessages[idx].content += '  [avbruten]';
     else { chatMessages[idx].content = '[Fel: '+e.message+']'; toast('Chatt misslyckades', true); }
@@ -1248,6 +1434,8 @@ function chatOptions(){
     const c = localStorage.getItem('os_ctx'); if(c !== null) document.getElementById('csCtx').value = c;
     const w = localStorage.getItem('os_websearch');   // standard: på (om servern stödjer det)
     document.getElementById('csWebsearch').checked = (w === null) ? true : (w === '1');
+    const mem = localStorage.getItem('os_memory');    // standard: på (om servern stödjer det)
+    document.getElementById('csMemory').checked = (mem === null) ? true : (mem === '1');
   }catch(e){}
   const save = (k, v)=>{ try{ localStorage.setItem(k, v); }catch(e){} };
   document.getElementById('csSystem').addEventListener('input', e=>save('os_sys', e.target.value));
@@ -1257,6 +1445,8 @@ function chatOptions(){
   document.getElementById('csCtx').addEventListener('change', e=>save('os_ctx', e.target.value));
   document.getElementById('csWebsearch').addEventListener('change',
     e=>save('os_websearch', e.target.checked ? '1' : '0'));
+  document.getElementById('csMemory').addEventListener('change',
+    e=>save('os_memory', e.target.checked ? '1' : '0'));
 })();
 
 /* ---- Sparade konversationer (localStorage) ---- */
@@ -1433,6 +1623,71 @@ async function loadConfig(){
   // Visa webbsök-inställningen bara om servern stödjer det
   const wsRow = document.getElementById('csWebsearchRow');
   if(wsRow) wsRow.style.display = cfg.websearch ? 'flex' : 'none';
+  // Visa minnes-inställningen bara om servern har Mem0 konfigurerat
+  const memRow = document.getElementById('csMemoryRow');
+  if(memRow) memRow.style.display = cfg.memory ? 'flex' : 'none';
+  const memTools = document.getElementById('csMemoryTools');
+  if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
+}
+
+/* ---- Delat minne (Mem0) ---- */
+function toggleMemoryPanel(){
+  const p = document.getElementById('memoryPanel');
+  if(!p) return;
+  const show = (p.style.display === 'none' || !p.style.display);
+  p.style.display = show ? 'block' : 'none';
+  if(show) loadMemories();
+}
+async function memWrite(userText, assistantText){
+  try{
+    await api('/api/memory/add', {method:'POST', headers:headers(true),
+      body: JSON.stringify({messages:[
+        {role:'user', content:userText||''},
+        {role:'assistant', content:assistantText||''}
+      ]})});
+  }catch(e){ /* tyst – minnet är en bonus, inte kritiskt */ }
+}
+async function loadMemories(){
+  const list = document.getElementById('memList');
+  const cnt = document.getElementById('memCount');
+  if(!list) return;
+  list.innerHTML = '<div class="mem-empty">Hämtar…</div>';
+  try{
+    const r = await api('/api/memory', {headers: headers(false)});
+    const d = await r.json();
+    const mems = d.memories || [];
+    if(cnt) cnt.textContent = mems.length ? '('+mems.length+')' : '';
+    if(!mems.length){ list.innerHTML = '<div class="mem-empty">Inga sparade minnen än.</div>'; return; }
+    list.innerHTML = mems.map(m=>
+      '<div class="mem-item"><span>'+esc(m.text)+'</span>'
+      + (m.id ? '<button title="Ta bort" onclick="deleteMemory(\''+esc(String(m.id)).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">✕</button>' : '')
+      + '</div>').join('');
+  }catch(e){ list.innerHTML = '<div class="mem-empty">Kunde inte hämta minnet.</div>'; }
+}
+async function addMemory(){
+  const inp = document.getElementById('memAddInput');
+  const t = (inp.value||'').trim();
+  if(!t){ return; }
+  inp.value='';
+  await memWrite(t, '');   // spara som ett användarpåstående
+  toast('Sparat i minnet');
+  setTimeout(loadMemories, 600);   // Mem0 kan extrahera med viss fördröjning
+}
+async function deleteMemory(id){
+  try{
+    await api('/api/memory/delete', {method:'POST', headers:headers(true),
+      body: JSON.stringify({id})});
+    loadMemories();
+  }catch(e){ toast('Kunde inte ta bort', true); }
+}
+async function clearMemories(){
+  if(!confirm('Rensa ALLA sparade minnen för den här användaren?')) return;
+  try{
+    await api('/api/memory/delete', {method:'POST', headers:headers(true),
+      body: JSON.stringify({})});
+    toast('Minnet rensat');
+    loadMemories();
+  }catch(e){ toast('Kunde inte rensa', true); }
 }
 function populateBackends(){
   const sel = document.getElementById('chatBackend');
@@ -1595,12 +1850,17 @@ class Handler(BaseHTTPRequestHandler):
                     "multi": MULTI_BACKEND,
                     "auth": bool(TOKEN),
                     "websearch": WEBSEARCH_ENABLED,
+                    "memory": MEM0_ENABLED,
                 })
             if path == "/api/system":
                 try:
                     return self._send_json(gather_system())
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 500)
+            if path == "/api/memory":
+                if not MEM0_ENABLED:
+                    return self._send_json({"memories": []})
+                return self._send_json({"memories": mem0_list()})
             if path == "/api/running":
                 try:
                     return self._send_json(self._running_union())
@@ -1650,6 +1910,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "name saknas"}, 400)
             return self._stream_pull(name)
 
+        if path == "/api/memory/add":
+            if not MEM0_ENABLED:
+                return self._send_json({"ok": False, "disabled": True})
+            msgs = data.get("messages") or []
+            msgs = [m for m in msgs if isinstance(m, dict) and m.get("content")]
+            return self._send_json({"ok": mem0_add(msgs)})
+
+        if path == "/api/memory/delete":
+            if not MEM0_ENABLED:
+                return self._send_json({"ok": False, "disabled": True})
+            return self._send_json({"ok": mem0_delete(data.get("id"))})
+
         if path == "/api/chat":
             model = (data.get("model") or "").strip()
             messages = data.get("messages") or []
@@ -1659,6 +1931,11 @@ class Handler(BaseHTTPRequestHandler):
             opts = opts if isinstance(opts, dict) and opts else None
             # Välj backend (GPU-instans) att köra chatten på
             base = backend_url(data.get("backend"))
+            # Delat minne (Mem0): hämta relevanta minnen och injicera som system-text
+            if MEM0_ENABLED and data.get("memory"):
+                mems = mem0_search(self._last_user_text(messages))
+                if mems:
+                    messages = [{"role": "system", "content": mem0_context(mems)}] + messages
             # Auto-sök: modellen får först chansen att be om en webbsökning
             if WEBSEARCH_ENABLED and data.get("websearch"):
                 return self._chat_with_search(model, messages, opts, base)
@@ -1668,6 +1945,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._proxy_stream("/api/chat", payload, base=base)
 
         self.send_error(404, "Not found")
+
+    @staticmethod
+    def _last_user_text(messages):
+        """Sista användarmeddelandets text (för minnessökningen)."""
+        for m in reversed(messages or []):
+            if isinstance(m, dict) and m.get("role") == "user":
+                c = m.get("content")
+                return c.strip() if isinstance(c, str) else ""
+        return ""
 
     # ---- Chatt med auto-webbsök -----------------------------------------
     def _open_chat_stream(self, messages, model, opts, base):
@@ -1872,6 +2158,12 @@ def main():
     print(" Åtkomstskydd:   %s" % ("token krävs (OLLAMA_STUDIO_TOKEN)" if TOKEN else "AV (öppet på nätverket)"))
     print(" Webbsök i chatt: %s" % ("PÅ (DuckDuckGo, auto när modellen är osäker)" if WEBSEARCH_ENABLED
                                     else "AV (OLLAMA_STUDIO_WEBSEARCH=0)"))
+    if MEM0_ENABLED:
+        print(" Delat minne:    PÅ (Mem0 · %s · user_id=%s)" % (MEM0_BASE_URL, MEM0_USER_ID))
+    elif _MEM0_ON:
+        print(" Delat minne:    AV (OLLAMA_STUDIO_MEM0=1 men MEM0_API_KEY/MEM0_BASE_URL saknas)")
+    else:
+        print(" Delat minne:    AV (sätt OLLAMA_STUDIO_MEM0=1 + MEM0_API_KEY för delat Mem0-minne)")
     print("")
     print(" Öppna i webbläsaren från en annan dator:")
     for ip in _local_ips():

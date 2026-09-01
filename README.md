@@ -65,6 +65,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   träffarna. Svaret märks tydligt sist med *"togs fram efter en webbsökning"* och en **källista**.
   Slås av/på under **⚙ Inställningar** i chatten, eller helt med `OLLAMA_STUDIO_WEBSEARCH=0`.
   Kräver att servern har internetåtkomst.
+- **Delat långtidsminne (Mem0)** (webbversionen) – chatten kan komma ihåg fakta om dig mellan
+  konversationer via **[Mem0](https://mem0.ai)**. Relevanta minnen hämtas och matas in i modellen,
+  och nya fakta sparas efter varje svar. Pekar du på **samma Mem0 och samma `MEM0_USER_ID`** som en
+  annan assistant (t.ex. Freja) **delar de minne**. Under **⚙ Inställningar → 🧠 Visa minne** kan du
+  se, lägga till och rensa minnen. Aktiveras med `OLLAMA_STUDIO_MEM0=1` (se tabellen nedan).
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -153,11 +158,29 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
+| `OLLAMA_STUDIO_MEM0` | `0` (av) | Sätt `1` för att slå på delat långtidsminne via Mem0. Kräver också `MEM0_API_KEY` (Mem0 Cloud) eller en egen `MEM0_BASE_URL` (självhostad). |
+
+Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
+
+| Variabel | Standard | Betydelse |
+| --- | --- | --- |
+| `MEM0_API_KEY` | *(tomt)* | API-nyckel till **Mem0 Cloud**. Krävs för molnet; tomt för självhostad utan nyckel. |
+| `MEM0_USER_ID` | `default_user` | Identiteten minnet lagras under. **Sätt samma värde som Freja** för att dela minne. |
+| `MEM0_BASE_URL` | `https://api.mem0.ai` | Bas-URL till Mem0. Byt till din egen adress för en **självhostad** Mem0-server. |
+| `MEM0_API_VERSION` | `v1` | API-version i sökvägen (byt bara om din Mem0 kräver det). |
+| `MEM0_AUTH_SCHEME` | `Token` | Schema i `Authorization`-headern (t.ex. `Bearer` för vissa servrar). |
+| `MEM0_ORG_ID` / `MEM0_PROJECT_ID` | *(tomt)* | Valfria org-/projekt-ID för Mem0 Cloud. |
 
 Exempel – kör på port 9000 med lösenord:
 
 ```bash
 OLLAMA_STUDIO_PORT=9000 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
+```
+
+Exempel – samma minne som Freja (Mem0 Cloud):
+
+```bash
+OLLAMA_STUDIO_MEM0=1 MEM0_API_KEY=m0-… MEM0_USER_ID=<samma-som-freja> python3 ollama_web.py
 ```
 
 ### Säkerhet
