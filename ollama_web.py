@@ -29,10 +29,13 @@ Detta är ett fristående projekt.
 
 import json
 import os
+import re
 import sys
+import html as _html
 import socket
 import shutil
 import subprocess
+import urllib.parse
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,6 +47,11 @@ LISTEN_HOST = os.environ.get("OLLAMA_STUDIO_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("OLLAMA_STUDIO_PORT", "8080"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
+
+# Webbsökning i chatten: modellen kan be om en sökning när den är osäker (se
+# WEBSEARCH_INSTRUCTION nedan). Avstängd med OLLAMA_STUDIO_WEBSEARCH=0.
+WEBSEARCH_ENABLED = os.environ.get("OLLAMA_STUDIO_WEBSEARCH", "1").strip().lower() \
+    not in ("0", "false", "no", "off", "")
 
 
 # --------------------------------------------------------------------------
@@ -231,6 +239,117 @@ def gather_system():
         "gpu_error": gpu_err,
     }
 
+
+# --------------------------------------------------------------------------
+# Webbsökning (DuckDuckGo, nyckelfri) – används av chattens auto-sök
+# --------------------------------------------------------------------------
+# Marker som modellen ombeds skriva när den vill söka. Måste börja en rad.
+WEBSEARCH_MARKER = "SÖK:"
+
+# System-instruktion i steg 1: låt modellen svara direkt ELLER be om sökning.
+WEBSEARCH_INSTRUCTION = (
+    "Du har tillgång till webbsökning. Om du kan besvara användarens senaste fråga "
+    "säkert och korrekt med din egen kunskap: gör det direkt, som vanligt. "
+    "Om du är osäker, saknar aktuell information, eller frågan gäller nyheter, priser, "
+    "väder, sport, personer eller händelser som kan ha ändrats efter din kunskapsgräns: "
+    "svara då med EXAKT en enda rad som börjar med \"" + WEBSEARCH_MARKER + " \" följt av "
+    "en kort, effektiv sökfråga – och skriv absolut inget annat. "
+    "Exempel: " + WEBSEARCH_MARKER + " Sveriges folkmängd 2025"
+)
+
+# System-instruktion i steg 2: svara utifrån sökträffarna.
+WEBSEARCH_ANSWER_INSTRUCTION = (
+    "Du är en hjälpsam assistent. Besvara användarens senaste fråga med hjälp av "
+    "webbsökresultaten nedan. Sammanfatta med egna ord på svenska och hänvisa till "
+    "källorna som [1], [2] osv där det passar. Om resultaten inte räcker för att svara "
+    "säkert, säg det ärligt."
+)
+
+_DDG_LINK_RE = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_DDG_SNIP_RE = re.compile(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(s):
+    return _html.unescape(_TAG_RE.sub("", s or "")).strip()
+
+
+def _ddg_real_url(href):
+    """DuckDuckGo länkar via en redirect (…/l/?uddg=<url>). Plocka ut riktiga URL:en."""
+    m = re.search(r"[?&]uddg=([^&]+)", href or "")
+    if m:
+        return urllib.parse.unquote(m.group(1))
+    if href.startswith("//"):
+        return "https:" + href
+    return href
+
+
+def web_search(query, max_results=5, timeout=12):
+    """Sök på webben via DuckDuckGo (HTML, ingen API-nyckel). Returnerar en lista
+    av {title, url, snippet}. Kastar undantag vid nätverksfel."""
+    q = urllib.parse.urlencode({"q": query, "kl": "wt-wt"})
+    url = "https://html.duckduckgo.com/html/?" + q
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"),
+        "Accept-Language": "sv-SE,sv;q=0.9,en;q=0.8",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        page = resp.read().decode("utf-8", "replace")
+
+    links = _DDG_LINK_RE.findall(page)
+    snips = _DDG_SNIP_RE.findall(page)
+    results = []
+    for i, (href, title) in enumerate(links):
+        if len(results) >= max_results:
+            break
+        t = _strip_html(title)
+        if not t:
+            continue
+        results.append({
+            "title": t,
+            "url": _ddg_real_url(href),
+            "snippet": _strip_html(snips[i]) if i < len(snips) else "",
+        })
+    return results
+
+
+def extract_search_query(text):
+    """Plocka ut sökfrågan efter markören ur modellens steg 1-svar."""
+    m = re.search(WEBSEARCH_MARKER + r"\s*(.+)", text or "", re.IGNORECASE)
+    q = (m.group(1) if m else (text or "")).strip()
+    q = re.sub(r"[*_`#>\[\]]", "", q).strip()
+    q = q.splitlines()[0].strip() if q else ""
+    return q[:200]
+
+
+def format_search_context(results):
+    """Bygg system-texten med sökträffar som matas in i modellen (steg 2)."""
+    if not results:
+        return ("Inga användbara webbträffar hittades. Säg ärligt att du inte kunde "
+                "hitta aktuell information om detta.")
+    lines = ["Webbsökresultat:"]
+    for i, r in enumerate(results, 1):
+        block = "[%d] %s" % (i, r["title"])
+        if r.get("snippet"):
+            block += "\n" + r["snippet"]
+        block += "\n" + r["url"]
+        lines.append(block)
+    return "\n\n".join(lines)
+
+
+def search_footer(query, results):
+    """Fotnot som läggs sist i svaret så att det syns att en sökning gjordes."""
+    parts = ["\n\n🌐 *Det här svaret togs fram efter en webbsökning (DuckDuckGo) på:* "
+             "“%s”" % query]
+    if results:
+        parts.append("")
+        parts.append("**Källor:**")
+        for i, r in enumerate(results, 1):
+            parts.append("%d. [%s](%s)" % (i, r["title"] or r["url"], r["url"]))
+    return "\n".join(parts)
+
+
 # --------------------------------------------------------------------------
 # Kurerad katalog över populära modeller (samma som i skrivbordsappen)
 # --------------------------------------------------------------------------
@@ -366,6 +485,9 @@ PAGE = r"""<!doctype html>
   .chat-settings select{background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);
     padding:7px 9px;font-size:13px;font-family:inherit}
   .chat-settings input[type=range]{accent-color:var(--accent);width:100%}
+  .chat-settings .cs-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;
+    color:var(--subtle);cursor:pointer}
+  .chat-settings .cs-check input{accent-color:var(--accent);width:16px;height:16px;flex:none;cursor:pointer}
   .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
   .chatwarn.ok{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green)}
@@ -549,6 +671,11 @@ PAGE = r"""<!doctype html>
             </select>
           </label>
         </div>
+        <label class="cs-check" id="csWebsearchRow" style="display:none">
+          <input id="csWebsearch" type="checkbox">
+          <span>🌐 Sök på nätet när modellen är osäker
+            <span style="color:var(--faint)">(svaret märks med källor)</span></span>
+        </label>
       </div>
       <div id="chatWarn" class="chatwarn"></div>
       <div id="chatMessages" class="chat-messages"></div>
@@ -586,7 +713,7 @@ let lastModels = [];       // senast hämtade modell-listan (för lätt omritnin
 let pullController = null;
 let chatMessages = [];     // konversationshistorik: {role, content}
 let chatController = null;
-let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false};   // /api/config
+let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false, websearch:false};   // /api/config
 let systemTimer = null;    // intervall för System-vyn
 let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
 
@@ -1041,8 +1168,10 @@ async function sendChat(){
       return mm;
     });
     const msgs = sys ? [{role:'system', content:sys}].concat(convo) : convo;
+    const wsEl = document.getElementById('csWebsearch');
+    const websearch = !!(cfg.websearch && wsEl && wsEl.checked);
     const r = await api('/api/chat', {method:'POST', headers:headers(true),
-      body: JSON.stringify({model, backend, messages: msgs, options: chatOptions()}),
+      body: JSON.stringify({model, backend, messages: msgs, options: chatOptions(), websearch}),
       signal: chatController.signal});
     if(!r.ok){ throw new Error('HTTP '+r.status); }
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
@@ -1056,6 +1185,12 @@ async function sendChat(){
         if(!line) continue;
         try{
           const msg = JSON.parse(line);
+          if(msg.status === 'searching'){
+            if(box.lastChild) box.lastChild.textContent = '🔎 Söker på nätet'
+              + (msg.query ? ': ”'+msg.query+'”' : '') + '…';
+            box.scrollTop = box.scrollHeight;
+            continue;
+          }
           if(msg.message && msg.message.content){
             chatMessages[idx].content += msg.message.content;
             if(box.lastChild) box.lastChild.textContent = chatMessages[idx].content;
@@ -1111,6 +1246,8 @@ function chatOptions(){
     const t = localStorage.getItem('os_temp'); if(t !== null) document.getElementById('csTemp').value = t;
     document.getElementById('csTempVal').textContent = document.getElementById('csTemp').value;
     const c = localStorage.getItem('os_ctx'); if(c !== null) document.getElementById('csCtx').value = c;
+    const w = localStorage.getItem('os_websearch');   // standard: på (om servern stödjer det)
+    document.getElementById('csWebsearch').checked = (w === null) ? true : (w === '1');
   }catch(e){}
   const save = (k, v)=>{ try{ localStorage.setItem(k, v); }catch(e){} };
   document.getElementById('csSystem').addEventListener('input', e=>save('os_sys', e.target.value));
@@ -1118,6 +1255,8 @@ function chatOptions(){
     document.getElementById('csTempVal').textContent = e.target.value; save('os_temp', e.target.value);
   });
   document.getElementById('csCtx').addEventListener('change', e=>save('os_ctx', e.target.value));
+  document.getElementById('csWebsearch').addEventListener('change',
+    e=>save('os_websearch', e.target.checked ? '1' : '0'));
 })();
 
 /* ---- Sparade konversationer (localStorage) ---- */
@@ -1291,6 +1430,9 @@ async function loadConfig(){
     if(r.ok) cfg = await r.json();
   }catch(e){}
   populateBackends();
+  // Visa webbsök-inställningen bara om servern stödjer det
+  const wsRow = document.getElementById('csWebsearchRow');
+  if(wsRow) wsRow.style.display = cfg.websearch ? 'flex' : 'none';
 }
 function populateBackends(){
   const sel = document.getElementById('chatBackend');
@@ -1452,6 +1594,7 @@ class Handler(BaseHTTPRequestHandler):
                     "backends": [{"label": b["label"], "gpu": b.get("gpu")} for b in BACKENDS],
                     "multi": MULTI_BACKEND,
                     "auth": bool(TOKEN),
+                    "websearch": WEBSEARCH_ENABLED,
                 })
             if path == "/api/system":
                 try:
@@ -1512,15 +1655,146 @@ class Handler(BaseHTTPRequestHandler):
             messages = data.get("messages") or []
             if not model or not messages:
                 return self._send_json({"error": "model och messages krävs"}, 400)
-            payload = {"model": model, "messages": messages, "stream": True}
             opts = data.get("options")
-            if isinstance(opts, dict) and opts:
-                payload["options"] = opts   # t.ex. temperature, num_ctx
+            opts = opts if isinstance(opts, dict) and opts else None
             # Välj backend (GPU-instans) att köra chatten på
             base = backend_url(data.get("backend"))
+            # Auto-sök: modellen får först chansen att be om en webbsökning
+            if WEBSEARCH_ENABLED and data.get("websearch"):
+                return self._chat_with_search(model, messages, opts, base)
+            payload = {"model": model, "messages": messages, "stream": True}
+            if opts:
+                payload["options"] = opts   # t.ex. temperature, num_ctx
             return self._proxy_stream("/api/chat", payload, base=base)
 
         self.send_error(404, "Not found")
+
+    # ---- Chatt med auto-webbsök -----------------------------------------
+    def _open_chat_stream(self, messages, model, opts, base):
+        """Öppna en strömmande /api/chat mot en Ollama-backend."""
+        payload = {"model": model, "messages": messages, "stream": True}
+        if opts:
+            payload["options"] = opts
+        body = json.dumps(payload).encode()
+        req = urllib.request.Request((base or PRIMARY["url"]) + "/api/chat", data=body,
+                                     method="POST",
+                                     headers={"Content-Type": "application/json"})
+        return urllib.request.urlopen(req, timeout=300)
+
+    def _emit(self, obj):
+        """Skicka en NDJSON-rad till webbläsaren."""
+        self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+        self.wfile.flush()
+
+    def _emit_content(self, text):
+        self._emit({"message": {"content": text}})
+
+    def _chat_with_search(self, model, messages, opts, base):
+        """Tvåstegs-chatt: (1) modellen svarar direkt eller ber om sökning via markören,
+        (2) vid sökning matas träffarna in och svaret strömmas med en källfotnot sist.
+        För direktsvar streamas svaret som vanligt (markören hålls bara kvar tills vi vet)."""
+        step1 = [{"role": "system", "content": WEBSEARCH_INSTRUCTION}] + messages
+        try:
+            up1 = self._open_chat_stream(step1, model, opts, base)
+        except Exception as e:
+            return self._send_json({"error": str(e)}, 502)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        marker = WEBSEARCH_MARKER.lower()
+        held, full1, decided, last_done = "", "", None, None
+        try:
+            for raw in up1:
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw.decode("utf-8", "replace"))
+                except Exception:
+                    continue
+                if obj.get("done"):
+                    last_done = obj
+                chunk = (obj.get("message") or {}).get("content") or ""
+                if not chunk:
+                    continue
+                full1 += chunk
+                if decided is None:
+                    held += chunk
+                    # Normalisera bort inledande whitespace/markdown för jämförelsen
+                    norm = re.sub(r"[\s*_`>#-]", "", held).lower()
+                    if norm == "":
+                        continue
+                    if norm.startswith(marker):
+                        decided = "search"          # be om sökning – släpp inte ut något
+                    elif marker.startswith(norm):
+                        continue                    # kan fortfarande bli markören – vänta
+                    else:
+                        decided = "direct"
+                        self._emit_content(held)    # vanligt svar – släpp ut det vi höll
+                        held = ""
+                elif decided == "direct":
+                    self._emit_content(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            try:
+                up1.close()
+            except Exception:
+                pass
+
+        if decided != "search":
+            if held:
+                self._emit_content(held)            # kort svar som aldrig "bestämdes"
+            self._emit(last_done or {"done": True})
+            return
+
+        # ---- Steg 2: sök och svara utifrån träffarna ----
+        query = extract_search_query(full1)
+        try:
+            self._emit({"status": "searching", "query": query})
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        try:
+            results = web_search(query) if query else []
+        except Exception:
+            results = []
+
+        step2 = ([{"role": "system", "content": WEBSEARCH_ANSWER_INSTRUCTION}]
+                 + messages
+                 + [{"role": "system", "content": format_search_context(results)}])
+        try:
+            up2 = self._open_chat_stream(step2, model, opts, base)
+        except Exception as e:
+            self._emit_content("\n[Fel vid sökning: %s]" % e)
+            self._emit({"done": True})
+            return
+
+        done2 = None
+        try:
+            for raw in up2:
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw.decode("utf-8", "replace"))
+                except Exception:
+                    continue
+                if obj.get("done"):
+                    done2 = obj
+                c = (obj.get("message") or {}).get("content") or ""
+                if c:
+                    self._emit_content(c)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            try:
+                up2.close()
+            except Exception:
+                pass
+
+        self._emit_content(search_footer(query, results))
+        self._emit(done2 or {"done": True})
 
     def _stream_pull(self, name):
         return self._proxy_stream("/api/pull", {"name": name, "stream": True})
@@ -1596,6 +1870,8 @@ def main():
     print(" GPU-info:       %s" % ("nvidia-smi tillgängligt" if shutil.which("nvidia-smi")
                                    else "nvidia-smi saknas (GPU-vyn visar då bara CPU/RAM)"))
     print(" Åtkomstskydd:   %s" % ("token krävs (OLLAMA_STUDIO_TOKEN)" if TOKEN else "AV (öppet på nätverket)"))
+    print(" Webbsök i chatt: %s" % ("PÅ (DuckDuckGo, auto när modellen är osäker)" if WEBSEARCH_ENABLED
+                                    else "AV (OLLAMA_STUDIO_WEBSEARCH=0)"))
     print("")
     print(" Öppna i webbläsaren från en annan dator:")
     for ip in _local_ips():
