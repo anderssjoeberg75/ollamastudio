@@ -60,6 +60,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   Under **⚙ Inställningar** kan du sätta systemprompt, temperatur och kontextlängd. Du kan
   också **bifoga bilder** (📎) till vision-modeller som `llava`, och **spara/återuppta
   namngivna konversationer**.
+- **Webbsök i chatten** (webbversionen) – när modellen är osäker eller saknar aktuell info kan
+  den automatiskt **söka på nätet** (DuckDuckGo, ingen API-nyckel) och besvara frågan utifrån
+  träffarna. Svaret märks tydligt sist med *"togs fram efter en webbsökning"* och en **källista**.
+  Slås av/på under **⚙ Inställningar** i chatten, eller helt med `OLLAMA_STUDIO_WEBSEARCH=0`.
+  Kräver att servern har internetåtkomst.
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -147,6 +152,7 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
+| `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
 
 Exempel – kör på port 9000 med lösenord:
 
