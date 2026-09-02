@@ -88,14 +88,17 @@ SETTINGS_SPEC = {
 
 _settings_lock = threading.Lock()
 _settings_db = {}   # cache av det som ligger i databasen (nyckel -> str)
+_prefs_cache = {}   # UI-val (modell, GPU, chattinställningar) – nyckel -> str
 
 
 def db_init():
-    """Skapa databasen/tabellen om den saknas och läs in i cachen."""
+    """Skapa databasen/tabellerna om de saknas och läs in i cachen."""
     with _settings_lock:
         conn = sqlite3.connect(DB_PATH)
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS settings "
+                         "(key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("CREATE TABLE IF NOT EXISTS prefs "
                          "(key TEXT PRIMARY KEY, value TEXT)")
             conn.commit()
             fresh = {}
@@ -103,6 +106,11 @@ def db_init():
                 fresh[k] = v
             _settings_db.clear()
             _settings_db.update(fresh)   # byt innehåll atomiskt (inget tomt mellanläge)
+            pfresh = {}
+            for k, v in conn.execute("SELECT key, value FROM prefs"):
+                pfresh[k] = v
+            _prefs_cache.clear()
+            _prefs_cache.update(pfresh)
         finally:
             conn.close()
     # Databasen kan innehålla hemligheter (Mem0-nyckel, GitHub-token) – lås rättigheter.
@@ -110,6 +118,35 @@ def db_init():
         os.chmod(DB_PATH, 0o600)
     except OSError:
         pass   # t.ex. Windows – hoppa tyst
+
+
+# UI-val (chatt + Codex) sparas i prefs-tabellen så de överlever omladdning/webbläsare.
+_PREFS_KEYS = {"chat_model", "chat_backend", "chat_system", "chat_temp", "chat_ctx",
+               "chat_websearch", "chat_memory", "code_model"}
+
+
+def prefs_all():
+    return dict(_prefs_cache)
+
+
+def prefs_set(values):
+    """Slå ihop UI-val i prefs-tabellen. Okända nycklar ignoreras; tom sträng rensar."""
+    clean = {}
+    for k, v in (values or {}).items():
+        if k in _PREFS_KEYS:
+            clean[k] = "" if v is None else str(v)
+    if not clean:
+        return
+    with _settings_lock:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            for k, v in clean.items():
+                conn.execute("INSERT INTO prefs(key, value) VALUES(?, ?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+            conn.commit()
+            _prefs_cache.update(clean)   # cache först efter lyckad commit
+        finally:
+            conn.close()
 
 
 def _truthy(v):
@@ -1727,6 +1764,35 @@ let pullController = null;
 let chatMessages = [];     // konversationshistorik: {role, content}
 let chatController = null;
 let cfg = {backends:[{label:'Ollama', gpu:null}], multi:false, websearch:false, memory:false};   // /api/config
+let uiPrefs = {};   // UI-val (modell, GPU, chattinställningar) – sparas i serverns databas
+async function loadPrefs(){
+  try{ const r = await api('/api/prefs', {headers: headers(false)}); uiPrefs = (await r.json()) || {}; }
+  catch(e){ uiPrefs = {}; }
+  applyPrefs();
+}
+function postPref(key, val){
+  try{ api('/api/prefs', {method:'POST', headers:headers(true), body: JSON.stringify({[key]: val})}); }catch(e){}
+}
+function savePref(key, val){ uiPrefs[key] = val; postPref(key, val); }
+let _prefTimers = {};
+function savePrefDebounced(key, val, ms){       // för högfrekventa fält (text/slider)
+  uiPrefs[key] = val;
+  clearTimeout(_prefTimers[key]);
+  _prefTimers[key] = setTimeout(()=>postPref(key, val), ms || 500);
+}
+function applyPrefs(){
+  // Chattinställningar (finns oavsett vald vy)
+  const P = uiPrefs || {};
+  const sys = document.getElementById('csSystem'); if(sys && P.chat_system!=null) sys.value = P.chat_system;
+  const temp = document.getElementById('csTemp');
+  if(temp && P.chat_temp!=null){ temp.value = P.chat_temp; const tv=document.getElementById('csTempVal'); if(tv) tv.textContent = temp.value; }
+  const ctx = document.getElementById('csCtx'); if(ctx && P.chat_ctx!=null) ctx.value = P.chat_ctx;
+  const ws = document.getElementById('csWebsearch'); if(ws && P.chat_websearch!=null) ws.checked = (P.chat_websearch===true || P.chat_websearch==='true' || P.chat_websearch==='1');
+  const mem = document.getElementById('csMemory'); if(mem && P.chat_memory!=null) mem.checked = (P.chat_memory===true || P.chat_memory==='true' || P.chat_memory==='1');
+  // Modeller/GPU sätts av populate-funktionerna som läser uiPrefs
+  populateChatModels(); populateBackends(); populateCodeModels();
+  if(typeof updateChatWarning==='function') updateChatWarning();
+}
 let systemTimer = null;    // intervall för System-vyn
 let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
 
@@ -2040,17 +2106,15 @@ function populateChatModels(){
   const cur = sel.value;
   if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
   sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
-  let saved = ''; try{ saved = localStorage.getItem('os_chat_model') || ''; }catch(e){}
+  const saved = uiPrefs.chat_model || '';
   if(cur && names.includes(cur)) sel.value = cur;                 // behåll aktivt val
-  else if(saved && names.includes(saved)) sel.value = saved;      // ihågkommet val
+  else if(saved && names.includes(saved)) sel.value = saved;      // ihågkommet val (databas)
   else{
     const active = [...running.keys()][0];   // annars den som redan är i minnet
     sel.value = (active && names.includes(active)) ? active : names[0];
   }
 }
-function saveChatModel(){
-  try{ localStorage.setItem('os_chat_model', document.getElementById('chatModel').value); }catch(e){}
-}
+function saveChatModel(){ savePref('chat_model', document.getElementById('chatModel').value); }
 function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
 
 /* ---- Bildbilagor (vision-modeller, t.ex. llava) ---- */
@@ -2266,26 +2330,20 @@ function chatOptions(){
   return o;
 }
 (function csInit(){
-  try{
-    const sys = localStorage.getItem('os_sys'); if(sys !== null) document.getElementById('csSystem').value = sys;
-    const t = localStorage.getItem('os_temp'); if(t !== null) document.getElementById('csTemp').value = t;
-    document.getElementById('csTempVal').textContent = document.getElementById('csTemp').value;
-    const c = localStorage.getItem('os_ctx'); if(c !== null) document.getElementById('csCtx').value = c;
-    const w = localStorage.getItem('os_websearch');   // standard: på (om servern stödjer det)
-    document.getElementById('csWebsearch').checked = (w === null) ? true : (w === '1');
-    const mem = localStorage.getItem('os_memory');    // standard: på (om servern stödjer det)
-    document.getElementById('csMemory').checked = (mem === null) ? true : (mem === '1');
-  }catch(e){}
-  const save = (k, v)=>{ try{ localStorage.setItem(k, v); }catch(e){} };
-  document.getElementById('csSystem').addEventListener('input', e=>save('os_sys', e.target.value));
+  // Standard tills prefs laddats från databasen (applyPrefs kan sedan skriva över).
+  document.getElementById('csWebsearch').checked = true;   // på om servern stödjer det
+  document.getElementById('csMemory').checked = true;
+  document.getElementById('csTempVal').textContent = document.getElementById('csTemp').value;
+  // Ändringar sparas i serverns databas (prefs).
+  document.getElementById('csSystem').addEventListener('input', e=>savePrefDebounced('chat_system', e.target.value));
   document.getElementById('csTemp').addEventListener('input', e=>{
-    document.getElementById('csTempVal').textContent = e.target.value; save('os_temp', e.target.value);
+    document.getElementById('csTempVal').textContent = e.target.value; savePrefDebounced('chat_temp', e.target.value);
   });
-  document.getElementById('csCtx').addEventListener('change', e=>save('os_ctx', e.target.value));
+  document.getElementById('csCtx').addEventListener('change', e=>savePref('chat_ctx', e.target.value));
   document.getElementById('csWebsearch').addEventListener('change',
-    e=>save('os_websearch', e.target.checked ? '1' : '0'));
+    e=>savePref('chat_websearch', e.target.checked ? '1' : '0'));
   document.getElementById('csMemory').addEventListener('change',
-    e=>save('os_memory', e.target.checked ? '1' : '0'));
+    e=>savePref('chat_memory', e.target.checked ? '1' : '0'));
 })();
 
 /* ---- Sparade konversationer (localStorage) ---- */
@@ -2437,6 +2495,8 @@ async function updateChatWarning(){
 document.getElementById('chatModel').addEventListener('change', updateChatWarning);
 document.getElementById('chatModel').addEventListener('change', saveChatModel);
 document.getElementById('chatBackend').addEventListener('change', updateChatWarning);
+document.getElementById('chatBackend').addEventListener('change',
+  ()=>savePref('chat_backend', document.getElementById('chatBackend').value));
 
 // Uppdatera "aktiv modell" automatiskt var 5:e sekund (den kan laddas/frigöras när som helst)
 async function refreshRunning(){
@@ -2603,16 +2663,14 @@ function populateCodeModels(){
   const cur = sel.value;
   if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
   sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
-  // Codex har en egen, ihågkommen modell – oberoende av chattens val.
-  let saved = ''; try{ saved = localStorage.getItem('os_code_model') || ''; }catch(e){}
+  // Codex har en egen, ihågkommen modell (databas) – oberoende av chattens val.
+  const saved = uiPrefs.code_model || '';
   const coder = names.find(n=>/coder|codellama|deepseek|starcoder|qwen.*cod/i.test(n));
   if(saved && names.includes(saved)) sel.value = saved;
   else if(cur && names.includes(cur)) sel.value = cur;
   else sel.value = (coder || names[0]);
 }
-function saveCodeModel(){
-  try{ localStorage.setItem('os_code_model', document.getElementById('codeModel').value); }catch(e){}
-}
+function saveCodeModel(){ savePref('code_model', document.getElementById('codeModel').value); }
 async function loadTree(){
   const box = document.getElementById('codeTree');
   const pathEl = document.getElementById('codeWsPath');
@@ -2893,8 +2951,13 @@ function populateBackends(){
   const lbl = document.getElementById('chatGpuLabel');
   if(!sel) return;
   if(cfg.multi && cfg.backends && cfg.backends.length > 1){
+    const cur = sel.value;
     sel.innerHTML = cfg.backends.map(b=>
       '<option value="'+esc(b.label)+'">'+esc(b.label)+'</option>').join('');
+    const labels = cfg.backends.map(b=>b.label);
+    const saved = uiPrefs.chat_backend || '';
+    if(cur && labels.includes(cur)) sel.value = cur;              // behåll aktivt val
+    else if(saved && labels.includes(saved)) sel.value = saved;  // ihågkommet val (databas)
     sel.style.display=''; lbl.style.display='';
   }else{
     sel.style.display='none'; lbl.style.display='none';
@@ -2971,6 +3034,7 @@ function renderSystem(s){
 
 loadConfig();
 refresh();
+loadPrefs();   // hämta sparade UI-val (modell, GPU, chattinställningar) från databasen
 </script>
 </body>
 </html>
@@ -3066,6 +3130,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if path == "/api/settings":
                 return self._send_json(settings_public())
+            if path == "/api/prefs":
+                return self._send_json(prefs_all())
             if path == "/api/agent/tree":
                 if not code_enabled():
                     return self._send_json({"root": None, "files": []})
@@ -3148,6 +3214,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 settings_set(data if isinstance(data, dict) else {})
                 return self._send_json({"ok": True, "settings": settings_public()})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": str(e)}, 500)
+
+        if path == "/api/prefs":
+            try:
+                prefs_set(data if isinstance(data, dict) else {})
+                return self._send_json({"ok": True})
             except Exception as e:
                 return self._send_json({"ok": False, "error": str(e)}, 500)
 
