@@ -16,3 +16,7 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Lokal inställningsdatabas (innehåller ev. hemligheter, t.ex. Mem0-nyckel)
+*.db
+ollama_studio.db

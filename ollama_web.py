@@ -34,6 +34,8 @@ import sys
 import html as _html
 import socket
 import shutil
+import sqlite3
+import threading
 import subprocess
 import urllib.parse
 import urllib.request
@@ -48,32 +50,130 @@ LISTEN_PORT = int(os.environ.get("OLLAMA_STUDIO_PORT", "8080"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
 
-# Webbsökning i chatten: modellen kan be om en sökning när den är osäker (se
-# WEBSEARCH_INSTRUCTION nedan). Avstängd med OLLAMA_STUDIO_WEBSEARCH=0.
-WEBSEARCH_ENABLED = os.environ.get("OLLAMA_STUDIO_WEBSEARCH", "1").strip().lower() \
-    not in ("0", "false", "no", "off", "")
+# --------------------------------------------------------------------------
+# Inställningar – lagras i en lokal SQLite-databas (redigerbara i UI:t)
+# --------------------------------------------------------------------------
+# En inställning kan sättas via miljövariabel ELLER i inställningsvyn. Värden i
+# databasen VINNER över miljövariabler, som i sin tur vinner över standardvärdet.
+# Så env fortsätter fungera som "fabriksinställning", men UI:t kan skriva över.
+DB_PATH = os.environ.get(
+    "OLLAMA_STUDIO_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ollama_studio.db"))
 
-# --------------------------------------------------------------------------
-# Mem0 – delat långtidsminne (samma minne som t.ex. Freja använder)
-# --------------------------------------------------------------------------
-# Peka på SAMMA Mem0 som Freja + samma MEM0_USER_ID => de delar minne.
-#   OLLAMA_STUDIO_MEM0   Slå på minnet (1/0). Krävs, annars av.
-#   MEM0_API_KEY         API-nyckel (Mem0 Cloud). Tomt för självhostad utan nyckel.
-#   MEM0_BASE_URL        Bas-URL. Standard https://api.mem0.ai (byt för självhostad).
-#   MEM0_USER_ID         Identiteten minnet lagras under – SÄTT SAMMA som Freja.
-#   MEM0_API_VERSION     API-version i sökväg. Standard v1.
-#   MEM0_AUTH_SCHEME     Auth-schema i Authorization-headern. Standard "Token".
-#   MEM0_ORG_ID / MEM0_PROJECT_ID   Valfritt (Mem0 Cloud).
-MEM0_API_KEY = os.environ.get("MEM0_API_KEY", "").strip()
-MEM0_BASE_URL = os.environ.get("MEM0_BASE_URL", "https://api.mem0.ai").strip().rstrip("/")
-MEM0_USER_ID = os.environ.get("MEM0_USER_ID", "").strip() or "default_user"
-MEM0_API_VERSION = os.environ.get("MEM0_API_VERSION", "v1").strip().strip("/")
-MEM0_AUTH_SCHEME = os.environ.get("MEM0_AUTH_SCHEME", "Token").strip()
-MEM0_ORG_ID = os.environ.get("MEM0_ORG_ID", "").strip()
-MEM0_PROJECT_ID = os.environ.get("MEM0_PROJECT_ID", "").strip()
-_MEM0_ON = os.environ.get("OLLAMA_STUDIO_MEM0", "").strip().lower() in ("1", "true", "yes", "on")
-# Aktivt bara om påslaget och vi har antingen en nyckel eller en egen (självhostad) bas-URL.
-MEM0_ENABLED = _MEM0_ON and bool(MEM0_API_KEY or MEM0_BASE_URL != "https://api.mem0.ai")
+# Kända inställningar: nyckel -> (env-namn, standard, typ, hemlig?)
+SETTINGS_SPEC = {
+    "websearch":        ("OLLAMA_STUDIO_WEBSEARCH", "1", "bool", False),
+    "mem0_enabled":     ("OLLAMA_STUDIO_MEM0", "0", "bool", False),
+    "mem0_api_key":     ("MEM0_API_KEY", "", "str", True),
+    "mem0_user_id":     ("MEM0_USER_ID", "default_user", "str", False),
+    "mem0_base_url":    ("MEM0_BASE_URL", "https://api.mem0.ai", "str", False),
+    "mem0_api_version": ("MEM0_API_VERSION", "v1", "str", False),
+    "mem0_auth_scheme": ("MEM0_AUTH_SCHEME", "Token", "str", False),
+    "mem0_org_id":      ("MEM0_ORG_ID", "", "str", False),
+    "mem0_project_id":  ("MEM0_PROJECT_ID", "", "str", False),
+}
+
+_settings_lock = threading.Lock()
+_settings_db = {}   # cache av det som ligger i databasen (nyckel -> str)
+
+
+def db_init():
+    """Skapa databasen/tabellen om den saknas och läs in i cachen."""
+    with _settings_lock:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS settings "
+                         "(key TEXT PRIMARY KEY, value TEXT)")
+            conn.commit()
+            _settings_db.clear()
+            for k, v in conn.execute("SELECT key, value FROM settings"):
+                _settings_db[k] = v
+        finally:
+            conn.close()
+
+
+def _truthy(v):
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def setting_raw(key):
+    """Effektivt råvärde (str): databas > miljövariabel > standard."""
+    env_name, default, _typ, _secret = SETTINGS_SPEC[key]
+    if key in _settings_db:
+        return _settings_db[key]
+    env_val = os.environ.get(env_name)
+    return env_val if env_val is not None else default
+
+
+def setting_bool(key):
+    return _truthy(setting_raw(key))
+
+
+def setting_str(key):
+    return (setting_raw(key) or "").strip()
+
+
+def settings_public():
+    """Alla inställningar för UI:t – hemligheter maskeras (skickas aldrig i klartext)."""
+    out = {}
+    for key, (_env, _default, typ, secret) in SETTINGS_SPEC.items():
+        if secret:
+            out[key] = ""                       # skicka aldrig hemligheten
+            out[key + "_set"] = bool(setting_str(key))
+        elif typ == "bool":
+            out[key] = setting_bool(key)
+        else:
+            out[key] = setting_str(key)
+    out["mem0_active"] = mem0_enabled()
+    out["db_path"] = DB_PATH
+    return out
+
+
+def settings_set(values):
+    """Skriv inställningar till databasen. Okända nycklar ignoreras.
+    Hemlighet: '' = lämna oförändrad, None = rensa (återgå till env/standard)."""
+    to_set, to_del = {}, []
+    for key, val in (values or {}).items():
+        if key not in SETTINGS_SPEC:
+            continue
+        _env, _default, typ, secret = SETTINGS_SPEC[key]
+        if secret:
+            if val is None:
+                to_del.append(key)              # rensa
+            elif isinstance(val, str) and val.strip():
+                to_set[key] = val.strip()       # ny hemlighet
+            # tom sträng => lämna orörd
+            continue
+        if typ == "bool":
+            to_set[key] = "1" if (val is True or _truthy(val)) else "0"
+        else:
+            to_set[key] = "" if val is None else str(val).strip()
+    with _settings_lock:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            for k, v in to_set.items():
+                conn.execute("INSERT INTO settings(key, value) VALUES(?, ?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
+                _settings_db[k] = v
+            for k in to_del:
+                conn.execute("DELETE FROM settings WHERE key=?", (k,))
+                _settings_db.pop(k, None)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# --- Bekväma getters (dynamiska: läser aktuella inställningar) ---
+def websearch_enabled():
+    return setting_bool("websearch")
+
+
+def mem0_enabled():
+    """Minne aktivt bara om påslaget OCH vi har nyckel eller egen (självhostad) bas-URL."""
+    if not setting_bool("mem0_enabled"):
+        return False
+    base = setting_str("mem0_base_url") or "https://api.mem0.ai"
+    return bool(setting_str("mem0_api_key") or base.rstrip("/") != "https://api.mem0.ai")
 
 
 # --------------------------------------------------------------------------
@@ -378,13 +478,17 @@ def search_footer(query, results):
 def _mem0_call(method, subpath, payload=None, query=None, timeout=12):
     """Anropa Mem0:s REST-API. subpath t.ex. 'memories/' eller 'memories/search/'.
     Returnerar tolkad JSON (dict/list) eller None. Kastar vid nätverksfel."""
-    url = "%s/%s/%s" % (MEM0_BASE_URL, MEM0_API_VERSION, subpath.lstrip("/"))
+    base = (setting_str("mem0_base_url") or "https://api.mem0.ai").rstrip("/")
+    version = setting_str("mem0_api_version").strip("/") or "v1"
+    url = "%s/%s/%s" % (base, version, subpath.lstrip("/"))
     if query:
         url += "?" + urllib.parse.urlencode({k: v for k, v in query.items() if v})
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {"Content-Type": "application/json"}
-    if MEM0_API_KEY:
-        headers["Authorization"] = "%s %s" % (MEM0_AUTH_SCHEME, MEM0_API_KEY)
+    api_key = setting_str("mem0_api_key")
+    if api_key:
+        scheme = setting_str("mem0_auth_scheme") or "Token"
+        headers["Authorization"] = "%s %s" % (scheme, api_key)
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8", "replace")
@@ -396,11 +500,12 @@ def _mem0_call(method, subpath, payload=None, query=None, timeout=12):
 def _mem0_scope(payload):
     """Lägg på user_id och (valfritt) org/project på en payload."""
     payload = dict(payload or {})
-    payload.setdefault("user_id", MEM0_USER_ID)
-    if MEM0_ORG_ID:
-        payload["org_id"] = MEM0_ORG_ID
-    if MEM0_PROJECT_ID:
-        payload["project_id"] = MEM0_PROJECT_ID
+    payload.setdefault("user_id", setting_str("mem0_user_id") or "default_user")
+    org, proj = setting_str("mem0_org_id"), setting_str("mem0_project_id")
+    if org:
+        payload["org_id"] = org
+    if proj:
+        payload["project_id"] = proj
     return payload
 
 
@@ -428,7 +533,7 @@ def _mem0_text(item):
 
 def mem0_search(query, limit=6):
     """Hämta relevanta minnen för en fråga. Returnerar en lista med texter (tom vid fel)."""
-    if not (MEM0_ENABLED and query):
+    if not (mem0_enabled() and query):
         return []
     try:
         data = _mem0_call("POST", "memories/search/",
@@ -445,7 +550,7 @@ def mem0_search(query, limit=6):
 
 def mem0_add(messages):
     """Spara ett meddelandeutbyte i minnet så Mem0 kan extrahera fakta. True/False."""
-    if not (MEM0_ENABLED and messages):
+    if not (mem0_enabled() and messages):
         return False
     try:
         _mem0_call("POST", "memories/", _mem0_scope({"messages": messages}))
@@ -456,7 +561,7 @@ def mem0_add(messages):
 
 def mem0_list(limit=100):
     """Lista sparade minnen (för minnesvyn). Returnerar [{id, text}, …]."""
-    if not MEM0_ENABLED:
+    if not mem0_enabled():
         return []
     try:
         data = _mem0_call("GET", "memories/",
@@ -475,7 +580,7 @@ def mem0_list(limit=100):
 
 def mem0_delete(memory_id=None):
     """Ta bort ett minne (id) eller alla för användaren (id=None). True/False."""
-    if not MEM0_ENABLED:
+    if not mem0_enabled():
         return False
     try:
         if memory_id:
@@ -648,6 +753,27 @@ PAGE = r"""<!doctype html>
   .mem-item button{background:none;border:none;color:var(--faint);cursor:pointer;font-size:13px;flex:none}
   .mem-item button:hover{color:var(--danger)}
   .mem-empty{color:var(--faint);font-size:12px}
+
+  /* Inställningar */
+  .settings-wrap{max-width:720px}
+  .set-card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:16px 18px;margin:8px 2px 14px}
+  .set-card h2{margin:0 0 4px;font-size:16px}
+  .set-card .hint{color:var(--faint);font-size:12px;font-weight:400}
+  .set-check{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--text);
+    cursor:pointer;margin:10px 0}
+  .set-check input{accent-color:var(--accent);width:16px;height:16px;flex:none;cursor:pointer}
+  .set-row{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+  .set-row label{font-size:12px;color:var(--subtle);font-weight:600}
+  .set-row input{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:9px 11px;font-size:14px;font-family:inherit}
+  .set-row input:focus{outline:none;border-color:var(--accent)}
+  .set-keyrow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:4px}
+  .set-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .set-actions{display:flex;align-items:center;gap:12px;margin-top:14px}
+  .set-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    position:sticky;bottom:0;background:var(--bg);padding:12px 2px}
+  @media(max-width:560px){ .set-grid{grid-template-columns:1fr} }
   .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
   .chatwarn.ok{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green)}
@@ -758,6 +884,7 @@ PAGE = r"""<!doctype html>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
+      <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
     </div>
     <div class="status"><span class="dot" id="statusDot">●</span><span id="statusText">Kontrollerar…</span></div>
   </div>
@@ -873,6 +1000,56 @@ PAGE = r"""<!doctype html>
     </div>
 
     <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
+
+    <div id="view-settings" class="view hidden">
+      <div class="settings-wrap">
+        <div class="set-card">
+          <h2>Chatt</h2>
+          <label class="set-check"><input id="stWebsearch" type="checkbox">
+            <span>🌐 Webbsök när modellen är osäker
+              <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
+        </div>
+
+        <div class="set-card">
+          <h2>Delat minne (Mem0)</h2>
+          <p class="hint">Peka på samma Mem0-konto och samma användar-ID som en annan assistent
+            (t.ex. Freja) så delar de minne. Sparas lokalt i databasen på servern.</p>
+          <label class="set-check"><input id="stMem0Enabled" type="checkbox">
+            <span>🧠 Slå på delat minne</span></label>
+          <div class="set-row">
+            <label>API-nyckel <span class="hint">(Mem0 Cloud)</span></label>
+            <input id="stMem0Key" type="password" autocomplete="off" placeholder="klistra in nyckel">
+            <div class="set-keyrow">
+              <span id="stMem0KeyState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearMem0Key()">Ta bort sparad nyckel</button>
+            </div>
+          </div>
+          <div class="set-grid">
+            <div class="set-row"><label>Användar-ID <span class="hint">(samma som Freja)</span></label>
+              <input id="stMem0User" placeholder="default_user"></div>
+            <div class="set-row"><label>Bas-URL</label>
+              <input id="stMem0Base" placeholder="https://api.mem0.ai"></div>
+            <div class="set-row"><label>API-version</label>
+              <input id="stMem0Ver" placeholder="v1"></div>
+            <div class="set-row"><label>Auth-schema</label>
+              <input id="stMem0Auth" placeholder="Token"></div>
+            <div class="set-row"><label>Org-ID <span class="hint">(valfritt)</span></label>
+              <input id="stMem0Org" placeholder=""></div>
+            <div class="set-row"><label>Projekt-ID <span class="hint">(valfritt)</span></label>
+              <input id="stMem0Proj" placeholder=""></div>
+          </div>
+          <div class="set-actions">
+            <button class="btn ghost small" type="button" onclick="testMem0()">Testa anslutning</button>
+            <span id="stMem0Test" class="hint"></span>
+          </div>
+        </div>
+
+        <div class="set-bar">
+          <span id="stDbPath" class="hint"></span>
+          <button class="btn accent" onclick="saveSettings()">Spara inställningar</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -944,14 +1121,15 @@ function humanSize(b){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU'};
+const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar'};
 function showView(v){
-  for(const k of ['models','discover','chat','system']){
+  for(const k of ['models','discover','chat','system','settings']){
     document.getElementById('nav-'+k).classList.toggle('active', v===k);
     document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
   }
   document.getElementById('title').textContent = TITLES[v] || '';
   if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
+  if(v==='settings'){ loadSettingsForm(); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -1630,6 +1808,81 @@ async function loadConfig(){
   if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
 }
 
+/* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
+let mem0KeyIsSet = false;      // om en nyckel redan finns sparad
+let mem0KeyClear = false;      // användaren har valt att ta bort nyckeln
+async function loadSettingsForm(){
+  let s = {};
+  try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
+  catch(e){ toast('Kunde inte hämta inställningar', true); return; }
+  const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.value = (v==null?'':v); };
+  const chk = (id, v)=>{ const el=document.getElementById(id); if(el) el.checked = !!v; };
+  chk('stWebsearch', s.websearch);
+  chk('stMem0Enabled', s.mem0_enabled);
+  set('stMem0User', s.mem0_user_id);
+  set('stMem0Base', s.mem0_base_url);
+  set('stMem0Ver', s.mem0_api_version);
+  set('stMem0Auth', s.mem0_auth_scheme);
+  set('stMem0Org', s.mem0_org_id);
+  set('stMem0Proj', s.mem0_project_id);
+  mem0KeyIsSet = !!s.mem0_api_key_set; mem0KeyClear = false;
+  const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
+  document.getElementById('stMem0KeyState').textContent =
+    mem0KeyIsSet ? '● En nyckel är sparad (lämna tomt för att behålla den)' : 'Ingen nyckel sparad';
+  document.getElementById('stMem0Test').textContent = '';
+  document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
+}
+function clearMem0Key(){
+  mem0KeyClear = true; mem0KeyIsSet = false;
+  const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
+  document.getElementById('stMem0KeyState').textContent = '✕ Nyckeln tas bort när du sparar';
+}
+function collectSettings(){
+  const val = id => (document.getElementById(id).value||'').trim();
+  const body = {
+    websearch: document.getElementById('stWebsearch').checked,
+    mem0_enabled: document.getElementById('stMem0Enabled').checked,
+    mem0_user_id: val('stMem0User'),
+    mem0_base_url: val('stMem0Base'),
+    mem0_api_version: val('stMem0Ver'),
+    mem0_auth_scheme: val('stMem0Auth'),
+    mem0_org_id: val('stMem0Org'),
+    mem0_project_id: val('stMem0Proj')
+  };
+  const key = val('stMem0Key');
+  if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
+  else if(key) body.mem0_api_key = key;                // ny nyckel (annars orörd)
+  return body;
+}
+async function saveSettings(){
+  try{
+    const r = await api('/api/settings', {method:'POST', headers:headers(true),
+      body: JSON.stringify(collectSettings())});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error||'okänt fel');
+    toast('Inställningar sparade');
+    try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
+    populateBackends();
+    const wsRow=document.getElementById('csWebsearchRow'); if(wsRow) wsRow.style.display = cfg.websearch?'flex':'none';
+    const memRow=document.getElementById('csMemoryRow'); if(memRow) memRow.style.display = cfg.memory?'flex':'none';
+    const memTools=document.getElementById('csMemoryTools'); if(memTools) memTools.style.display = cfg.memory?'block':'none';
+    loadSettingsForm();
+  }catch(e){ toast('Kunde inte spara: '+e.message, true); }
+}
+async function testMem0(){
+  const el = document.getElementById('stMem0Test');
+  el.textContent = 'Sparar & testar…'; el.style.color='var(--subtle)';
+  await saveSettings();          // testa exakt det som står i formuläret
+  el.textContent = 'Testar…';
+  try{
+    const r = await api('/api/settings/test-mem0', {method:'POST', headers:headers(true), body:'{}'});
+    const d = await r.json();
+    el.textContent = d.ok ? ('✓ Ansluten till Mem0 (hittade '+(d.count||0)+' minne(n) för användar-ID:t)')
+                          : ('✕ '+(d.error||'kunde inte ansluta'));
+    el.style.color = d.ok ? 'var(--green)' : 'var(--danger)';
+  }catch(e){ el.textContent = '✕ '+e.message; el.style.color='var(--danger)'; }
+}
+
 /* ---- Delat minne (Mem0) ---- */
 function toggleMemoryPanel(){
   const p = document.getElementById('memoryPanel');
@@ -1849,16 +2102,18 @@ class Handler(BaseHTTPRequestHandler):
                     "backends": [{"label": b["label"], "gpu": b.get("gpu")} for b in BACKENDS],
                     "multi": MULTI_BACKEND,
                     "auth": bool(TOKEN),
-                    "websearch": WEBSEARCH_ENABLED,
-                    "memory": MEM0_ENABLED,
+                    "websearch": websearch_enabled(),
+                    "memory": mem0_enabled(),
                 })
+            if path == "/api/settings":
+                return self._send_json(settings_public())
             if path == "/api/system":
                 try:
                     return self._send_json(gather_system())
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 500)
             if path == "/api/memory":
-                if not MEM0_ENABLED:
+                if not mem0_enabled():
                     return self._send_json({"memories": []})
                 return self._send_json({"memories": mem0_list()})
             if path == "/api/running":
@@ -1910,15 +2165,37 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"error": "name saknas"}, 400)
             return self._stream_pull(name)
 
+        if path == "/api/settings":
+            try:
+                settings_set(data if isinstance(data, dict) else {})
+                return self._send_json({"ok": True, "settings": settings_public()})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": str(e)}, 500)
+
+        if path == "/api/settings/test-mem0":
+            # Testa nuvarande (sparade) Mem0-inställningar med en liten sökning
+            if not mem0_enabled():
+                return self._send_json({"ok": False, "error": "Mem0 är inte aktivt/konfigurerat"})
+            try:
+                data_ = _mem0_call("POST", "memories/search/",
+                                   _mem0_scope({"query": "hej", "limit": 1}))
+                n = len(_mem0_items(data_))
+                return self._send_json({"ok": True, "count": n})
+            except urllib.error.HTTPError as e:
+                return self._send_json({"ok": False,
+                                        "error": "HTTP %d – kontrollera nyckel/URL" % e.code})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": str(e)})
+
         if path == "/api/memory/add":
-            if not MEM0_ENABLED:
+            if not mem0_enabled():
                 return self._send_json({"ok": False, "disabled": True})
             msgs = data.get("messages") or []
             msgs = [m for m in msgs if isinstance(m, dict) and m.get("content")]
             return self._send_json({"ok": mem0_add(msgs)})
 
         if path == "/api/memory/delete":
-            if not MEM0_ENABLED:
+            if not mem0_enabled():
                 return self._send_json({"ok": False, "disabled": True})
             return self._send_json({"ok": mem0_delete(data.get("id"))})
 
@@ -1932,12 +2209,12 @@ class Handler(BaseHTTPRequestHandler):
             # Välj backend (GPU-instans) att köra chatten på
             base = backend_url(data.get("backend"))
             # Delat minne (Mem0): hämta relevanta minnen och injicera som system-text
-            if MEM0_ENABLED and data.get("memory"):
+            if mem0_enabled() and data.get("memory"):
                 mems = mem0_search(self._last_user_text(messages))
                 if mems:
                     messages = [{"role": "system", "content": mem0_context(mems)}] + messages
             # Auto-sök: modellen får först chansen att be om en webbsökning
-            if WEBSEARCH_ENABLED and data.get("websearch"):
+            if websearch_enabled() and data.get("websearch"):
                 return self._chat_with_search(model, messages, opts, base)
             payload = {"model": model, "messages": messages, "stream": True}
             if opts:
@@ -2134,6 +2411,11 @@ def main():
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
         pass
+    # Initiera den lokala inställningsdatabasen (SQLite)
+    try:
+        db_init()
+    except Exception as e:
+        print("VARNING: kunde inte öppna inställningsdatabasen (%s): %s" % (DB_PATH, e))
     # Kontrollera att Ollama går att nå (varning, inte stopp)
     try:
         urllib.request.urlopen(OLLAMA_URL + "/api/version", timeout=3).read()
@@ -2156,14 +2438,17 @@ def main():
     print(" GPU-info:       %s" % ("nvidia-smi tillgängligt" if shutil.which("nvidia-smi")
                                    else "nvidia-smi saknas (GPU-vyn visar då bara CPU/RAM)"))
     print(" Åtkomstskydd:   %s" % ("token krävs (OLLAMA_STUDIO_TOKEN)" if TOKEN else "AV (öppet på nätverket)"))
-    print(" Webbsök i chatt: %s" % ("PÅ (DuckDuckGo, auto när modellen är osäker)" if WEBSEARCH_ENABLED
-                                    else "AV (OLLAMA_STUDIO_WEBSEARCH=0)"))
-    if MEM0_ENABLED:
-        print(" Delat minne:    PÅ (Mem0 · %s · user_id=%s)" % (MEM0_BASE_URL, MEM0_USER_ID))
-    elif _MEM0_ON:
-        print(" Delat minne:    AV (OLLAMA_STUDIO_MEM0=1 men MEM0_API_KEY/MEM0_BASE_URL saknas)")
+    print(" Inställningar:  %s (redigeras i ⚙ Inställningar i webb-UI:t)" % DB_PATH)
+    print(" Webbsök i chatt: %s" % ("PÅ (DuckDuckGo, auto när modellen är osäker)" if websearch_enabled()
+                                    else "AV"))
+    if mem0_enabled():
+        print(" Delat minne:    PÅ (Mem0 · %s · user_id=%s)"
+              % ((setting_str("mem0_base_url") or "https://api.mem0.ai"),
+                 setting_str("mem0_user_id") or "default_user"))
+    elif setting_bool("mem0_enabled"):
+        print(" Delat minne:    AV (påslaget men MEM0_API_KEY/bas-URL saknas)")
     else:
-        print(" Delat minne:    AV (sätt OLLAMA_STUDIO_MEM0=1 + MEM0_API_KEY för delat Mem0-minne)")
+        print(" Delat minne:    AV (slå på under ⚙ Inställningar eller OLLAMA_STUDIO_MEM0=1)")
     print("")
     print(" Öppna i webbläsaren från en annan dator:")
     for ip in _local_ips():
