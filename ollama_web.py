@@ -24,13 +24,15 @@ Miljövariabler (alla valfria):
     OLLAMA_URL            Var Ollama körs                (standard: http://localhost:11434)
     OLLAMA_STUDIO_TOKEN   Valfritt lösenord/token för åtkomst (standard: inget)
 
-Detta är ett fristående projekt.
+Fler inställningar (webbsök, Mem0, Codex m.m.) kan sättas i ⚙ Inställningar i UI:t
+och sparas i en lokal SQLite-databas. Endast Pythons standardbibliotek används.
 """
 
 import json
 import os
 import re
 import sys
+import hmac
 import html as _html
 import shlex
 import socket
@@ -96,11 +98,18 @@ def db_init():
             conn.execute("CREATE TABLE IF NOT EXISTS settings "
                          "(key TEXT PRIMARY KEY, value TEXT)")
             conn.commit()
-            _settings_db.clear()
+            fresh = {}
             for k, v in conn.execute("SELECT key, value FROM settings"):
-                _settings_db[k] = v
+                fresh[k] = v
+            _settings_db.clear()
+            _settings_db.update(fresh)   # byt innehåll atomiskt (inget tomt mellanläge)
         finally:
             conn.close()
+    # Databasen kan innehålla hemligheter (Mem0-nyckel, GitHub-token) – lås rättigheter.
+    try:
+        os.chmod(DB_PATH, 0o600)
+    except OSError:
+        pass   # t.ex. Windows – hoppa tyst
 
 
 def _truthy(v):
@@ -175,11 +184,13 @@ def settings_set(values):
             for k, v in to_set.items():
                 conn.execute("INSERT INTO settings(key, value) VALUES(?, ?) "
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
-                _settings_db[k] = v
             for k in to_del:
                 conn.execute("DELETE FROM settings WHERE key=?", (k,))
-                _settings_db.pop(k, None)
             conn.commit()
+            # Uppdatera cachen först EFTER lyckad commit (annars kan de gå isär vid fel).
+            _settings_db.update(to_set)
+            for k in to_del:
+                _settings_db.pop(k, None)
         finally:
             conn.close()
 
@@ -2958,6 +2969,13 @@ def render_page():
             .replace("__AUTH_ENABLED__", "true" if TOKEN else "false"))
 
 
+# Sidan är statisk efter start – rendera en gång och återanvänd (spar CPU per request).
+_PAGE_BYTES = render_page().encode("utf-8")
+
+# Största POST-body vi läser in (skydd mot minnesutmattning). Justera vid behov.
+MAX_BODY_BYTES = int(os.environ.get("OLLAMA_STUDIO_MAX_BODY", str(64 * 1024 * 1024)))
+
+
 # --------------------------------------------------------------------------
 # HTTP-hanterare
 # --------------------------------------------------------------------------
@@ -2972,7 +2990,7 @@ class Handler(BaseHTTPRequestHandler):
     def _auth_ok(self):
         if not TOKEN:
             return True
-        return self.headers.get("X-Auth-Token", "") == TOKEN
+        return hmac.compare_digest(self.headers.get("X-Auth-Token", ""), TOKEN)
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
@@ -3006,12 +3024,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
-            body = render_page().encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(len(_PAGE_BYTES)))
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(_PAGE_BYTES)
+            return
+
+        if path == "/favicon.ico":
+            self.send_response(204)   # inget ikon-bråk i loggen
+            self.end_headers()
             return
 
         if path.startswith("/api/"):
@@ -3067,6 +3089,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json(self._upstream_get(upstream))
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 502)
+            return self._send_json({"error": "not found"}, 404)   # okänd API-väg → JSON
 
         self.send_error(404, "Not found")
 
@@ -3077,6 +3100,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"error": "unauthorized"}, 401)
 
         length = int(self.headers.get("Content-Length", 0) or 0)
+        if length > MAX_BODY_BYTES:
+            return self._send_json({"error": "body för stor"}, 413)
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
@@ -3204,7 +3229,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload["options"] = opts   # t.ex. temperature, num_ctx
             return self._proxy_stream("/api/chat", payload, base=base)
 
-        self.send_error(404, "Not found")
+        return self._send_json({"error": "not found"}, 404)
 
     @staticmethod
     def _last_user_text(messages):
@@ -3474,7 +3499,16 @@ def main():
     except Exception:
         ollama_ok = False
 
-    httpd = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
+    try:
+        httpd = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
+    except OSError as e:
+        if e.errno in (98, 48, 10048):   # Address already in use (Linux/mac/Windows)
+            print("FEL: port %d är redan upptagen. Välj en annan med "
+                  "OLLAMA_STUDIO_PORT=<port>." % LISTEN_PORT)
+        else:
+            print("FEL: kunde inte starta servern på %s:%d – %s"
+                  % (LISTEN_HOST, LISTEN_PORT, e))
+        sys.exit(1)
     print("=" * 60)
     print(" %s Web  v%s" % (APP_TITLE, APP_VERSION))
     print("=" * 60)
