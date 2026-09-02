@@ -70,6 +70,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   och nya fakta sparas efter varje svar. Pekar du på **samma Mem0 och samma `MEM0_USER_ID`** som en
   annan assistant (t.ex. Freja) **delar de minne**. Under **⚙ Inställningar → 🧠 Visa minne** kan du
   se, lägga till och rensa minnen. Aktiveras med `OLLAMA_STUDIO_MEM0=1` (se tabellen nedan).
+- **Inställningssida** (webbversionen) – en **⚙ Inställningar**-vy där du sätter webbsök och
+  Mem0 (API-nyckel, användar-ID m.m.) direkt i gränssnittet. Allt sparas i en **lokal
+  SQLite-databas** på servern och gäller framför miljövariabler – inga omstarter behövs.
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -182,6 +185,12 @@ Exempel – samma minne som Freja (Mem0 Cloud):
 ```bash
 OLLAMA_STUDIO_MEM0=1 MEM0_API_KEY=m0-… MEM0_USER_ID=<samma-som-freja> python3 ollama_web.py
 ```
+
+> **Tips:** Du behöver inte använda miljövariabler för det här. Öppna **⚙ Inställningar** i
+> webb-UI:t och fyll i webbsök- och Mem0-inställningarna där – de sparas i en **lokal
+> SQLite-databas** på servern (`ollama_studio.db`, byt sökväg med `OLLAMA_STUDIO_DB`) och
+> **vinner över miljövariablerna**. Där finns också en **"Testa anslutning"**-knapp för Mem0.
+> Databasen kan innehålla din API-nyckel och är därför `.gitignore`-ad.
 
 ### Säkerhet
 
