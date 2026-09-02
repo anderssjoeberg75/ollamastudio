@@ -204,6 +204,87 @@ Ytterligare fynd från en djupare genomgång. Samma format och prioritetsskala.
 
 ---
 
+# Omgång 3 – nya fynd (webbsök, Mem0, inställningssida)
+
+Fynd i koden som tillkommit efter omgång 1–2. **Punkt 1–17 är fortfarande öppna** – de
+gäller fortfarande, ingenting av dem har åtgärdats ännu.
+
+## 🟡 18. Inställningsdatabasen lagrar Mem0-nyckeln i klartext utan filrättigheter
+
+- **Fil:** `ollama_web.py` → `db_init` (skapar `DB_PATH` via `sqlite3.connect`)
+- **Problem:** SQLite-filen skapas med systemets umask (ofta `0644`, läsbar för alla lokala
+  konton). Den kan innehålla Mem0-API-nyckeln i klartext.
+- **Att göra:** Sätt restriktiva rättigheter när databasen skapas, t.ex.
+  `os.chmod(DB_PATH, 0o600)` direkt efter `db_init()` (helst bara om filen ägs av processen).
+- **Acceptans:**
+  - [ ] Nyskapad databas är läs-/skrivbar bara för ägaren (0600).
+  - [ ] Fungerar även om `os.chmod` inte stöds (t.ex. på Windows) – fånga och ignorera fel.
+
+## 🟡 19. `settings_set` uppdaterar cachen före commit
+
+- **Fil:** `ollama_web.py` → `settings_set` (uppdaterar `_settings_db` inne i loopen, `conn.commit()` efter)
+- **Problem:** Minnescachen (`_settings_db`) skrivs innan `conn.commit()`. Misslyckas commit
+  (disk full, låst DB) hamnar cachen ur synk med det som faktiskt sparats.
+- **Att göra:** Samla ändringarna, kör `commit()`, och uppdatera `_settings_db` **först efter**
+  lyckad commit.
+- **Acceptans:**
+  - [ ] Vid commit-fel ändras inte cachen.
+  - [ ] Normala sparningar fungerar som förut.
+
+## 🟡 20. `mem0_search` (upp till 12 s) blockerar chatt-svaret
+
+- **Fil:** `ollama_web.py` → `mem0_search` / `_mem0_call` (default `timeout=12`), anropas i `/api/chat`
+- **Problem:** När minne är på görs en synkron Mem0-sökning **före** svaret. Ett trögt/otillgängligt
+  Mem0 kan fördröja varje svar upp till 12 s.
+- **Att göra:** Kortare timeout i chattvägen (t.ex. 4–5 s). Ev. cache:a senaste minnena kort.
+- **Acceptans:**
+  - [ ] Ett långsamt Mem0 fördröjer inte ett chatt-svar mer än den korta timeouten.
+  - [ ] Minnesinjektion fungerar som förut när Mem0 svarar normalt.
+
+## 🟡 21. Gör DuckDuckGo-söket robustare
+
+- **Fil:** `ollama_web.py` → `web_search`
+- **Problem:** Endpointen `html.duckduckgo.com/html/` kan tidvis blockera/ändra markup eller svara
+  med captcha → tomma träffar utan felmeddelande.
+- **Att göra:** Lägg en fallback till `https://lite.duckduckgo.com/lite/` (enklare markup) och
+  logga/känn igen tomt/blockerat svar. Ev. gör sökmotorn utbytbar (env) som förberedelse för
+  nyckelbaserad sök (Brave/Tavily).
+- **Acceptans:**
+  - [ ] Om primär endpoint ger noll träffar provas fallbacken.
+  - [ ] Parsning av båda formaten är enhetstestad.
+
+## 🟡 22. Verifiera Mem0 list/delete mot faktiskt API
+
+- **Fil:** `ollama_web.py` → `mem0_list` (`page_size`-param) och `mem0_delete` (bulk-DELETE)
+- **Problem:** Parametrar och bulk-radering är byggda mot Mem0:s dokumenterade REST-API men inte
+  körda live här. `page_size`/paginering och "rensa alla" kan behöva justeras.
+- **Att göra:** Testa mot ett riktigt Mem0-konto; rätta paginering (`page`/`page_size`) och
+  bekräfta att radera-en och rensa-alla fungerar. Hantera svarsformer defensivt (redan delvis gjort).
+- **Acceptans:**
+  - [ ] Minnesvyn listar rätt antal och kan ta bort ett enskilt minne.
+  - [ ] "Rensa alla" tömmer minnet för `MEM0_USER_ID` (eller ersätts med per-post-radering).
+
+## ⚪ 23. Trådsäker läsning av inställnings-cachen
+
+- **Fil:** `ollama_web.py` → `setting_raw` (läser `_settings_db` utan lås) vs `db_init`/`settings_set` (muterar under lås)
+- **Problem:** Under `db_init()`s `clear()`+ompopulering kan en samtidig läsare kort se en tom cache
+  och falla tillbaka på env/standard. Låg risk (mest vid start) men en äkta kapplöpning.
+- **Att göra:** Läs under `_settings_lock`, eller byt hela cachen atomiskt (bygg ny dict och tilldela `_settings_db`).
+- **Acceptans:**
+  - [ ] Ingen läsare kan se ett halvuppdaterat cache-tillstånd.
+
+## ⚪ 24. Konkretisera testerna med den nya rena logiken
+
+- **Fil:** kompletterar **#6/#13**
+- **Problem:** Mycket ny, ren och testbar logik saknar tester i repot.
+- **Att göra:** Lägg `unittest` för: sök-parsning (`_DDG_LINK_RE`, `_ddg_real_url`,
+  `extract_search_query`), markör-beslutet i auto-sök, Mem0-parsning (`_mem0_items`, `_mem0_text`,
+  `_mem0_scope`) och inställnings-precedens (DB > env > standard, maskering av hemlighet).
+- **Acceptans:**
+  - [ ] `python3 -m unittest` täcker ovanstående och kör grönt utan beroenden.
+
+---
+
 ### Snabböversikt
 
 | # | Prio | Fil | Kärna |
@@ -225,3 +306,10 @@ Ytterligare fynd från en djupare genomgång. Samma format och prioritetsskala.
 | 15 | ⚪ | `ollama_web.py` | API-404 som JSON |
 | 16 | ⚪ | `ollama_web.py` | Favicon-route |
 | 17 | ⚪ | diverse | Småfix (timeout, datum, `.desktop`, död param) |
+| 18 | 🟡 | `ollama_web.py` | 0600-rättigheter på inställnings-DB (nyckel i klartext) |
+| 19 | 🟡 | `ollama_web.py` | `settings_set` uppdaterar cache före commit |
+| 20 | 🟡 | `ollama_web.py` | Kortare `mem0_search`-timeout i chattvägen |
+| 21 | 🟡 | `ollama_web.py` | Robustare DuckDuckGo (lite-fallback) |
+| 22 | 🟡 | `ollama_web.py` | Verifiera Mem0 list/delete mot API |
+| 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
+| 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |
