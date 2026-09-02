@@ -76,10 +76,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Kodassistent (experimentell)** (webbversionen) – en **💻 Kod**-vy där en lokal modell
   (t.ex. `qwen2.5-coder`) läser en projektmapp och **föreslår filändringar som diffar** – du
   **godkänner varje ändring** innan något skrivs. Kan även arbeta mot **git/GitHub**: skapa
-  gren, committa, pusha och **öppna pull request** (kräver en GitHub-token). Agenten arbetar
-  bara inom den valda arbetsytan. Slås på under **⚙ Inställningar** (`OLLAMA_STUDIO_CODE=1` +
-  arbetsyta). Eftersom den kan skriva till disk: **kör bakom en token** om servern nås av
-  andra. Se [`docs/kodassistent.md`](docs/kodassistent.md).
+  gren, committa, pusha och **öppna pull request** (kräver en GitHub-token), och **köra
+  tester/linters** via en **allowlist** (av som standard, ingen shell, körs bara i arbetsytan).
+  Agenten arbetar bara inom den valda arbetsytan. Slås på under **⚙ Inställningar**
+  (`OLLAMA_STUDIO_CODE=1` + arbetsyta). Eftersom den kan skriva till disk och köra kommandon:
+  **kör bakom en token** om servern nås av andra. Se [`docs/kodassistent.md`](docs/kodassistent.md).
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -173,6 +174,9 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_WORKSPACE` | *(tomt)* | Absolut sökväg till projektmappen kodassistenten får läsa/skriva i (allt utanför blockeras). |
 | `GITHUB_TOKEN` | *(tomt)* | GitHub-token för kodassistentens push och att öppna pull requests. Kan också sättas i ⚙ Inställningar (maskeras och sparas lokalt). |
 | `OLLAMA_STUDIO_GITHUB_BASE` | `main` | Standard bas-gren när kodassistenten öppnar en pull request. |
+| `OLLAMA_STUDIO_CODE_RUN` | `0` (av) | Sätt `1` för att låta kodassistenten köra kommandon (tester/linters) – bara de som matchar allowlisten. |
+| `OLLAMA_STUDIO_CODE_ALLOWLIST` | *(förinställd)* | Tillåtna kommando-prefix (ett per rad/komma), t.ex. `pytest`, `npm test`. Redigeras enklast i ⚙ Inställningar. |
+| `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Max körtid i sekunder per kommando (klamras 1–600). |
 
 Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
 

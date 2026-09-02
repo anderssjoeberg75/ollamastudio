@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import html as _html
+import shlex
 import socket
 import shutil
 import difflib
@@ -76,6 +77,11 @@ SETTINGS_SPEC = {
     "code_workspace":   ("OLLAMA_STUDIO_WORKSPACE", "", "str", False),
     "github_token":     ("GITHUB_TOKEN", "", "str", True),
     "github_base":      ("OLLAMA_STUDIO_GITHUB_BASE", "main", "str", False),
+    "code_run_enabled": ("OLLAMA_STUDIO_CODE_RUN", "0", "bool", False),
+    "code_run_timeout": ("OLLAMA_STUDIO_CODE_RUN_TIMEOUT", "120", "str", False),
+    "code_run_allowlist": ("OLLAMA_STUDIO_CODE_ALLOWLIST",
+                           "pytest\npython -m pytest\npython -m unittest\nruff\nflake8\n"
+                           "npm test\nnpm run lint\ngo test\ncargo test\nmake test", "str", False),
 }
 
 _settings_lock = threading.Lock()
@@ -132,6 +138,14 @@ def settings_public():
     out["mem0_active"] = mem0_enabled()
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
+    out["code_run_active"] = code_run_enabled()
+    # Git-redo? (bara om arbetsytan finns – undvik onödiga subprocess-anrop)
+    out["git_available"] = git_available()
+    if out["code_workspace_ok"]:
+        out["git_repo"] = git_is_repo()
+        if out["git_repo"]:
+            _o, _r = git_remote_slug()
+            out["git_slug"] = ("%s/%s" % (_o, _r)) if (_o and _r) else ""
     out["db_path"] = DB_PATH
     return out
 
@@ -780,7 +794,9 @@ AGENT_SYSTEM = (
     "  TOOL search {\"query\": \"text att söka\"}\n"
     "  TOOL git_status {}\n"
     "  TOOL git_diff {\"path\": \"fil.py\"}\n"
-    "Efter varje verktyg får du resultatet och kan använda fler verktyg. När du är klar: "
+    "  TOOL run_command {\"cmd\": \"pytest\"}   (kör bara tillåtna kommandon, t.ex. tester/linters)\n"
+    "Efter varje verktyg får du resultatet och kan använda fler verktyg. Kör gärna tester med "
+    "run_command efter en ändring för att verifiera den (om det är tillåtet). När du är klar: "
     "skriv ditt svar på svenska. Om du vill ÄNDRA eller SKAPA filer, föreslå varje fil som ett "
     "block med FULLSTÄNDIGT nytt filinnehåll (inte en diff):\n"
     "*** FIL: relativ/sökväg.py\n"
@@ -853,6 +869,12 @@ def agent_tool_exec(name, args):
         if name == "git_diff":
             d = git_diff_text(args.get("path"))
             return ("Diff:\n" + (d or "(inga ändringar)"))[:8000], {"summary": "diff"}
+        if name == "run_command":
+            cmd = args.get("cmd") or args.get("command") or ""
+            ok, out = run_command(cmd)
+            return ("$ %s\n%s" % (cmd, out),
+                    {"summary": (("✓" if ok else "✕") + " " + cmd)[:60],
+                     "detail": out, "cmd": cmd, "ok": ok})
         return "Okänt verktyg: " + str(name), {"summary": "okänt verktyg"}
     except Exception as e:
         return "FEL: %s" % e, {"summary": "fel: %s" % e}
@@ -1014,6 +1036,85 @@ def github_create_pr(title, body, base=None, head=None):
         return False, "GitHub HTTP %d: %s" % (e.code, msg or "kunde inte skapa PR")
     except Exception as e:
         return False, str(e)
+
+
+# --------------------------------------------------------------------------
+# Kodassistent – kommandokörning (fas 4). Av som standard; allowlist styr.
+# Ingen shell, ingen kedjning, jailad till arbetsytan, timeout + utskriftstak.
+# --------------------------------------------------------------------------
+CODE_RUN_OUTPUT_CAP = 20000
+_SHELL_META = re.compile(r"[;&|<>`$(){}\n\r]")
+
+
+def code_run_enabled():
+    return code_enabled() and setting_bool("code_run_enabled")
+
+
+def code_run_allowlist():
+    raw = setting_str("code_run_allowlist")
+    items = re.split(r"[\n,;]+", raw)
+    return [i.strip() for i in items if i.strip()]
+
+
+def code_run_timeout():
+    try:
+        return max(1, min(600, int(setting_str("code_run_timeout") or "120")))
+    except ValueError:
+        return 120
+
+
+def code_run_allowed(cmd):
+    """Är kommandot tillåtet enligt allowlist? Token-medveten prefixmatchning."""
+    cmd = (cmd or "").strip()
+    if not cmd or _SHELL_META.search(cmd):
+        return False
+    try:
+        toks = shlex.split(cmd)
+    except ValueError:
+        return False
+    if not toks:
+        return False
+    for allowed in code_run_allowlist():
+        try:
+            atoks = shlex.split(allowed)
+        except ValueError:
+            continue
+        if atoks and toks[:len(atoks)] == atoks:
+            return True
+    return False
+
+
+def run_command(cmd):
+    """Kör ett tillåtet kommando i arbetsytan. Returnerar (ok, text)."""
+    root = code_workspace_root()
+    if not root:
+        return False, "Ingen arbetsyta"
+    if not code_run_enabled():
+        return False, "Kommandokörning är avstängd (slå på under ⚙ Inställningar)"
+    if not code_run_allowed(cmd):
+        return False, ("Kommandot är inte tillåtet enligt allowlist. Tillåtna prefix: "
+                       + ", ".join(code_run_allowlist()))
+    try:
+        toks = shlex.split(cmd)
+    except ValueError as e:
+        return False, "Kunde inte tolka kommandot: %s" % e
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        p = subprocess.run(toks, cwd=root, capture_output=True, text=True,
+                           timeout=code_run_timeout(), env=env)
+    except subprocess.TimeoutExpired:
+        return False, "Kommandot avbröts (timeout efter %ds)" % code_run_timeout()
+    except FileNotFoundError:
+        return False, "Programmet hittades inte: %s" % toks[0]
+    except Exception as e:
+        return False, str(e)
+    out = (p.stdout or "") + (("\n" + p.stderr) if p.stderr else "")
+    out = out.strip()
+    if len(out) > CODE_RUN_OUTPUT_CAP:
+        out = out[:CODE_RUN_OUTPUT_CAP] + "\n… (avkortat)"
+    header = "exit %d" % p.returncode
+    return (p.returncode == 0), header + ("\n" + out if out else "")
 
 
 # --------------------------------------------------------------------------
@@ -1228,6 +1329,10 @@ PAGE = r"""<!doctype html>
   .code-git .gi{font-size:12.5px;color:var(--subtle)}
   .code-git .gi b{color:var(--accent-hov);font-family:ui-monospace,Menlo,Consolas,monospace}
   .code-git .gacts{display:flex;gap:6px;flex-wrap:wrap}
+  .code-runbar{display:flex;gap:8px;margin:0 2px 8px}
+  .code-runbar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:8px 10px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .code-runbar input:focus{outline:none;border-color:var(--accent)}
   @media(max-width:720px){ .code-tree{display:none} }
   .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
@@ -1479,6 +1584,11 @@ PAGE = r"""<!doctype html>
             </span>
           </div>
           <div id="codeGitMsg" class="hint" style="margin:0 2px 6px"></div>
+          <div id="codeRunBar" class="code-runbar" style="display:none">
+            <input id="codeRunInput" placeholder="Kör kommando (t.ex. pytest) …  – bara tillåtna kommandon"
+                   onkeydown="if(event.key==='Enter')runManual()">
+            <button class="btn ghost small" onclick="runManual()">▶ Kör</button>
+          </div>
           <div id="codeLog" class="code-log">
             <div class="chat-empty">Be assistenten läsa/förklara kod eller föreslå en ändring.
               Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>
@@ -1562,6 +1672,17 @@ PAGE = r"""<!doctype html>
             <label>Standard bas-gren för PR</label>
             <input id="stGhBase" placeholder="main">
           </div>
+          <label class="set-check" style="margin-top:14px"><input id="stRunEnabled" type="checkbox">
+            <span>▶ Tillåt kommandokörning
+              <span class="hint">(agenten kan köra tester/linters – bara kommandon på listan nedan)</span></span></label>
+          <div class="set-grid">
+            <div class="set-row"><label>Tillåtna kommandon (prefix, ett per rad)</label>
+              <textarea id="stRunAllow" rows="6" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace;resize:vertical"></textarea></div>
+            <div class="set-row"><label>Timeout (sekunder)</label>
+              <input id="stRunTimeout" placeholder="120">
+              <span class="hint">Ingen shell, ingen kedjning (<code>; &amp; |</code> blockeras), körs bara i arbetsytan.</span></div>
+          </div>
+          <div id="stCodeGit" class="hint" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"></div>
         </div>
 
         <div class="set-bar">
@@ -1650,7 +1771,9 @@ function showView(v){
   document.getElementById('title').textContent = TITLES[v] || '';
   if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
   if(v==='settings'){ loadSettingsForm(); }
-  if(v==='code'){ populateCodeModels(); loadTree(); gitStatus(); setTimeout(()=>document.getElementById('codeInput').focus(), 0); }
+  if(v==='code'){ populateCodeModels(); loadTree(); gitStatus();
+    const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
+    setTimeout(()=>document.getElementById('codeInput').focus(), 0); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -2360,6 +2483,25 @@ async function loadSettingsForm(){
   if(cws) cws.textContent = !s.code_workspace ? ''
     : (s.code_workspace_ok ? '✓ Mappen hittades' : '✕ Mappen finns inte / går inte att läsa');
   set('stGhBase', s.github_base);
+  chk('stRunEnabled', s.code_run_enabled);
+  set('stRunAllow', s.code_run_allowlist);
+  set('stRunTimeout', s.code_run_timeout);
+  const cg = document.getElementById('stCodeGit');
+  if(cg){
+    if(!s.code_active){ cg.textContent = 'Status: slå på och välj en arbetsyta som finns för att aktivera.'; }
+    else{
+      const parts = ['✓ Aktiv'];
+      parts.push(s.git_available ? 'git finns' : '⚠ git saknas på servern');
+      if(s.git_repo){
+        parts.push(s.git_slug ? ('GitHub: '+s.git_slug) : '⚠ ingen github.com-remote (push/PR funkar ej)');
+        parts.push(s.github_token_set ? 'token satt' : '⚠ ingen token (push/PR kräver token)');
+      }else{
+        parts.push('⚠ arbetsytan är inte ett git-repo (git/PR-knapparna döljs)');
+      }
+      parts.push(s.code_run_active ? 'kommandokörning PÅ' : 'kommandokörning av');
+      cg.textContent = 'Status: ' + parts.join(' · ');
+    }
+  }
   ghTokenIsSet = !!s.github_token_set; ghTokenClear = false;
   const ghEl = document.getElementById('stGhToken'); if(ghEl) ghEl.value='';
   const ghState = document.getElementById('stGhTokenState');
@@ -2390,7 +2532,10 @@ function collectSettings(){
     mem0_project_id: val('stMem0Proj'),
     code_enabled: document.getElementById('stCodeEnabled').checked,
     code_workspace: val('stCodeWs'),
-    github_base: val('stGhBase')
+    github_base: val('stGhBase'),
+    code_run_enabled: document.getElementById('stRunEnabled').checked,
+    code_run_allowlist: document.getElementById('stRunAllow').value,
+    code_run_timeout: val('stRunTimeout')
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
@@ -2555,8 +2700,11 @@ async function sendAgent(){
         }
         else if(ev.type==='tool'){
           if(think){ think.remove(); think=null; }   // dölj rå-tänk för verktygssteg
-          codeAppend('<div class="code-tool">🔧 <b>'+esc(ev.name)+'</b> '
-            + esc(JSON.stringify(ev.args))+' → '+esc(ev.summary||'')+'</div>');
+          const icon = ev.name==='run_command' ? '▶' : '🔧';
+          let html = '<div class="code-tool">'+icon+' <b>'+esc(ev.name)+'</b> '
+            + esc(JSON.stringify(ev.args))+' → '+esc(ev.summary||'');
+          if(ev.detail) html += '<pre class="code-diff" style="margin-top:6px">'+esc(ev.detail)+'</pre>';
+          codeAppend(html+'</div>');
         }
         else if(ev.type==='message'){
           if(think){ think.remove(); think=null; }
@@ -2577,6 +2725,21 @@ document.getElementById('codeSend').onclick = ()=>{ if(codeController) codeContr
 document.getElementById('codeInput').addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendAgent(); }
 });
+
+/* ---- Kommandokörning (fas 4) ---- */
+async function runManual(){
+  const inp = document.getElementById('codeRunInput');
+  const cmd = (inp.value||'').trim();
+  if(!cmd) return;
+  codeAppend('<div class="code-user">▶ '+esc(cmd)+'</div>');
+  inp.value='';
+  try{
+    const r = await api('/api/agent/run', {method:'POST', headers:headers(true), body: JSON.stringify({cmd})});
+    const d = await r.json();
+    codeAppend('<div class="code-tool">'+(d.ok?'✓':'✕')+' <b>'+esc(cmd)+'</b>'
+      + (d.output ? '<pre class="code-diff" style="margin-top:6px">'+esc(d.output)+'</pre>' : '')+'</div>');
+  }catch(e){ codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>'); }
+}
 
 /* ---- Git / GitHub (fas 3) ---- */
 let lastGit = null;
@@ -2863,6 +3026,7 @@ class Handler(BaseHTTPRequestHandler):
                     "websearch": websearch_enabled(),
                     "memory": mem0_enabled(),
                     "code": code_enabled(),
+                    "code_run": code_run_enabled(),
                 })
             if path == "/api/settings":
                 return self._send_json(settings_public())
@@ -2994,6 +3158,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, "path": r["path"], "diff": r["diff"]})
             except Exception as e:
                 return self._send_json({"ok": False, "error": str(e)}, 400)
+
+        if path == "/api/agent/run":
+            if not code_enabled():
+                return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
+            ok, out = run_command(data.get("cmd", ""))
+            return self._send_json({"ok": ok, "output": out})
 
         if path in ("/api/git/branch", "/api/git/commit", "/api/git/push", "/api/github/pr"):
             if not code_enabled():
@@ -3218,8 +3388,11 @@ class Handler(BaseHTTPRequestHandler):
                 call = parse_tool_call(full)
                 if call and step < CODE_MAX_STEPS - 1:
                     result, meta = agent_tool_exec(call["name"], call["args"])
-                    self._emit({"type": "tool", "name": call["name"], "args": call["args"],
-                                "summary": meta.get("summary", "")})
+                    ev = {"type": "tool", "name": call["name"], "args": call["args"],
+                          "summary": meta.get("summary", "")}
+                    if meta.get("detail") is not None:
+                        ev["detail"] = meta["detail"]      # t.ex. kommandots utdata
+                    self._emit(ev)
                     convo.append({"role": "assistant", "content": full})
                     convo.append({"role": "user",
                                   "content": "VERKTYGSRESULTAT (%s):\n%s" % (call["name"], result)})
@@ -3329,9 +3502,11 @@ def main():
         print(" Delat minne:    AV (slå på under ⚙ Inställningar eller OLLAMA_STUDIO_MEM0=1)")
     if code_enabled():
         gh = "GitHub-token satt" if setting_str("github_token") else "ingen GitHub-token"
-        print(" Kodassistent:   PÅ (arbetsyta: %s · git %s · %s)"
+        run = ("kommandokörning PÅ (%d tillåtna)" % len(code_run_allowlist())) \
+            if code_run_enabled() else "kommandokörning AV"
+        print(" Kodassistent:   PÅ (arbetsyta: %s · git %s · %s · %s)"
               % (code_workspace_root(),
-                 "finns" if git_available() else "saknas", gh))
+                 "finns" if git_available() else "saknas", gh, run))
     elif setting_bool("code_enabled"):
         print(" Kodassistent:   AV (påslagen men arbetsytan saknas/går inte att läsa)")
     else:

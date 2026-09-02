@@ -1,10 +1,11 @@
 # Skiss: Kodassistent i Ollama Studio ("Codex"-liknande)
 
-> **Status:** **Fas 1–3 är byggd.** "Kod"-vyn kan läsa/söka i en arbetsyta, föreslå filändringar
-> som diffar du godkänner, och arbeta mot **git/GitHub**: skapa gren, committa, pusha och öppna
-> pull request (lokal klon + GitHub-token). Agenten har även läsverktygen `git_status`/`git_diff`.
-> **Kvar: fas 4** (sandboxad kommandokörning – tester m.m.). Resten av dokumentet är den
-> ursprungliga skissen att fortsätta iterera på.
+> **Status:** **Fas 1–4 är byggd.** "Kod"-vyn kan läsa/söka i en arbetsyta, föreslå filändringar
+> som diffar du godkänner, arbeta mot **git/GitHub** (gren, commit, push, pull request), och
+> **köra kommandon** (tester/linters) via en **allowlist** – av som standard, jailad till
+> arbetsytan, ingen shell, timeout + utskriftstak. Agenten har verktygen `git_status`,
+> `git_diff` och `run_command`. Grundskissen nedan är alltså i allt väsentligt genomförd; den
+> kvarstår som referens och för vidare idéer.
 
 ## Mål
 
