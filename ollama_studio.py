@@ -12,11 +12,12 @@ Krav:
   - Ollama installerat och igång (https://ollama.com)
 
 Starta med:
-  python ollama_manager.py
+  python3 ollama_studio.py
 
-Detta är ett fristående projekt och har inget med övrig kod i repot att göra.
+Endast Pythons standardbibliotek används – inga pip-paket behövs.
 """
 
+import os
 import json
 import threading
 import urllib.request
@@ -27,7 +28,8 @@ from datetime import datetime, timezone
 
 APP_TITLE = "Ollama Studio"
 APP_VERSION = "1.0.0"
-DEFAULT_HOST = "http://localhost:11434"
+# Var Ollama körs. Byt med miljövariabeln OLLAMA_URL (t.ex. en fjärr-Ollama).
+DEFAULT_HOST = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
 # --------------------------------------------------------------------------
 # Färgtema (mörkt, LM Studio-liknande)
