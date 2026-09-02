@@ -73,6 +73,12 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Inställningssida** (webbversionen) – en **⚙ Inställningar**-vy där du sätter webbsök och
   Mem0 (API-nyckel, användar-ID m.m.) direkt i gränssnittet. Allt sparas i en **lokal
   SQLite-databas** på servern och gäller framför miljövariabler – inga omstarter behövs.
+- **Kodassistent (experimentell)** (webbversionen) – en **💻 Kod**-vy där en lokal modell
+  (t.ex. `qwen2.5-coder`) läser en projektmapp och **föreslår filändringar som diffar** – du
+  **godkänner varje ändring** innan något skrivs. Agenten arbetar bara inom den valda
+  arbetsytan. Slås på under **⚙ Inställningar** (`OLLAMA_STUDIO_CODE=1` + arbetsyta). Eftersom
+  den kan skriva till disk: **kör bakom en token** om servern nås av andra. Se
+  [`docs/kodassistent.md`](docs/kodassistent.md).
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
@@ -162,6 +168,8 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
 | `OLLAMA_STUDIO_MEM0` | `0` (av) | Sätt `1` för att slå på delat långtidsminne via Mem0. Kräver också `MEM0_API_KEY` (Mem0 Cloud) eller en egen `MEM0_BASE_URL` (självhostad). |
+| `OLLAMA_STUDIO_CODE` | `0` (av) | Sätt `1` för att slå på kodassistenten (💻 Kod-vyn). Kräver också `OLLAMA_STUDIO_WORKSPACE`. |
+| `OLLAMA_STUDIO_WORKSPACE` | *(tomt)* | Absolut sökväg till projektmappen kodassistenten får läsa/skriva i (allt utanför blockeras). |
 
 Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
 

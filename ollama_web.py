@@ -34,6 +34,7 @@ import sys
 import html as _html
 import socket
 import shutil
+import difflib
 import sqlite3
 import threading
 import subprocess
@@ -71,6 +72,8 @@ SETTINGS_SPEC = {
     "mem0_auth_scheme": ("MEM0_AUTH_SCHEME", "Token", "str", False),
     "mem0_org_id":      ("MEM0_ORG_ID", "", "str", False),
     "mem0_project_id":  ("MEM0_PROJECT_ID", "", "str", False),
+    "code_enabled":     ("OLLAMA_STUDIO_CODE", "0", "bool", False),
+    "code_workspace":   ("OLLAMA_STUDIO_WORKSPACE", "", "str", False),
 }
 
 _settings_lock = threading.Lock()
@@ -125,6 +128,8 @@ def settings_public():
         else:
             out[key] = setting_str(key)
     out["mem0_active"] = mem0_enabled()
+    out["code_active"] = code_enabled()
+    out["code_workspace_ok"] = code_workspace_root() is not None
     out["db_path"] = DB_PATH
     return out
 
@@ -174,6 +179,23 @@ def mem0_enabled():
         return False
     base = setting_str("mem0_base_url") or "https://api.mem0.ai"
     return bool(setting_str("mem0_api_key") or base.rstrip("/") != "https://api.mem0.ai")
+
+
+def code_workspace_root():
+    """Absolut, verifierad rot för kodassistentens arbetsyta – eller None."""
+    p = setting_str("code_workspace")
+    if not p:
+        return None
+    try:
+        root = os.path.realpath(os.path.expanduser(p))
+    except Exception:
+        return None
+    return root if os.path.isdir(root) else None
+
+
+def code_enabled():
+    """Kodassistenten är aktiv bara om påslagen OCH arbetsytan finns."""
+    return setting_bool("code_enabled") and code_workspace_root() is not None
 
 
 # --------------------------------------------------------------------------
@@ -602,6 +624,227 @@ def mem0_context(memories):
 
 
 # --------------------------------------------------------------------------
+# Kodassistent – arbetsyta (jail), verktyg och agent-protokoll
+# --------------------------------------------------------------------------
+# All disk-åtkomst sker under arbetsytans rot. Agenten har BARA läsverktyg;
+# ändringar föreslås som fullständigt filinnehåll och skrivs först när användaren
+# godkänner (via /api/agent/apply). Fas 1+2: läsa & föreslå diffar.
+CODE_MAX_STEPS = 12          # max verktygsvarv per agent-körning
+CODE_MAX_FILE_BYTES = 200000  # läs/skriv-tak per fil
+CODE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
+                  ".idea", ".vscode", "dist", "build", ".mypy_cache"}
+
+
+def ws_resolve(rel):
+    """Lös en relativ sökväg till en absolut väg inom arbetsytan. Kastar ValueError
+    om något ligger utanför roten (path-jail)."""
+    root = code_workspace_root()
+    if not root:
+        raise ValueError("Ingen arbetsyta är konfigurerad")
+    rel = (rel or "").strip().lstrip("/")
+    full = os.path.realpath(os.path.join(root, rel))
+    if full != root and not full.startswith(root + os.sep):
+        raise ValueError("Sökvägen ligger utanför arbetsytan")
+    return full
+
+
+def _ws_rel(full):
+    root = code_workspace_root() or ""
+    return os.path.relpath(full, root) if root else full
+
+
+def ws_list_dir(rel="."):
+    full = ws_resolve(rel)
+    if not os.path.isdir(full):
+        raise ValueError("Inte en mapp: " + rel)
+    dirs, files = [], []
+    for name in sorted(os.listdir(full)):
+        if name in CODE_SKIP_DIRS:
+            continue
+        p = os.path.join(full, name)
+        if os.path.isdir(p):
+            dirs.append(name + "/")
+        else:
+            try:
+                files.append("%s (%d B)" % (name, os.path.getsize(p)))
+            except OSError:
+                files.append(name)
+    return {"path": _ws_rel(full), "dirs": dirs, "files": files}
+
+
+def ws_read_file(rel, start=None, end=None):
+    full = ws_resolve(rel)
+    if not os.path.isfile(full):
+        raise ValueError("Ingen fil: " + rel)
+    if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
+        raise ValueError("Filen är för stor för att läsa (>%d B)" % CODE_MAX_FILE_BYTES)
+    with open(full, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.read().split("\n")
+    if start or end:
+        s = max(1, int(start or 1)); e = min(len(lines), int(end or len(lines)))
+        body = "\n".join("%d\t%s" % (i, lines[i - 1]) for i in range(s, e + 1))
+        return {"path": _ws_rel(full), "start": s, "end": e, "total": len(lines), "content": body}
+    return {"path": _ws_rel(full), "total": len(lines), "content": "\n".join(lines)}
+
+
+def ws_search(query, max_results=40):
+    """Sök efter en textsträng i arbetsytan (ren Python; hoppar över binärt/stora filer)."""
+    root = code_workspace_root()
+    if not root:
+        raise ValueError("Ingen arbetsyta")
+    q = (query or "").strip()
+    if not q:
+        return {"query": q, "hits": []}
+    hits = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in CODE_SKIP_DIRS]
+        for name in filenames:
+            full = os.path.join(dirpath, name)
+            try:
+                if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
+                    continue
+                with open(full, "r", encoding="utf-8", errors="strict") as f:
+                    for n, line in enumerate(f, 1):
+                        if q in line:
+                            hits.append({"path": _ws_rel(full), "line": n,
+                                         "text": line.rstrip()[:200]})
+                            if len(hits) >= max_results:
+                                return {"query": q, "hits": hits, "truncated": True}
+            except (OSError, UnicodeDecodeError):
+                continue
+    return {"query": q, "hits": hits}
+
+
+def ws_tree(max_entries=500):
+    """En kompakt fil-trädlista för UI:t (relativa sökvägar, mappar hoppas per CODE_SKIP_DIRS)."""
+    root = code_workspace_root()
+    if not root:
+        return []
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in CODE_SKIP_DIRS)
+        for name in sorted(filenames):
+            out.append(_ws_rel(os.path.join(dirpath, name)).replace(os.sep, "/"))
+            if len(out) >= max_entries:
+                return out
+    return out
+
+
+def ws_write_file(rel, content):
+    """Skriv en fil inom arbetsytan (används av godkänn-steget). Returnerar en diff."""
+    full = ws_resolve(rel)
+    if content is None:
+        raise ValueError("Inget innehåll")
+    if len(content.encode("utf-8")) > CODE_MAX_FILE_BYTES:
+        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_FILE_BYTES)
+    old = ""
+    if os.path.isfile(full):
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            old = f.read()
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(content)
+    return {"path": _ws_rel(full), "diff": ws_diff(old, content, _ws_rel(full))}
+
+
+def ws_diff(old, new, path=""):
+    """Unified diff mellan gammalt och nytt innehåll."""
+    a = (old or "").split("\n")
+    b = (new or "").split("\n")
+    return "\n".join(difflib.unified_diff(
+        a, b, fromfile="a/" + path, tofile="b/" + path, lineterm=""))
+
+
+def ws_current(rel):
+    """Nuvarande innehåll (eller '' om filen inte finns) – för diff mot ett förslag."""
+    try:
+        full = ws_resolve(rel)
+        if os.path.isfile(full):
+            with open(full, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+# ---- Agent-protokoll --------------------------------------------------------
+AGENT_SYSTEM = (
+    "Du är en kodassistent som arbetar i en avgränsad arbetsyta (en projektmapp). "
+    "Svara på svenska. Du har läsverktyg för att utforska koden. Använd ett verktyg genom "
+    "att skriva EXAKT en rad som börjar med `TOOL ` följt av verktygsnamn och ett JSON-objekt, "
+    "och skriv inget annat på den raden. Tillgängliga verktyg:\n"
+    "  TOOL list_dir {\"path\": \".\"}\n"
+    "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1, \"end\": 120}\n"
+    "  TOOL search {\"query\": \"text att söka\"}\n"
+    "Efter varje verktyg får du resultatet och kan använda fler verktyg. När du är klar: "
+    "skriv ditt svar på svenska. Om du vill ÄNDRA eller SKAPA filer, föreslå varje fil som ett "
+    "block med FULLSTÄNDIGT nytt filinnehåll (inte en diff):\n"
+    "*** FIL: relativ/sökväg.py\n"
+    "<hela filens nya innehåll>\n"
+    "*** SLUT\n"
+    "Föreslå bara filer du verkligen vill ändra. Användaren granskar och godkänner varje ändring "
+    "innan något skrivs till disk – du skriver aldrig själv."
+)
+_TOOL_RE = re.compile(r'^\s*TOOL\s+(\w+)\s+(\{.*\})\s*$', re.MULTILINE)
+_EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)',
+                      re.MULTILINE | re.DOTALL)
+
+
+def parse_tool_call(text):
+    """Första verktygsanropet i modellens svar, eller None."""
+    m = _TOOL_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        args = json.loads(m.group(2))
+    except Exception:
+        return None
+    if not isinstance(args, dict):
+        return None
+    return {"name": m.group(1), "args": args}
+
+
+def parse_edits(text):
+    """Alla föreslagna filändringar (FIL-block) i ett svar."""
+    edits = []
+    for m in _EDIT_RE.finditer(text or ""):
+        path = m.group(1).strip()
+        content = m.group(2)
+        if content.endswith("\n"):
+            content = content[:-1]
+        edits.append({"path": path, "content": content})
+    return edits
+
+
+def strip_edits(text):
+    """Ta bort FIL-blocken ur texten så bara förklaringen visas i chatten."""
+    return _EDIT_RE.sub("", text or "").strip()
+
+
+def agent_tool_exec(name, args):
+    """Kör ett läsverktyg och returnera (resultattext_för_modellen, händelse_för_ui)."""
+    try:
+        if name == "list_dir":
+            r = ws_list_dir(args.get("path", "."))
+            txt = "Mapp %s:\n%s" % (r["path"],
+                  "\n".join(["[D] " + d for d in r["dirs"]] + r["files"]) or "(tom)")
+            return txt, {"summary": "%d mappar, %d filer" % (len(r["dirs"]), len(r["files"]))}
+        if name == "read_file":
+            r = ws_read_file(args.get("path", ""), args.get("start"), args.get("end"))
+            return ("Fil %s (rad %s–%s av %s):\n%s" % (
+                    r["path"], r.get("start", 1), r.get("end", r["total"]), r["total"], r["content"]),
+                    {"summary": "%s rader" % r["total"]})
+        if name == "search":
+            r = ws_search(args.get("query", ""))
+            lines = ["%s:%d: %s" % (h["path"], h["line"], h["text"]) for h in r["hits"]]
+            return ("Sökträffar för %r:\n%s" % (r["query"], "\n".join(lines) or "(inga)"),
+                    {"summary": "%d träffar" % len(r["hits"])})
+        return "Okänt verktyg: " + str(name), {"summary": "okänt verktyg"}
+    except Exception as e:
+        return "FEL: %s" % e, {"summary": "fel: %s" % e}
+
+
+# --------------------------------------------------------------------------
 # Kurerad katalog över populära modeller (samma som i skrivbordsappen)
 # --------------------------------------------------------------------------
 CATALOG = [
@@ -774,6 +1017,41 @@ PAGE = r"""<!doctype html>
   .set-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;
     position:sticky;bottom:0;background:var(--bg);padding:12px 2px}
   @media(max-width:560px){ .set-grid{grid-template-columns:1fr} }
+
+  /* Kodassistent */
+  .view.code{display:flex;flex-direction:column;overflow:hidden;padding:8px 24px 16px}
+  .code-wrap{flex:1;display:flex;gap:12px;min-height:0}
+  .code-tree{width:240px;min-width:200px;background:var(--card);border:1px solid var(--border);
+    border-radius:10px;display:flex;flex-direction:column;overflow:hidden}
+  .code-tree-head{display:flex;justify-content:space-between;align-items:center;padding:10px;
+    font-weight:700;font-size:13px;border-bottom:1px solid var(--border)}
+  .code-files{overflow:auto;padding:6px 8px;font-size:12.5px}
+  .code-files .f{padding:3px 6px;border-radius:6px;color:var(--subtle);cursor:pointer;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .code-files .f:hover{background:var(--card-hover);color:var(--text)}
+  .code-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .code-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px}
+  .code-step{font-size:12px;color:var(--faint)}
+  .code-tool{background:var(--chip);border:1px solid var(--border);border-radius:8px;
+    padding:6px 10px;font-size:12px;color:var(--subtle)}
+  .code-tool b{color:var(--accent-hov)}
+  .code-msg{background:var(--card);border:1px solid var(--border);border-radius:12px;
+    border-bottom-left-radius:4px;padding:10px 14px;font-size:14px;line-height:1.5;align-self:flex-start;max-width:100%}
+  .code-user{align-self:flex-end;background:var(--accent);color:#fff;border-radius:12px;
+    border-bottom-right-radius:4px;padding:10px 14px;font-size:14px;max-width:80%;white-space:pre-wrap}
+  .code-think{color:var(--faint);font-size:12px;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .code-edit{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .code-edit .eh{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px}
+  .code-edit .eh .path{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hov)}
+  .code-edit .eh .acts{display:flex;gap:8px;flex:none}
+  .code-diff{margin:0;padding:10px 12px;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:12px;line-height:1.45;max-height:340px}
+  .code-diff .add{color:var(--green)} .code-diff .del{color:var(--danger)}
+  .code-diff .hd{color:var(--accent-hov)} .code-diff .ctx{color:var(--subtle)}
+  .code-edit.done .acts{display:none}
+  .code-edit .state{font-size:12px;color:var(--faint)}
+  @media(max-width:720px){ .code-tree{display:none} }
   .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
   .chatwarn.ok{background:rgba(57,214,127,.10);border:1px solid rgba(57,214,127,.35);color:var(--green)}
@@ -883,6 +1161,7 @@ PAGE = r"""<!doctype html>
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
+      <a id="nav-code" onclick="showView('code')" style="display:none"><span class="dot">●</span><span class="label">💻 Kod</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
       <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
     </div>
@@ -1001,6 +1280,33 @@ PAGE = r"""<!doctype html>
 
     <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
 
+    <div id="view-code" class="view code hidden">
+      <div class="code-wrap">
+        <div class="code-tree">
+          <div class="code-tree-head">
+            <span>Arbetsyta</span>
+            <button class="btn ghost small" type="button" onclick="loadTree()">↻</button>
+          </div>
+          <div id="codeWsPath" class="hint" style="padding:0 10px 6px"></div>
+          <div id="codeTree" class="code-files"></div>
+        </div>
+        <div class="code-main">
+          <div id="codeLog" class="code-log">
+            <div class="chat-empty">Be assistenten läsa/förklara kod eller föreslå en ändring.
+              Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>
+          </div>
+          <div class="chatbar" style="margin-top:8px">
+            <label style="color:var(--subtle);font-size:13px">Modell:</label>
+            <select id="codeModel"></select>
+          </div>
+          <div class="chat-input">
+            <textarea id="codeInput" rows="2" placeholder="T.ex. ”Förklara vad app.py gör” eller ”Lägg till en /health-endpoint”  (Enter skickar)"></textarea>
+            <button class="btn accent" id="codeSend">Skicka</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="view-settings" class="view hidden">
       <div class="settings-wrap">
         <div class="set-card">
@@ -1041,6 +1347,20 @@ PAGE = r"""<!doctype html>
           <div class="set-actions">
             <button class="btn ghost small" type="button" onclick="testMem0()">Testa anslutning</button>
             <span id="stMem0Test" class="hint"></span>
+          </div>
+        </div>
+
+        <div class="set-card">
+          <h2>Kodassistent <span class="hint">(experimentell)</span></h2>
+          <p class="hint">En kodassistent som läser en projektmapp och föreslår filändringar
+            (du godkänner varje ändring). Arbetar bara inom den valda mappen.
+            <b>Kräver en åtkomsttoken om servern nås av andra</b> – den kan skriva till disk.</p>
+          <label class="set-check"><input id="stCodeEnabled" type="checkbox">
+            <span>💻 Slå på kodassistenten</span></label>
+          <div class="set-row">
+            <label>Arbetsyta (absolut sökväg till projektmappen på servern)</label>
+            <input id="stCodeWs" placeholder="/opt/mitt-projekt  eller  D:\\projekt\\mitt-repo">
+            <span id="stCodeWsState" class="hint"></span>
           </div>
         </div>
 
@@ -1121,15 +1441,16 @@ function humanSize(b){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar'};
+const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Kod'};
 function showView(v){
-  for(const k of ['models','discover','chat','system','settings']){
+  for(const k of ['models','discover','chat','system','settings','code']){
     document.getElementById('nav-'+k).classList.toggle('active', v===k);
     document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
   }
   document.getElementById('title').textContent = TITLES[v] || '';
   if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
   if(v==='settings'){ loadSettingsForm(); }
+  if(v==='code'){ populateCodeModels(); loadTree(); setTimeout(()=>document.getElementById('codeInput').focus(), 0); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -1806,6 +2127,8 @@ async function loadConfig(){
   if(memRow) memRow.style.display = cfg.memory ? 'flex' : 'none';
   const memTools = document.getElementById('csMemoryTools');
   if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
+  const codeNav = document.getElementById('nav-code');
+  if(codeNav) codeNav.style.display = cfg.code ? 'flex' : 'none';
 }
 
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
@@ -1830,6 +2153,11 @@ async function loadSettingsForm(){
   document.getElementById('stMem0KeyState').textContent =
     mem0KeyIsSet ? '● En nyckel är sparad (lämna tomt för att behålla den)' : 'Ingen nyckel sparad';
   document.getElementById('stMem0Test').textContent = '';
+  chk('stCodeEnabled', s.code_enabled);
+  set('stCodeWs', s.code_workspace);
+  const cws = document.getElementById('stCodeWsState');
+  if(cws) cws.textContent = !s.code_workspace ? ''
+    : (s.code_workspace_ok ? '✓ Mappen hittades' : '✕ Mappen finns inte / går inte att läsa');
   document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
 }
 function clearMem0Key(){
@@ -1847,7 +2175,9 @@ function collectSettings(){
     mem0_api_version: val('stMem0Ver'),
     mem0_auth_scheme: val('stMem0Auth'),
     mem0_org_id: val('stMem0Org'),
-    mem0_project_id: val('stMem0Proj')
+    mem0_project_id: val('stMem0Proj'),
+    code_enabled: document.getElementById('stCodeEnabled').checked,
+    code_workspace: val('stCodeWs')
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
@@ -1866,6 +2196,7 @@ async function saveSettings(){
     const wsRow=document.getElementById('csWebsearchRow'); if(wsRow) wsRow.style.display = cfg.websearch?'flex':'none';
     const memRow=document.getElementById('csMemoryRow'); if(memRow) memRow.style.display = cfg.memory?'flex':'none';
     const memTools=document.getElementById('csMemoryTools'); if(memTools) memTools.style.display = cfg.memory?'block':'none';
+    const codeNav=document.getElementById('nav-code'); if(codeNav) codeNav.style.display = cfg.code?'flex':'none';
     loadSettingsForm();
   }catch(e){ toast('Kunde inte spara: '+e.message, true); }
 }
@@ -1882,6 +2213,154 @@ async function testMem0(){
     el.style.color = d.ok ? 'var(--green)' : 'var(--danger)';
   }catch(e){ el.textContent = '✕ '+e.message; el.style.color='var(--danger)'; }
 }
+
+/* ---- Kodassistent ---- */
+let codeMessages = [];      // {role, content} som skickas till /api/agent
+let codeController = null;
+function populateCodeModels(){
+  const sel = document.getElementById('codeModel');
+  if(!sel) return;
+  const names = lastModels.map(m=>m.name);
+  const cur = sel.value;
+  if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
+  sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
+  // föreslå en kodmodell om någon finns
+  const coder = names.find(n=>/coder|codellama|deepseek/i.test(n));
+  sel.value = (cur && names.includes(cur)) ? cur : (coder || names[0]);
+}
+async function loadTree(){
+  const box = document.getElementById('codeTree');
+  const pathEl = document.getElementById('codeWsPath');
+  if(!box) return;
+  box.innerHTML = '<div class="hint" style="padding:6px 8px">Hämtar…</div>';
+  try{
+    const r = await api('/api/agent/tree', {headers: headers(false)});
+    const d = await r.json();
+    if(pathEl) pathEl.textContent = d.root || '';
+    const files = d.files || [];
+    if(!files.length){ box.innerHTML = '<div class="hint" style="padding:6px 8px">(tom eller ingen arbetsyta)</div>'; return; }
+    box.innerHTML = files.map(f=>'<div class="f" title="'+esc(f)+'" onclick="askAboutFile(\''
+      + esc(f).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">'+esc(f)+'</div>').join('');
+  }catch(e){ box.innerHTML = '<div class="hint" style="padding:6px 8px">Kunde inte hämta trädet.</div>'; }
+}
+function askAboutFile(path){
+  const inp = document.getElementById('codeInput');
+  inp.value = 'Förklara vad '+path+' gör.';
+  inp.focus();
+}
+function codeLogEl(){ return document.getElementById('codeLog'); }
+function codeAppend(html){
+  const box = codeLogEl();
+  if(box.querySelector('.chat-empty')) box.innerHTML='';
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  const node = div.firstElementChild;
+  box.appendChild(node);
+  box.scrollTop = box.scrollHeight;
+  return node;
+}
+function diffToHtml(diff){
+  return esc(diff||'').split('\n').map(l=>{
+    let c='ctx';
+    if(l.startsWith('+++')||l.startsWith('---')) c='hd';
+    else if(l.startsWith('@@')) c='hd';
+    else if(l.startsWith('+')) c='add';
+    else if(l.startsWith('-')) c='del';
+    return '<span class="'+c+'">'+l+'</span>';
+  }).join('\n');
+}
+let codeEditSeq = 0;
+function renderEdit(ed){
+  const id = 'edit'+(codeEditSeq++);
+  const node = codeAppend(
+    '<div class="code-edit" id="'+id+'">'
+    + '<div class="eh"><span class="path">'+esc(ed.path)+'</span>'
+    + '<span class="acts">'
+    + '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Godkänn</button>'
+    + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>'
+    + '</span></div>'
+    + '<pre class="code-diff">'+diffToHtml(ed.diff||('(ny fil)\n'+ed.content))+'</pre></div>');
+  node._edit = ed;
+  return node;
+}
+async function applyEdit(id){
+  const node = document.getElementById(id);
+  if(!node || !node._edit) return;
+  try{
+    const r = await api('/api/agent/apply', {method:'POST', headers:headers(true),
+      body: JSON.stringify({path: node._edit.path, content: node._edit.content})});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error||'fel');
+    node.classList.add('done');
+    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Skrivet</span>');
+    toast('Ändring skriven: '+node._edit.path);
+    loadTree();
+  }catch(e){ toast('Kunde inte skriva: '+e.message, true); }
+}
+function rejectEdit(id){
+  const node = document.getElementById(id);
+  if(!node) return;
+  node.classList.add('done');
+  node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✕ Avvisad</span>');
+}
+async function sendAgent(){
+  const model = document.getElementById('codeModel').value;
+  const inp = document.getElementById('codeInput');
+  const text = inp.value.trim();
+  if(!model){ toast('Ingen modell vald', true); return; }
+  if(codeController || !text) return;
+  codeMessages.push({role:'user', content:text});
+  codeAppend('<div class="code-user">'+esc(text)+'</div>');
+  inp.value='';
+  const send = document.getElementById('codeSend'); send.textContent='Stoppar…'; send.disabled=true;
+  let think = null, thinkText='';
+  codeController = new AbortController();
+  let assistantFull = '';
+  try{
+    const r = await api('/api/agent', {method:'POST', headers:headers(true),
+      body: JSON.stringify({model, messages: codeMessages}), signal: codeController.signal});
+    if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.error||('HTTP '+r.status)); }
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while((i = buf.indexOf('\n')) >= 0){
+        const line = buf.slice(0,i).trim(); buf = buf.slice(i+1);
+        if(!line) continue;
+        let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
+        if(ev.type==='step'){ thinkText=''; think=null; }
+        else if(ev.type==='delta'){
+          thinkText += ev.text; assistantFull += ev.text;
+          if(!think) think = codeAppend('<div class="code-think"></div>');
+          think.textContent = thinkText;
+          codeLogEl().scrollTop = codeLogEl().scrollHeight;
+        }
+        else if(ev.type==='tool'){
+          if(think){ think.remove(); think=null; }   // dölj rå-tänk för verktygssteg
+          codeAppend('<div class="code-tool">🔧 <b>'+esc(ev.name)+'</b> '
+            + esc(JSON.stringify(ev.args))+' → '+esc(ev.summary||'')+'</div>');
+        }
+        else if(ev.type==='message'){
+          if(think){ think.remove(); think=null; }
+          if(ev.text) codeAppend('<div class="code-msg">'+mdToHtml(ev.text)+'</div>');
+        }
+        else if(ev.type==='edit'){ renderEdit(ev); }
+        else if(ev.type==='error'){ codeAppend('<div class="code-tool">⚠ '+esc(ev.text)+'</div>'); }
+      }
+    }
+    if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
+  }catch(e){
+    if(e.name!=='AbortError') codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>');
+  }finally{
+    codeController=null; send.textContent='Skicka'; send.disabled=false;
+  }
+}
+document.getElementById('codeSend').onclick = ()=>{ if(codeController) codeController.abort(); else sendAgent(); };
+document.getElementById('codeInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendAgent(); }
+});
 
 /* ---- Delat minne (Mem0) ---- */
 function toggleMemoryPanel(){
@@ -2104,9 +2583,23 @@ class Handler(BaseHTTPRequestHandler):
                     "auth": bool(TOKEN),
                     "websearch": websearch_enabled(),
                     "memory": mem0_enabled(),
+                    "code": code_enabled(),
                 })
             if path == "/api/settings":
                 return self._send_json(settings_public())
+            if path == "/api/agent/tree":
+                if not code_enabled():
+                    return self._send_json({"root": None, "files": []})
+                return self._send_json({"root": code_workspace_root(), "files": ws_tree()})
+            if path == "/api/agent/file":
+                if not code_enabled():
+                    return self._send_json({"error": "Kodassistenten är av"}, 400)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                rel = (q.get("path", [""])[0])
+                try:
+                    return self._send_json({"path": rel, "content": ws_current(rel)})
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 400)
             if path == "/api/system":
                 try:
                     return self._send_json(gather_system())
@@ -2198,6 +2691,26 @@ class Handler(BaseHTTPRequestHandler):
             if not mem0_enabled():
                 return self._send_json({"ok": False, "disabled": True})
             return self._send_json({"ok": mem0_delete(data.get("id"))})
+
+        if path == "/api/agent":
+            if not code_enabled():
+                return self._send_json({"error": "Kodassistenten är inte påslagen/konfigurerad"}, 400)
+            model = (data.get("model") or "").strip()
+            messages = [m for m in (data.get("messages") or [])
+                        if isinstance(m, dict) and m.get("content")]
+            if not model or not messages:
+                return self._send_json({"error": "model och messages krävs"}, 400)
+            base = backend_url(data.get("backend"))
+            return self._run_agent(model, messages, base)
+
+        if path == "/api/agent/apply":
+            if not code_enabled():
+                return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
+            try:
+                r = ws_write_file(data.get("path", ""), data.get("content"))
+                return self._send_json({"ok": True, "path": r["path"], "diff": r["diff"]})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": str(e)}, 400)
 
         if path == "/api/chat":
             model = (data.get("model") or "").strip()
@@ -2362,6 +2875,71 @@ class Handler(BaseHTTPRequestHandler):
     def _stream_pull(self, name):
         return self._proxy_stream("/api/pull", {"name": name, "stream": True})
 
+    # ---- Kodassistent: agent-loop (läs-verktyg + föreslå diffar) ----------
+    def _run_agent(self, model, messages, base):
+        """Kör agent-loopen: modellen utforskar med läsverktyg och föreslår sedan
+        filändringar som diffar. Strömmar händelser som NDJSON till webbläsaren."""
+        convo = [{"role": "system", "content": AGENT_SYSTEM}] + list(messages)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+        except Exception:
+            return
+
+        try:
+            for step in range(CODE_MAX_STEPS):
+                self._emit({"type": "step", "n": step + 1})
+                full = ""
+                try:
+                    up = self._open_chat_stream(convo, model, None, base)
+                except Exception as e:
+                    self._emit({"type": "error", "text": "Kunde inte nå modellen: %s" % e})
+                    break
+                try:
+                    for raw in up:
+                        if not raw:
+                            continue
+                        try:
+                            obj = json.loads(raw.decode("utf-8", "replace"))
+                        except Exception:
+                            continue
+                        chunk = (obj.get("message") or {}).get("content") or ""
+                        if chunk:
+                            full += chunk
+                            self._emit({"type": "delta", "text": chunk})
+                finally:
+                    try:
+                        up.close()
+                    except Exception:
+                        pass
+
+                call = parse_tool_call(full)
+                if call and step < CODE_MAX_STEPS - 1:
+                    result, meta = agent_tool_exec(call["name"], call["args"])
+                    self._emit({"type": "tool", "name": call["name"], "args": call["args"],
+                                "summary": meta.get("summary", "")})
+                    convo.append({"role": "assistant", "content": full})
+                    convo.append({"role": "user",
+                                  "content": "VERKTYGSRESULTAT (%s):\n%s" % (call["name"], result)})
+                    continue
+
+                # Slutligt svar: förklaring + föreslagna filändringar
+                for ed in parse_edits(full):
+                    self._emit({"type": "edit", "path": ed["path"], "content": ed["content"],
+                                "diff": ws_diff(ws_current(ed["path"]), ed["content"], ed["path"])})
+                msg = strip_edits(full)
+                if msg:
+                    self._emit({"type": "message", "text": msg})
+                break
+            else:
+                self._emit({"type": "message",
+                            "text": "(nådde max antal verktygssteg – ställ en mer avgränsad fråga)"})
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        self._emit({"type": "done"})
+
     def _proxy_stream(self, upstream_path, payload, base=None):
         """POSTa till en Ollama-backend och strömma NDJSON-svaret rad för rad till webbläsaren."""
         try:
@@ -2449,6 +3027,12 @@ def main():
         print(" Delat minne:    AV (påslaget men MEM0_API_KEY/bas-URL saknas)")
     else:
         print(" Delat minne:    AV (slå på under ⚙ Inställningar eller OLLAMA_STUDIO_MEM0=1)")
+    if code_enabled():
+        print(" Kodassistent:   PÅ (arbetsyta: %s)" % code_workspace_root())
+    elif setting_bool("code_enabled"):
+        print(" Kodassistent:   AV (påslagen men arbetsytan saknas/går inte att läsa)")
+    else:
+        print(" Kodassistent:   AV (slå på under ⚙ Inställningar + välj arbetsyta)")
     print("")
     print(" Öppna i webbläsaren från en annan dator:")
     for ip in _local_ips():
