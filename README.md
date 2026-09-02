@@ -73,7 +73,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Inställningssida** (webbversionen) – en **⚙ Inställningar**-vy där du sätter webbsök och
   Mem0 (API-nyckel, användar-ID m.m.) direkt i gränssnittet. Allt sparas i en **lokal
   SQLite-databas** på servern och gäller framför miljövariabler – inga omstarter behövs.
-- **Kodassistent (experimentell)** (webbversionen) – en **💻 Kod**-vy där en lokal modell
+- **Codex – kodassistent (experimentell)** (webbversionen) – en **💻 Codex**-vy där en lokal modell
   (t.ex. `qwen2.5-coder`) läser en projektmapp och **föreslår filändringar som diffar** – du
   **godkänner varje ändring** innan något skrivs. Kan även arbeta mot **git/GitHub**: skapa
   gren, committa, pusha och **öppna pull request** (kräver en GitHub-token), och **köra

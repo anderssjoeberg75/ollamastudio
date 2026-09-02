@@ -1443,7 +1443,7 @@ PAGE = r"""<!doctype html>
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
-      <a id="nav-code" onclick="showView('code')" style="display:none"><span class="dot">●</span><span class="label">💻 Kod</span></a>
+      <a id="nav-code" onclick="showView('code')" style="display:none"><span class="dot">●</span><span class="label">💻 Codex</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
       <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
     </div>
@@ -1590,7 +1590,7 @@ PAGE = r"""<!doctype html>
             <button class="btn ghost small" onclick="runManual()">▶ Kör</button>
           </div>
           <div id="codeLog" class="code-log">
-            <div class="chat-empty">Be assistenten läsa/förklara kod eller föreslå en ändring.
+            <div class="chat-empty">Be Codex läsa/förklara kod eller föreslå en ändring.
               Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>
           </div>
           <div class="chatbar" style="margin-top:8px">
@@ -1649,12 +1649,12 @@ PAGE = r"""<!doctype html>
         </div>
 
         <div class="set-card">
-          <h2>Kodassistent <span class="hint">(experimentell)</span></h2>
+          <h2>Codex <span class="hint">(kodassistent · experimentell)</span></h2>
           <p class="hint">En kodassistent som läser en projektmapp och föreslår filändringar
             (du godkänner varje ändring). Arbetar bara inom den valda mappen.
             <b>Kräver en åtkomsttoken om servern nås av andra</b> – den kan skriva till disk.</p>
           <label class="set-check"><input id="stCodeEnabled" type="checkbox">
-            <span>💻 Slå på kodassistenten</span></label>
+            <span>💻 Slå på Codex</span></label>
           <div class="set-row">
             <label>Arbetsyta (absolut sökväg till projektmappen på servern)</label>
             <input id="stCodeWs" placeholder="/opt/mitt-projekt  eller  D:\\projekt\\mitt-repo">
@@ -1762,7 +1762,7 @@ function humanSize(b){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Kod'};
+const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Codex'};
 function showView(v){
   for(const k of ['models','discover','chat','system','settings','code']){
     document.getElementById('nav-'+k).classList.toggle('active', v===k);
@@ -3504,13 +3504,13 @@ def main():
         gh = "GitHub-token satt" if setting_str("github_token") else "ingen GitHub-token"
         run = ("kommandokörning PÅ (%d tillåtna)" % len(code_run_allowlist())) \
             if code_run_enabled() else "kommandokörning AV"
-        print(" Kodassistent:   PÅ (arbetsyta: %s · git %s · %s · %s)"
+        print(" Codex:          PÅ (arbetsyta: %s · git %s · %s · %s)"
               % (code_workspace_root(),
                  "finns" if git_available() else "saknas", gh, run))
     elif setting_bool("code_enabled"):
-        print(" Kodassistent:   AV (påslagen men arbetsytan saknas/går inte att läsa)")
+        print(" Codex:          AV (påslagen men arbetsytan saknas/går inte att läsa)")
     else:
-        print(" Kodassistent:   AV (slå på under ⚙ Inställningar + välj arbetsyta)")
+        print(" Codex:          AV (slå på under ⚙ Inställningar + välj arbetsyta)")
     print("")
     print(" Öppna i webbläsaren från en annan dator:")
     for ip in _local_ips():
