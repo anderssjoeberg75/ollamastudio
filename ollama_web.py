@@ -1605,8 +1605,9 @@ PAGE = r"""<!doctype html>
               Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>
           </div>
           <div class="chatbar" style="margin-top:8px">
-            <label style="color:var(--subtle);font-size:13px">Modell:</label>
+            <label style="color:var(--subtle);font-size:13px">Modell (Codex):</label>
             <select id="codeModel"></select>
+            <span class="hint" style="color:var(--faint);font-size:12px">egen · oberoende av chatten</span>
           </div>
           <div class="chat-input">
             <textarea id="codeInput" rows="2" placeholder="T.ex. ”Förklara vad app.py gör” eller ”Lägg till en /health-endpoint”  (Enter skickar)"></textarea>
@@ -2596,9 +2597,15 @@ function populateCodeModels(){
   const cur = sel.value;
   if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
   sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
-  // föreslå en kodmodell om någon finns
-  const coder = names.find(n=>/coder|codellama|deepseek/i.test(n));
-  sel.value = (cur && names.includes(cur)) ? cur : (coder || names[0]);
+  // Codex har en egen, ihågkommen modell – oberoende av chattens val.
+  let saved = ''; try{ saved = localStorage.getItem('os_code_model') || ''; }catch(e){}
+  const coder = names.find(n=>/coder|codellama|deepseek|starcoder|qwen.*cod/i.test(n));
+  if(saved && names.includes(saved)) sel.value = saved;
+  else if(cur && names.includes(cur)) sel.value = cur;
+  else sel.value = (coder || names[0]);
+}
+function saveCodeModel(){
+  try{ localStorage.setItem('os_code_model', document.getElementById('codeModel').value); }catch(e){}
 }
 async function loadTree(){
   const box = document.getElementById('codeTree');
@@ -2736,6 +2743,7 @@ document.getElementById('codeSend').onclick = ()=>{ if(codeController) codeContr
 document.getElementById('codeInput').addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendAgent(); }
 });
+document.getElementById('codeModel').addEventListener('change', saveCodeModel);
 
 /* ---- Kommandokörning (fas 4) ---- */
 async function runManual(){
