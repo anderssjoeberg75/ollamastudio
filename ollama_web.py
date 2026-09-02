@@ -2040,11 +2040,16 @@ function populateChatModels(){
   const cur = sel.value;
   if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
   sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
-  if(cur && names.includes(cur)) sel.value = cur;
+  let saved = ''; try{ saved = localStorage.getItem('os_chat_model') || ''; }catch(e){}
+  if(cur && names.includes(cur)) sel.value = cur;                 // behåll aktivt val
+  else if(saved && names.includes(saved)) sel.value = saved;      // ihågkommet val
   else{
-    const active = [...running.keys()][0];   // föreslå den som redan är i minnet
+    const active = [...running.keys()][0];   // annars den som redan är i minnet
     sel.value = (active && names.includes(active)) ? active : names[0];
   }
+}
+function saveChatModel(){
+  try{ localStorage.setItem('os_chat_model', document.getElementById('chatModel').value); }catch(e){}
 }
 function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
 
@@ -2430,6 +2435,7 @@ async function updateChatWarning(){
   el.style.display = 'block';
 }
 document.getElementById('chatModel').addEventListener('change', updateChatWarning);
+document.getElementById('chatModel').addEventListener('change', saveChatModel);
 document.getElementById('chatBackend').addEventListener('change', updateChatWarning);
 
 // Uppdatera "aktiv modell" automatiskt var 5:e sekund (den kan laddas/frigöras när som helst)
