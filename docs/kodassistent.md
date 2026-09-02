@@ -1,7 +1,8 @@
 # Skiss: Kodassistent i Ollama Studio ("Codex"-liknande)
 
-> **Status:** utkast / diskussionsunderlag. Inget är byggt än – det här är en skiss att
-> iterera på. Öppna beslut listas sist; några vill jag stämma av med dig innan bygget.
+> **Status:** **Fas 1+2 är byggd** (MVP) – "Kod"-vyn kan läsa/söka i en arbetsyta och föreslå
+> filändringar som diffar du godkänner. Fas 3 (git/GitHub) och fas 4 (sandboxad körning) kvarstår.
+> Resten av dokumentet är den ursprungliga skissen att fortsätta iterera på.
 
 ## Mål
 
