@@ -74,6 +74,8 @@ SETTINGS_SPEC = {
     "mem0_project_id":  ("MEM0_PROJECT_ID", "", "str", False),
     "code_enabled":     ("OLLAMA_STUDIO_CODE", "0", "bool", False),
     "code_workspace":   ("OLLAMA_STUDIO_WORKSPACE", "", "str", False),
+    "github_token":     ("GITHUB_TOKEN", "", "str", True),
+    "github_base":      ("OLLAMA_STUDIO_GITHUB_BASE", "main", "str", False),
 }
 
 _settings_lock = threading.Lock()
@@ -776,6 +778,8 @@ AGENT_SYSTEM = (
     "  TOOL list_dir {\"path\": \".\"}\n"
     "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1, \"end\": 120}\n"
     "  TOOL search {\"query\": \"text att söka\"}\n"
+    "  TOOL git_status {}\n"
+    "  TOOL git_diff {\"path\": \"fil.py\"}\n"
     "Efter varje verktyg får du resultatet och kan använda fler verktyg. När du är klar: "
     "skriv ditt svar på svenska. Om du vill ÄNDRA eller SKAPA filer, föreslå varje fil som ett "
     "block med FULLSTÄNDIGT nytt filinnehåll (inte en diff):\n"
@@ -839,9 +843,177 @@ def agent_tool_exec(name, args):
             lines = ["%s:%d: %s" % (h["path"], h["line"], h["text"]) for h in r["hits"]]
             return ("Sökträffar för %r:\n%s" % (r["query"], "\n".join(lines) or "(inga)"),
                     {"summary": "%d träffar" % len(r["hits"])})
+        if name == "git_status":
+            info = git_status_info()
+            if not info.get("repo"):
+                return "Arbetsytan är inte ett git-repo.", {"summary": "inget repo"}
+            return ("Gren: %s · %d ändrade filer:\n%s" % (
+                    info["branch"], info["changed"], "\n".join(info["files"]) or "(inga)"),
+                    {"summary": "%d ändrade" % info["changed"]})
+        if name == "git_diff":
+            d = git_diff_text(args.get("path"))
+            return ("Diff:\n" + (d or "(inga ändringar)"))[:8000], {"summary": "diff"}
         return "Okänt verktyg: " + str(name), {"summary": "okänt verktyg"}
     except Exception as e:
         return "FEL: %s" % e, {"summary": "fel: %s" % e}
+
+
+# --------------------------------------------------------------------------
+# Kodassistent – git & GitHub (fas 3). Använder git-CLI i arbetsytan + GitHub REST.
+# Sidoeffekter (gren/commit/push/PR) drivs av användarknappar, inte av modellen.
+# --------------------------------------------------------------------------
+def git_available():
+    return shutil.which("git") is not None
+
+
+def _git(args, timeout=30, extra_env=None):
+    """Kör git i arbetsytans rot. Returnerar (returkod, stdout, stderr)."""
+    root = code_workspace_root()
+    if not root:
+        return 1, "", "Ingen arbetsyta"
+    if not git_available():
+        return 1, "", "git är inte installerat på servern"
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"   # fråga aldrig efter lösenord interaktivt
+    if extra_env:
+        env.update(extra_env)
+    try:
+        p = subprocess.run(["git"] + args, cwd=root, capture_output=True, text=True,
+                           timeout=timeout, env=env)
+        return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+    except subprocess.TimeoutExpired:
+        return 1, "", "git tog för lång tid (timeout)"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def git_is_repo():
+    rc, out, _ = _git(["rev-parse", "--is-inside-work-tree"])
+    return rc == 0 and out == "true"
+
+
+def git_current_branch():
+    rc, out, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    return out if rc == 0 else ""
+
+
+def git_remote_slug():
+    """(owner, repo) från origin-URL, eller (None, None)."""
+    rc, url, _ = _git(["remote", "get-url", "origin"])
+    if rc != 0 or not url:
+        return None, None
+    m = re.search(r"github\.com[:/]+([^/]+)/(.+?)(?:\.git)?/?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    return None, None
+
+
+def git_status_info():
+    """Sammanfattning av arbetsytans git-läge för UI:t."""
+    if not git_is_repo():
+        return {"repo": False}
+    rc, out, _ = _git(["status", "--porcelain"])
+    changes = [l for l in out.splitlines() if l.strip()] if rc == 0 else []
+    owner, repo = git_remote_slug()
+    return {
+        "repo": True,
+        "branch": git_current_branch(),
+        "changed": len(changes),
+        "files": [l[3:] if len(l) > 3 else l for l in changes[:50]],
+        "owner": owner, "repo_name": repo,
+        "has_token": bool(setting_str("github_token")),
+    }
+
+
+def git_diff_text(path=None):
+    args = ["diff"]
+    if path:
+        args += ["--", path]
+    rc, out, err = _git(args)
+    return out if rc == 0 else ("FEL: " + err)
+
+
+def git_create_branch(name):
+    name = (name or "").strip()
+    if not re.match(r"^[\w./-]{1,100}$", name):
+        return False, "Ogiltigt grennamn"
+    rc, out, err = _git(["checkout", "-b", name])
+    return (rc == 0), (err or out)
+
+
+def git_commit_all(message):
+    message = (message or "").strip()
+    if not message:
+        return False, "Tomt commit-meddelande"
+    rc, _, err = _git(["add", "-A"])
+    if rc != 0:
+        return False, err
+    ident = []
+    rc_e, email, _ = _git(["config", "user.email"])
+    if not (rc_e == 0 and email):
+        ident = ["-c", "user.email=ollama-studio@localhost", "-c", "user.name=Ollama Studio"]
+    rc, out, err = _git(ident + ["commit", "-m", message])
+    if rc != 0:
+        return False, (err or out or "commit misslyckades")
+    return True, (out or "commit ok")
+
+
+def _authed_push_url(owner, repo, token):
+    return "https://x-access-token:%s@github.com/%s/%s.git" % (token, owner, repo)
+
+
+def git_push(branch=None):
+    branch = (branch or git_current_branch() or "").strip()
+    if not branch:
+        return False, "Ingen gren att pusha"
+    token = setting_str("github_token")
+    owner, repo = git_remote_slug()
+    if token and owner and repo:
+        url = _authed_push_url(owner, repo, token)
+        rc, out, err = _git(["push", url, "HEAD:refs/heads/" + branch], timeout=120)
+        # dölj token om den råkar dyka upp i felmeddelanden
+        err = (err or "").replace(token, "***")
+        out = (out or "").replace(token, "***")
+    else:
+        rc, out, err = _git(["push", "-u", "origin", branch], timeout=120)
+    return (rc == 0), (err or out or ("pushade " + branch))
+
+
+def github_create_pr(title, body, base=None, head=None):
+    """Öppna en pull request via GitHub REST. Returnerar (ok, url_eller_fel)."""
+    token = setting_str("github_token")
+    if not token:
+        return False, "Ingen GitHub-token angiven (⚙ Inställningar)"
+    owner, repo = git_remote_slug()
+    if not (owner and repo):
+        return False, "Hittar inte GitHub-repo (origin måste peka på github.com)"
+    head = (head or git_current_branch() or "").strip()
+    base = (base or setting_str("github_base") or "main").strip()
+    if not head:
+        return False, "Ingen gren (head) att öppna PR från"
+    if head == base:
+        return False, "Head- och bas-gren är samma (%s) – skapa en ny gren först" % base
+    payload = json.dumps({"title": title or head, "head": head, "base": base,
+                          "body": body or ""}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.github.com/repos/%s/%s/pulls" % (owner, repo),
+        data=payload, method="POST",
+        headers={"Authorization": "Bearer " + token,
+                 "Accept": "application/vnd.github+json",
+                 "User-Agent": "OllamaStudio",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return True, data.get("html_url", "PR skapad")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("message", "")
+        except Exception:
+            msg = ""
+        return False, "GitHub HTTP %d: %s" % (e.code, msg or "kunde inte skapa PR")
+    except Exception as e:
+        return False, str(e)
 
 
 # --------------------------------------------------------------------------
@@ -1051,6 +1223,11 @@ PAGE = r"""<!doctype html>
   .code-diff .hd{color:var(--accent-hov)} .code-diff .ctx{color:var(--subtle)}
   .code-edit.done .acts{display:none}
   .code-edit .state{font-size:12px;color:var(--faint)}
+  .code-git{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
+    background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:8px}
+  .code-git .gi{font-size:12.5px;color:var(--subtle)}
+  .code-git .gi b{color:var(--accent-hov);font-family:ui-monospace,Menlo,Consolas,monospace}
+  .code-git .gacts{display:flex;gap:6px;flex-wrap:wrap}
   @media(max-width:720px){ .code-tree{display:none} }
   .cs-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .chatwarn{margin:0 2px 8px;padding:9px 12px;border-radius:8px;font-size:13px;display:none;line-height:1.4}
@@ -1291,6 +1468,17 @@ PAGE = r"""<!doctype html>
           <div id="codeTree" class="code-files"></div>
         </div>
         <div class="code-main">
+          <div id="codeGit" class="code-git" style="display:none">
+            <span class="gi" id="codeGitInfo"></span>
+            <span class="gacts">
+              <button class="btn ghost small" onclick="gitBranch()">Ny gren</button>
+              <button class="btn ghost small" onclick="gitCommit()">Committa</button>
+              <button class="btn ghost small" onclick="gitPush()">Push</button>
+              <button class="btn accent small" onclick="githubPR()">Skapa PR</button>
+              <button class="btn ghost small" onclick="gitStatus()" title="Uppdatera">↻</button>
+            </span>
+          </div>
+          <div id="codeGitMsg" class="hint" style="margin:0 2px 6px"></div>
           <div id="codeLog" class="code-log">
             <div class="chat-empty">Be assistenten läsa/förklara kod eller föreslå en ändring.
               Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>
@@ -1361,6 +1549,18 @@ PAGE = r"""<!doctype html>
             <label>Arbetsyta (absolut sökväg till projektmappen på servern)</label>
             <input id="stCodeWs" placeholder="/opt/mitt-projekt  eller  D:\\projekt\\mitt-repo">
             <span id="stCodeWsState" class="hint"></span>
+          </div>
+          <div class="set-row">
+            <label>GitHub-token <span class="hint">(för push &amp; att öppna pull requests)</span></label>
+            <input id="stGhToken" type="password" autocomplete="off" placeholder="ghp_… eller github_pat_…">
+            <div class="set-keyrow">
+              <span id="stGhTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearGhToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div class="set-row" style="max-width:260px">
+            <label>Standard bas-gren för PR</label>
+            <input id="stGhBase" placeholder="main">
           </div>
         </div>
 
@@ -1450,7 +1650,7 @@ function showView(v){
   document.getElementById('title').textContent = TITLES[v] || '';
   if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
   if(v==='settings'){ loadSettingsForm(); }
-  if(v==='code'){ populateCodeModels(); loadTree(); setTimeout(()=>document.getElementById('codeInput').focus(), 0); }
+  if(v==='code'){ populateCodeModels(); loadTree(); gitStatus(); setTimeout(()=>document.getElementById('codeInput').focus(), 0); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -2134,6 +2334,7 @@ async function loadConfig(){
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
 let mem0KeyIsSet = false;      // om en nyckel redan finns sparad
 let mem0KeyClear = false;      // användaren har valt att ta bort nyckeln
+let ghTokenIsSet = false, ghTokenClear = false;
 async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
@@ -2158,12 +2359,23 @@ async function loadSettingsForm(){
   const cws = document.getElementById('stCodeWsState');
   if(cws) cws.textContent = !s.code_workspace ? ''
     : (s.code_workspace_ok ? '✓ Mappen hittades' : '✕ Mappen finns inte / går inte att läsa');
+  set('stGhBase', s.github_base);
+  ghTokenIsSet = !!s.github_token_set; ghTokenClear = false;
+  const ghEl = document.getElementById('stGhToken'); if(ghEl) ghEl.value='';
+  const ghState = document.getElementById('stGhTokenState');
+  if(ghState) ghState.textContent = ghTokenIsSet
+    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
   document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
 }
 function clearMem0Key(){
   mem0KeyClear = true; mem0KeyIsSet = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
   document.getElementById('stMem0KeyState').textContent = '✕ Nyckeln tas bort när du sparar';
+}
+function clearGhToken(){
+  ghTokenClear = true; ghTokenIsSet = false;
+  const el = document.getElementById('stGhToken'); if(el) el.value='';
+  document.getElementById('stGhTokenState').textContent = '✕ Token tas bort när du sparar';
 }
 function collectSettings(){
   const val = id => (document.getElementById(id).value||'').trim();
@@ -2177,11 +2389,15 @@ function collectSettings(){
     mem0_org_id: val('stMem0Org'),
     mem0_project_id: val('stMem0Proj'),
     code_enabled: document.getElementById('stCodeEnabled').checked,
-    code_workspace: val('stCodeWs')
+    code_workspace: val('stCodeWs'),
+    github_base: val('stGhBase')
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
   else if(key) body.mem0_api_key = key;                // ny nyckel (annars orörd)
+  const gh = val('stGhToken');
+  if(ghTokenClear && !gh) body.github_token = null;    // rensa
+  else if(gh) body.github_token = gh;                  // ny token (annars orörd)
   return body;
 }
 async function saveSettings(){
@@ -2294,7 +2510,7 @@ async function applyEdit(id){
     node.classList.add('done');
     node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Skrivet</span>');
     toast('Ändring skriven: '+node._edit.path);
-    loadTree();
+    loadTree(); gitStatus();
   }catch(e){ toast('Kunde inte skriva: '+e.message, true); }
 }
 function rejectEdit(id){
@@ -2361,6 +2577,69 @@ document.getElementById('codeSend').onclick = ()=>{ if(codeController) codeContr
 document.getElementById('codeInput').addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendAgent(); }
 });
+
+/* ---- Git / GitHub (fas 3) ---- */
+let lastGit = null;
+function gitMsg(text, err){
+  const el = document.getElementById('codeGitMsg');
+  if(el){ el.innerHTML = text || ''; el.style.color = err ? 'var(--danger)' : 'var(--faint)'; }
+}
+async function gitStatus(){
+  const bar = document.getElementById('codeGit');
+  try{
+    const r = await api('/api/git/status', {headers: headers(false)});
+    const g = await r.json(); lastGit = g;
+    if(!g.repo){ bar.style.display='none'; return; }
+    bar.style.display='flex';
+    const slug = (g.owner && g.repo_name) ? (g.owner+'/'+g.repo_name) : 'ingen GitHub-remote';
+    document.getElementById('codeGitInfo').innerHTML =
+      'Gren <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' ändrade filer · '+esc(slug)
+      + (g.has_token ? '' : ' · <span style="color:var(--amber)">ingen token</span>');
+  }catch(e){ bar.style.display='none'; }
+}
+async function gitPost(path, body){
+  const r = await api(path, {method:'POST', headers:headers(true), body: JSON.stringify(body||{})});
+  return await r.json();
+}
+async function gitBranch(){
+  const name = prompt('Namn på ny gren:', 'claude/andring');
+  if(!name) return;
+  gitMsg('Skapar gren…');
+  const d = await gitPost('/api/git/branch', {name});
+  if(d.status) lastGit=d.status, gitStatus();
+  gitMsg(d.ok ? ('✓ Gren skapad: '+esc(name)) : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+}
+async function gitCommit(){
+  const msg = prompt('Commit-meddelande:', 'Ändringar via kodassistenten');
+  if(!msg) return;
+  gitMsg('Committar…');
+  const d = await gitPost('/api/git/commit', {message: msg});
+  gitStatus();
+  gitMsg(d.ok ? '✓ Committat' : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+}
+async function gitPush(){
+  const branch = lastGit && lastGit.branch;
+  if(!confirm('Pusha grenen "'+(branch||'')+'" till GitHub?')) return;
+  gitMsg('Pushar…');
+  const d = await gitPost('/api/git/push', {});
+  gitMsg(d.ok ? '✓ Pushad' : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+}
+async function githubPR(){
+  if(lastGit && lastGit.branch && !lastGit.has_token){
+    gitMsg('✕ Ingen GitHub-token sparad (⚙ Inställningar).', true); return;
+  }
+  const title = prompt('PR-titel:', 'Ändringar via kodassistenten');
+  if(title===null) return;
+  const body = prompt('PR-beskrivning (valfritt):', '') || '';
+  gitMsg('Skapar pull request…');
+  const d = await gitPost('/api/github/pr', {title, body});
+  if(d.ok && d.url){
+    gitMsg('✓ PR skapad: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a>');
+    toast('Pull request skapad');
+  }else{
+    gitMsg('✕ '+esc(d.message||d.error||'kunde inte skapa PR'), true);
+  }
+}
 
 /* ---- Delat minne (Mem0) ---- */
 function toggleMemoryPanel(){
@@ -2600,6 +2879,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"path": rel, "content": ws_current(rel)})
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
+            if path == "/api/git/status":
+                if not code_enabled():
+                    return self._send_json({"repo": False})
+                return self._send_json(git_status_info())
             if path == "/api/system":
                 try:
                     return self._send_json(gather_system())
@@ -2711,6 +2994,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, "path": r["path"], "diff": r["diff"]})
             except Exception as e:
                 return self._send_json({"ok": False, "error": str(e)}, 400)
+
+        if path in ("/api/git/branch", "/api/git/commit", "/api/git/push", "/api/github/pr"):
+            if not code_enabled():
+                return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
+            if not git_is_repo():
+                return self._send_json({"ok": False, "error": "Arbetsytan är inte ett git-repo"}, 400)
+            if path == "/api/git/branch":
+                ok, msg = git_create_branch(data.get("name", ""))
+            elif path == "/api/git/commit":
+                ok, msg = git_commit_all(data.get("message", ""))
+            elif path == "/api/git/push":
+                ok, msg = git_push(data.get("branch"))
+            else:  # /api/github/pr
+                ok, msg = github_create_pr(data.get("title", ""), data.get("body", ""),
+                                           data.get("base"), data.get("head"))
+            key = "url" if (ok and path == "/api/github/pr") else "message"
+            return self._send_json({"ok": ok, key: msg, "status": git_status_info()})
 
         if path == "/api/chat":
             model = (data.get("model") or "").strip()
@@ -3028,7 +3328,10 @@ def main():
     else:
         print(" Delat minne:    AV (slå på under ⚙ Inställningar eller OLLAMA_STUDIO_MEM0=1)")
     if code_enabled():
-        print(" Kodassistent:   PÅ (arbetsyta: %s)" % code_workspace_root())
+        gh = "GitHub-token satt" if setting_str("github_token") else "ingen GitHub-token"
+        print(" Kodassistent:   PÅ (arbetsyta: %s · git %s · %s)"
+              % (code_workspace_root(),
+                 "finns" if git_available() else "saknas", gh))
     elif setting_bool("code_enabled"):
         print(" Kodassistent:   AV (påslagen men arbetsytan saknas/går inte att läsa)")
     else:

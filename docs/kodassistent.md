@@ -1,8 +1,10 @@
 # Skiss: Kodassistent i Ollama Studio ("Codex"-liknande)
 
-> **Status:** **Fas 1+2 är byggd** (MVP) – "Kod"-vyn kan läsa/söka i en arbetsyta och föreslå
-> filändringar som diffar du godkänner. Fas 3 (git/GitHub) och fas 4 (sandboxad körning) kvarstår.
-> Resten av dokumentet är den ursprungliga skissen att fortsätta iterera på.
+> **Status:** **Fas 1–3 är byggd.** "Kod"-vyn kan läsa/söka i en arbetsyta, föreslå filändringar
+> som diffar du godkänner, och arbeta mot **git/GitHub**: skapa gren, committa, pusha och öppna
+> pull request (lokal klon + GitHub-token). Agenten har även läsverktygen `git_status`/`git_diff`.
+> **Kvar: fas 4** (sandboxad kommandokörning – tester m.m.). Resten av dokumentet är den
+> ursprungliga skissen att fortsätta iterera på.
 
 ## Mål
 
