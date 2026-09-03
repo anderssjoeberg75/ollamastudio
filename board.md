@@ -13,26 +13,25 @@ Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 > **CI-workflow**, **escaping-fix i Avinstallera**, API-404 som JSON, favicon-route,
 > **småfixar (pull-timeout, datumvisning, `.desktop`, död param)**, 0600 på inställnings-DB:n,
 > cache-efter-commit, **kort `mem0_search`-timeout i chatten**, **DuckDuckGo lite-fallback**,
-> **atomisk/trådsäker inställnings-cache**, **tester för ny logik**). Kvar: **1**
-> (öppen-som-standard – kräver medvetet godkännande) och **22** (Mem0 list/delete mot live-API –
-> kräver ett riktigt Mem0-konto). Tester finns i `tests/` – kör
+> **atomisk/trådsäker inställnings-cache**, **startvarning när servern är öppen utan token (#1,
+> per ägarens beslut – defaults oförändrade)**, **tester för ny logik**). Kvar: **22** (Mem0
+> list/delete mot live-API – kräver ett riktigt Mem0-konto). Tester finns i `tests/` – kör
 > `python3 -m unittest discover -s tests`.
 
 ---
 
-## 🔴 1. Webbservern är öppen mot nätverket som standard
+## ✅ 1. Webbservern är öppen mot nätverket som standard (varning tillagd)
 
-- **Fil:** `ollama_web.py` (konstanterna `LISTEN_HOST`, `TOKEN` överst, ca rad 43–46; `main()` ca rad 1571)
+- **Fil:** `ollama_web.py` (konstanterna `LISTEN_HOST`, `TOKEN` överst; `access_warning_lines()` + `main()`)
 - **Problem:** Servern binder `0.0.0.0` utan token som standard. Vem som helst som når
   porten kan installera/radera modeller och chatta.
-- **Att göra:** Gör den säkra vägen till standard. Välj ETT av:
-  - (a) Defaulta `OLLAMA_STUDIO_HOST` till `127.0.0.1` (kräver medvetet `0.0.0.0` för nätverk), **eller**
-  - (b) Vägra starta med `0.0.0.0` utan `OLLAMA_STUDIO_TOKEN` satt – skriv ett tydligt felmeddelande och avsluta, med en env-flagga (`OLLAMA_STUDIO_ALLOW_OPEN=1`) för att medvetet tillåta öppet läge.
-- **Acceptans:**
-  - [ ] Standardstart utan konfiguration exponerar INTE radera/installera öppet på nätverket.
-  - [ ] Det går fortfarande att köra öppet på nätverket med ett medvetet val (token eller flagga).
-  - [ ] Startbannern i `main()` speglar det valda beteendet.
-  - [ ] README uppdateras så standarden stämmer.
+- **Beslut (ägaren):** Behåll standardbeteendet oförändrat, men **varna tydligt** vid start.
+- **Gjort:** `access_warning_lines(host, port, token)` skriver ett inramat ⚠-varningsblock i
+  startloggen när servern är öppen (host ej loopback) och saknar token – med hur man låser ner
+  (`OLLAMA_STUDIO_TOKEN` eller `OLLAMA_STUDIO_HOST=127.0.0.1`). Är token satt eller värden loopback
+  skrivs ingen varning. Inga defaults ändrade. Enhetstester täcker logiken.
+- **Ev. framtida (kräver nytt beslut):** göra den säkra vägen till standard (loopback som default,
+  eller vägra öppet läge utan token/flagga).
 
 ## 🔴 2. Token jämförs inte i konstant tid
 

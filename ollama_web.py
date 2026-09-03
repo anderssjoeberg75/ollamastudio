@@ -4247,6 +4247,31 @@ def _local_ips():
     return ips
 
 
+def is_loopback_host(host):
+    """True om värden bara är nåbar från den här datorn (inte öppen på nätverket)."""
+    return (host or "").strip().lower() in ("127.0.0.1", "localhost", "::1")
+
+
+def access_warning_lines(host, port, token):
+    """Rader att skriva vid start när servern är öppen på nätverket utan token.
+
+    Tom lista = inget att varna om (token satt, eller bunden till loopback). Vi
+    ändrar inte standardbeteendet (board #1) – bara en tydlig varning i loggen.
+    """
+    if token or is_loopback_host(host):
+        return []
+    bar = "!" * 58
+    return [
+        bar,
+        "⚠  VARNING: SERVERN ÄR ÖPPEN PÅ NÄTVERKET UTAN LÖSENORD",
+        "⚠  Vem som helst som når %s:%d kan installera/radera modeller" % (host, port),
+        "⚠  och chatta – helt utan inloggning.",
+        "⚠  Skydda med:  OLLAMA_STUDIO_TOKEN=<hemligt>   (kräver lösenord)",
+        "⚠  eller lokalt: OLLAMA_STUDIO_HOST=127.0.0.1    (bara denna dator)",
+        bar,
+    ]
+
+
 def main():
     # Radbuffra stdout så startutskriften syns direkt i journalctl (annars buffras den)
     try:
@@ -4317,9 +4342,12 @@ def main():
         print("     http://%s:%d" % (ip, LISTEN_PORT))
     print("     http://<serverns-namn>:%d" % LISTEN_PORT)
     print("")
-    if not TOKEN:
-        print(" TIPS: sätt OLLAMA_STUDIO_TOKEN=<hemligt> för att kräva lösenord,")
-        print("       eftersom vem som helst på nätverket annars kan radera modeller.")
+    _warn = access_warning_lines(LISTEN_HOST, LISTEN_PORT, TOKEN)
+    if _warn:
+        for _ln in _warn:
+            print(" " + _ln)
+    elif not TOKEN:
+        print(" TIPS: sätt OLLAMA_STUDIO_TOKEN=<hemligt> om du vill kräva lösenord.")
     print(" Avsluta med Ctrl+C.")
     print("=" * 60)
     try:
