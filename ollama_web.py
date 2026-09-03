@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import time
 import hmac
 import html as _html
 import shlex
@@ -44,6 +45,7 @@ import subprocess
 import urllib.parse
 import urllib.request
 import urllib.error
+import concurrent.futures
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_TITLE = "Ollama Studio"
@@ -93,6 +95,7 @@ _prefs_cache = {}   # UI-val (modell, GPU, chattinställningar) – nyckel -> st
 
 def db_init():
     """Skapa databasen/tabellerna om de saknas och läs in i cachen."""
+    global _settings_db, _prefs_cache
     with _settings_lock:
         conn = sqlite3.connect(DB_PATH)
         try:
@@ -104,13 +107,13 @@ def db_init():
             fresh = {}
             for k, v in conn.execute("SELECT key, value FROM settings"):
                 fresh[k] = v
-            _settings_db.clear()
-            _settings_db.update(fresh)   # byt innehåll atomiskt (inget tomt mellanläge)
             pfresh = {}
             for k, v in conn.execute("SELECT key, value FROM prefs"):
                 pfresh[k] = v
-            _prefs_cache.clear()
-            _prefs_cache.update(pfresh)
+            # Byt hela cacherna atomiskt (ny dict tilldelas namnet i ett steg) så en
+            # samtidig, låsfri läsare aldrig ser ett tomt mellanläge (board #23).
+            _settings_db = fresh
+            _prefs_cache = pfresh
         finally:
             conn.close()
     # Databasen kan innehålla hemligheter (Mem0-nyckel, GitHub-token) – lås rättigheter.
@@ -126,11 +129,12 @@ _PREFS_KEYS = {"chat_model", "chat_backend", "chat_system", "chat_temp", "chat_c
 
 
 def prefs_all():
-    return dict(_prefs_cache)
+    return dict(_prefs_cache)   # ögonblicksbild av (atomiskt utbytta) cachen
 
 
 def prefs_set(values):
     """Slå ihop UI-val i prefs-tabellen. Okända nycklar ignoreras; tom sträng rensar."""
+    global _prefs_cache
     clean = {}
     for k, v in (values or {}).items():
         if k in _PREFS_KEYS:
@@ -144,7 +148,10 @@ def prefs_set(values):
                 conn.execute("INSERT INTO prefs(key, value) VALUES(?, ?) "
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
             conn.commit()
-            _prefs_cache.update(clean)   # cache först efter lyckad commit
+            # Bygg ny dict och byt namnet i ett steg (cache först efter lyckad commit).
+            merged = dict(_prefs_cache)
+            merged.update(clean)
+            _prefs_cache = merged
         finally:
             conn.close()
 
@@ -156,8 +163,9 @@ def _truthy(v):
 def setting_raw(key):
     """Effektivt råvärde (str): databas > miljövariabel > standard."""
     env_name, default, _typ, _secret = SETTINGS_SPEC[key]
-    if key in _settings_db:
-        return _settings_db[key]
+    db = _settings_db            # snapshot av namnet (bytes atomiskt) – låsfri läsning (board #23)
+    if key in db:
+        return db[key]
     env_val = os.environ.get(env_name)
     return env_val if env_val is not None else default
 
@@ -220,6 +228,7 @@ def settings_set(values):
             to_set[key] = "1" if (val is True or _truthy(val)) else "0"
         else:
             to_set[key] = "" if val is None else str(val).strip()
+    global _settings_db
     with _settings_lock:
         conn = sqlite3.connect(DB_PATH)
         try:
@@ -229,10 +238,13 @@ def settings_set(values):
             for k in to_del:
                 conn.execute("DELETE FROM settings WHERE key=?", (k,))
             conn.commit()
-            # Uppdatera cachen först EFTER lyckad commit (annars kan de gå isär vid fel).
-            _settings_db.update(to_set)
+            # Bygg ny dict och byt namnet i ett steg – cachen först EFTER lyckad commit
+            # (annars kan de gå isär vid fel) och aldrig ett halvuppdaterat mellanläge.
+            merged = dict(_settings_db)
+            merged.update(to_set)
             for k in to_del:
-                _settings_db.pop(k, None)
+                merged.pop(k, None)
+            _settings_db = merged
         finally:
             conn.close()
 
@@ -313,6 +325,7 @@ def backend_url(label):
 # Systemresurser (CPU/RAM) och GPU-info (via nvidia-smi)
 # --------------------------------------------------------------------------
 _PREV_CPU = None  # (idle, total) från förra mätningen, för CPU-procent
+_CPU_LOCK = threading.Lock()  # /api/system pollas av flera trådar samtidigt (board #4)
 
 
 def read_mem():
@@ -341,13 +354,17 @@ def read_cpu_percent():
             nums = list(map(int, f.readline().split()[1:]))
         idle = nums[3] + (nums[4] if len(nums) > 4 else 0)  # idle + iowait
         total = sum(nums)
+        # Läs och skriv den delade förra-mätningen under lås så samtidiga
+        # /api/system-anrop inte racear på _PREV_CPU (board #4).
+        with _CPU_LOCK:
+            prev = _PREV_CPU
+            _PREV_CPU = (idle, total)
         pct = None
-        if _PREV_CPU:
-            dt = total - _PREV_CPU[1]
-            di = idle - _PREV_CPU[0]
+        if prev:
+            dt = total - prev[1]
+            di = idle - prev[0]
             if dt > 0:
                 pct = round((1 - di / dt) * 100, 1)
-        _PREV_CPU = (idle, total)
         return pct
     except Exception:
         return None
@@ -415,7 +432,27 @@ def parse_procs_csv(text):
     return procs
 
 
+# Kort TTL-cache: systemvyn pollar var 2,5 s och chattens VRAM-varning hämtar också –
+# utan cache startar varje anrop två nvidia-smi-subprocesser (board #11).
+_GPU_CACHE = None          # (timestamp, (gpus, err))
+_GPU_CACHE_TTL = 1.0       # sekunder
+_GPU_CACHE_LOCK = threading.Lock()
+
+
 def nvidia_gpus():
+    """Lista GPU:er (kort cachat). Returnerar (gpus, felmeddelande)."""
+    global _GPU_CACHE
+    now = time.monotonic()
+    with _GPU_CACHE_LOCK:
+        if _GPU_CACHE and (now - _GPU_CACHE[0]) < _GPU_CACHE_TTL:
+            return _GPU_CACHE[1]
+    result = _nvidia_gpus_query()
+    with _GPU_CACHE_LOCK:
+        _GPU_CACHE = (time.monotonic(), result)
+    return result
+
+
+def _nvidia_gpus_query():
     """Lista GPU:er med processer, eller (None, felmeddelande) om nvidia-smi saknas/fel."""
     if not shutil.which("nvidia-smi"):
         return None, "nvidia-smi hittades inte (ingen NVIDIA-drivrutin?)"
@@ -483,8 +520,14 @@ WEBSEARCH_ANSWER_INSTRUCTION = (
     "säkert, säg det ärligt."
 )
 
+# Primär endpoint (html.duckduckgo.com/html/): resultat i <a class="result__a">.
 _DDG_LINK_RE = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
 _DDG_SNIP_RE = re.compile(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', re.S)
+# Fallback-endpoint (lite.duckduckgo.com/lite/): enklare tabell-markup, class='result-link'
+# (attributordningen skiljer sig, så href plockas ut separat ur taggens attribut).
+_DDG_LITE_LINK_RE = re.compile(r'<a\s+([^>]*class=[\'"]result-link[\'"][^>]*)>(.*?)</a>', re.S)
+_DDG_LITE_SNIP_RE = re.compile(r'class=[\'"]result-snippet[\'"][^>]*>(.*?)</td>', re.S)
+_HREF_RE = re.compile(r'href=[\'"]([^\'"]+)[\'"]')
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -502,19 +545,8 @@ def _ddg_real_url(href):
     return href
 
 
-def web_search(query, max_results=5, timeout=12):
-    """Sök på webben via DuckDuckGo (HTML, ingen API-nyckel). Returnerar en lista
-    av {title, url, snippet}. Kastar undantag vid nätverksfel."""
-    q = urllib.parse.urlencode({"q": query, "kl": "wt-wt"})
-    url = "https://html.duckduckgo.com/html/?" + q
-    req = urllib.request.Request(url, headers={
-        "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"),
-        "Accept-Language": "sv-SE,sv;q=0.9,en;q=0.8",
-    })
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        page = resp.read().decode("utf-8", "replace")
-
+def _parse_ddg_html(page, max_results=5):
+    """Tolka html.duckduckgo.com/html/-svaret till [{title, url, snippet}, …]."""
     links = _DDG_LINK_RE.findall(page)
     snips = _DDG_SNIP_RE.findall(page)
     results = []
@@ -530,6 +562,53 @@ def web_search(query, max_results=5, timeout=12):
             "snippet": _strip_html(snips[i]) if i < len(snips) else "",
         })
     return results
+
+
+def _parse_ddg_lite(page, max_results=5):
+    """Tolka lite.duckduckgo.com/lite/-svaret (enklare markup) till samma form."""
+    anchors = _DDG_LITE_LINK_RE.findall(page)   # [(attrs, inner_html), …]
+    snips = _DDG_LITE_SNIP_RE.findall(page)
+    results = []
+    for i, (attrs, inner) in enumerate(anchors):
+        if len(results) >= max_results:
+            break
+        title = _strip_html(inner)
+        if not title:
+            continue
+        m = _HREF_RE.search(attrs)
+        results.append({
+            "title": title,
+            "url": _ddg_real_url(m.group(1) if m else ""),
+            "snippet": _strip_html(snips[i]) if i < len(snips) else "",
+        })
+    return results
+
+
+def _ddg_fetch(url, timeout):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"),
+        "Accept-Language": "sv-SE,sv;q=0.9,en;q=0.8",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def web_search(query, max_results=5, timeout=12):
+    """Sök på webben via DuckDuckGo (ingen API-nyckel). Returnerar en lista av
+    {title, url, snippet}. Provar html-endpointen först och faller tillbaka på
+    lite-endpointen om den blockeras/ger noll träffar (board #21).
+    Kastar undantag bara om även fallbacken misslyckas på nätverksnivå."""
+    q = urllib.parse.urlencode({"q": query, "kl": "wt-wt"})
+    try:
+        page = _ddg_fetch("https://html.duckduckgo.com/html/?" + q, timeout)
+        results = _parse_ddg_html(page, max_results)
+        if results:
+            return results
+    except Exception:
+        pass   # nätverksfel/blockering – prova fallbacken nedan
+    page = _ddg_fetch("https://lite.duckduckgo.com/lite/?" + q, timeout)
+    return _parse_ddg_lite(page, max_results)
 
 
 def extract_search_query(text):
@@ -627,13 +706,14 @@ def _mem0_text(item):
     return ""
 
 
-def mem0_search(query, limit=6):
-    """Hämta relevanta minnen för en fråga. Returnerar en lista med texter (tom vid fel)."""
+def mem0_search(query, limit=6, timeout=12):
+    """Hämta relevanta minnen för en fråga. Returnerar en lista med texter (tom vid fel).
+    `timeout` kortas i chattvägen så ett trögt Mem0 inte fördröjer svaret (board #20)."""
     if not (mem0_enabled() and query):
         return []
     try:
         data = _mem0_call("POST", "memories/search/",
-                          _mem0_scope({"query": query, "limit": limit}))
+                          _mem0_scope({"query": query, "limit": limit}), timeout=timeout)
     except Exception:
         return []
     out = []
@@ -3415,18 +3495,31 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _upstream_get(self, path, base=None):
+    def _upstream_get(self, path, base=None, timeout=8):
         req = urllib.request.Request((base or PRIMARY["url"]) + path)
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def _running_union(self):
-        """Slå ihop /api/ps från alla backends; märk varje modell med backend + GPU."""
-        models = []
-        for b in BACKENDS:
+        """Slå ihop /api/ps från alla backends; märk varje modell med backend + GPU.
+        Backends hämtas parallellt med kort timeout så en död instans inte stallar
+        hela /api/running (board #12)."""
+        def fetch(b):
             try:
-                data = self._upstream_get("/api/ps", base=b["url"])
+                # Kort timeout: /api/ps svarar snabbt när instansen lever; en nedlagd
+                # instans ska inte hålla upp pollningen i 8 s.
+                return b, self._upstream_get("/api/ps", base=b["url"], timeout=3)
             except Exception:
+                return b, None
+
+        models = []
+        if len(BACKENDS) == 1:
+            results = [fetch(BACKENDS[0])]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(BACKENDS)) as ex:
+                results = list(ex.map(fetch, BACKENDS))
+        for b, data in results:
+            if not data:
                 continue
             for m in data.get("models", []):
                 m = dict(m)
@@ -3644,7 +3737,8 @@ class Handler(BaseHTTPRequestHandler):
             base = backend_url(data.get("backend"))
             # Delat minne (Mem0): hämta relevanta minnen och injicera som system-text
             if mem0_enabled() and data.get("memory"):
-                mems = mem0_search(self._last_user_text(messages))
+                # Kort timeout i chattvägen – blockera aldrig svaret länge (board #20).
+                mems = mem0_search(self._last_user_text(messages), timeout=5)
                 if mems:
                     messages = [{"role": "system", "content": mem0_context(mems)}] + messages
             # Auto-sök: modellen får först chansen att be om en webbsökning

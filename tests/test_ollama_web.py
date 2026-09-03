@@ -81,6 +81,39 @@ class TestWebSearchParsing(unittest.TestCase):
         self.assertIn("[T](https://e.se)", foot)
         self.assertIn("hittades", w.format_search_context([]))
 
+    def test_parse_ddg_html(self):
+        page = ('<div><a rel="nofollow" class="result__a" '
+                'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fex.se%2Fa&rut=x">'
+                'Titel <b>Ett</b></a>'
+                '<a class="result__snippet" href="#">Snippet <b>ett</b></a></div>')
+        r = w._parse_ddg_html(page)
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0]["title"], "Titel Ett")
+        self.assertEqual(r[0]["url"], "https://ex.se/a")
+        self.assertEqual(r[0]["snippet"], "Snippet ett")
+
+    def test_parse_ddg_lite(self):
+        # lite-endpointen: href FÖRE class, enkla citattecken, snippet i egen <td>
+        page = ("<table>"
+                "<tr><td>1.</td><td>"
+                "<a rel=\"nofollow\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fex.se%2Fb&rut=y\" "
+                "class='result-link'>Titel Tv&aring;</a></td></tr>"
+                "<tr><td>&nbsp;</td><td class='result-snippet'>Snippet tv&aring; text</td></tr>"
+                "</table>")
+        r = w._parse_ddg_lite(page)
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0]["title"], "Titel Två")
+        self.assertEqual(r[0]["url"], "https://ex.se/b")
+        self.assertEqual(r[0]["snippet"], "Snippet två text")
+        self.assertEqual(w._parse_ddg_lite("<html>inget</html>"), [])
+
+    def test_gpu_cache(self):
+        # Två snabba anrop ska ge SAMMA cachade objekt (ingen ny subprocess) – board #11.
+        w._GPU_CACHE = None
+        a = w.nvidia_gpus()
+        b = w.nvidia_gpus()
+        self.assertIs(a, b)
+
 
 class TestMem0Parsing(unittest.TestCase):
     def test_items_and_text(self):
