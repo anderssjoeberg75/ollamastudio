@@ -2799,6 +2799,24 @@ function diffToHtml(diff){
     return '<span class="'+c+'">'+l+'</span>';
   }).join('\n');
 }
+/* Enkel rad-diff (LCS) mellan gammalt och nytt innehåll -> unified-liknande text. */
+function jsLineDiff(oldText, newText){
+  const A=(oldText||'').split('\n'), B=(newText||'').split('\n');
+  const n=A.length, m=B.length;
+  if(n>1500 || m>1500) return null;   // för stor -> hoppa diff (visa nytt innehåll)
+  const dp=[]; for(let i=0;i<=n;i++){ dp.push(new Int32Array(m+1)); }
+  for(let i=n-1;i>=0;i--) for(let j=m-1;j>=0;j--)
+    dp[i][j] = (A[i]===B[j]) ? dp[i+1][j+1]+1 : Math.max(dp[i+1][j], dp[i][j+1]);
+  const out=[]; let i=0,j=0;
+  while(i<n && j<m){
+    if(A[i]===B[j]){ out.push(' '+A[i]); i++; j++; }
+    else if(dp[i+1][j] >= dp[i][j+1]){ out.push('-'+A[i]); i++; }
+    else { out.push('+'+B[j]); j++; }
+  }
+  while(i<n){ out.push('-'+A[i]); i++; }
+  while(j<m){ out.push('+'+B[j]); j++; }
+  return out.join('\n');
+}
 let codeEditSeq = 0;
 function renderEdit(ed){
   const id = 'edit'+(codeEditSeq++);
@@ -2806,7 +2824,8 @@ function renderEdit(ed){
   if(ed.local){                                   // lokal mapp i webbläsaren → skriv lokalt
     acts = '<button class="btn accent small" onclick="applyEditLocal(\''+id+'\')">Godkänn</button>'
          + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
-    bodyHtml = esc(ed.content);
+    let d = (!ed.isNew && ed.old!=null && ed.old!==ed.content) ? jsLineDiff(ed.old, ed.content) : null;
+    bodyHtml = d ? diffToHtml(d) : esc(ed.content);
   } else if(ed.scratch || !cfg.code_ws){          // ingen arbetsyta → bara kopiera
     acts = '<button class="btn ghost small" onclick="copyEdit(\''+id+'\')">Kopiera</button>';
     bodyHtml = esc(ed.content);
@@ -3078,7 +3097,7 @@ async function runAgentLocal(model){
     if(think) think.remove();
     for(const ed of parseEditsJs(full)){
       let cur=''; try{ cur = await fsRead(ed.path); }catch(e){}
-      renderEdit({path:ed.path, content:ed.content, local:true, isNew: cur===''});
+      renderEdit({path:ed.path, content:ed.content, local:true, isNew: cur==='', old: cur});
     }
     const msg = stripEditsJs(full);
     if(msg) codeAppend('<div class="code-msg">'+mdToHtml(msg)+'</div>');
