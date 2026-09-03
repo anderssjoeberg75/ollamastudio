@@ -241,6 +241,68 @@ class TestCodeAssistant(_DBTest):
         self.assertIn("4", out)
 
 
+class TestSelfUpdate(_DBTest):
+    """Självuppdatering (Uppdatera-knappen): git pull i appmappen + omstartsbeslut."""
+
+    @unittest.skipUnless(shutil.which("git"), "git saknas")
+    def test_not_a_git_repo(self):
+        plain = os.path.join(self.tmp, "plain")
+        os.makedirs(plain)
+        old = w.APP_DIR
+        w.APP_DIR = plain
+        try:
+            r = w.self_update()
+            self.assertFalse(r["ok"])
+            self.assertFalse(r["restart"])
+            self.assertIn("git-repo", r["output"])
+        finally:
+            w.APP_DIR = old
+
+    @unittest.skipUnless(shutil.which("git"), "git saknas")
+    def test_up_to_date_then_update(self):
+        import subprocess
+        remote = os.path.join(self.tmp, "remote.git")
+        work = os.path.join(self.tmp, "work")
+        app = os.path.join(self.tmp, "app")
+
+        def g(cwd, *a):
+            return subprocess.run(["git"] + list(a), cwd=cwd, capture_output=True, text=True)
+
+        subprocess.run(["git", "init", "--bare", "-b", "main", remote],
+                       capture_output=True, text=True)
+        subprocess.run(["git", "clone", remote, work], capture_output=True, text=True)
+        g(work, "config", "user.email", "t@t.se")
+        g(work, "config", "user.name", "T")
+        g(work, "checkout", "-B", "main")
+        with open(os.path.join(work, "ollama_web.py"), "w") as f:
+            f.write("x = 1\n")
+        g(work, "add", "-A")
+        g(work, "commit", "-m", "init")
+        g(work, "push", "-u", "origin", "main")
+        # Appklonen som self_update() kör i
+        subprocess.run(["git", "clone", remote, app], capture_output=True, text=True)
+
+        old = w.APP_DIR
+        w.APP_DIR = app
+        try:
+            r = w.self_update()                       # inget nytt på remote ännu
+            self.assertTrue(r["ok"], r["output"])
+            self.assertFalse(r["restart"])
+            self.assertFalse(r["updated"])
+            # Ny commit på remote → nästa pull hämtar den och begär omstart
+            with open(os.path.join(work, "ollama_web.py"), "w") as f:
+                f.write("x = 2\n")
+            g(work, "add", "-A")
+            g(work, "commit", "-m", "ny")
+            g(work, "push")
+            r2 = w.self_update()
+            self.assertTrue(r2["ok"], r2["output"])
+            self.assertTrue(r2["restart"])
+            self.assertTrue(r2["updated"])
+        finally:
+            w.APP_DIR = old
+
+
 class TestGit(_DBTest):
     @unittest.skipUnless(shutil.which("git"), "git saknas")
     def test_git_flow(self):

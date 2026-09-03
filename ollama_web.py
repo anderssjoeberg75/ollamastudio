@@ -56,6 +56,10 @@ LISTEN_PORT = int(os.environ.get("OLLAMA_STUDIO_PORT", "8080"))
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
 
+# Mappen där själva appen (den här filen) ligger – används av självuppdateringen
+# (git pull + omstart) som "Uppdatera"-knappen triggar. Skild från Codex-arbetsytan.
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # --------------------------------------------------------------------------
 # Inställningar – lagras i en lokal SQLite-databas (redigerbara i UI:t)
 # --------------------------------------------------------------------------
@@ -1037,6 +1041,63 @@ def git_available():
     return shutil.which("git") is not None
 
 
+# --------------------------------------------------------------------------
+# Självuppdatering: "Uppdatera"-knappen hämtar senaste kod (git pull) i APP_DIR
+# och startar om processen så den nya koden träder i kraft. Kräver att appmappen
+# är ett git-repo. Skild från Codex git-hjälparna (som jobbar mot arbetsytan).
+# --------------------------------------------------------------------------
+def self_update():
+    """git pull --ff-only i appmappen. Returnerar {ok, output, restart, updated}.
+    Startar INTE om själv – handlern gör det efter att svaret skickats."""
+    d = APP_DIR
+    if not git_available():
+        return {"ok": False, "output": "git är inte installerat på servern.", "restart": False}
+    if not os.path.isdir(os.path.join(d, ".git")):
+        return {"ok": False,
+                "output": "Appmappen (%s) är inget git-repo – kan inte hämta uppdateringar. "
+                          "Klona projektet från GitHub för att kunna uppdatera härifrån." % d,
+                "restart": False}
+    try:
+        r = subprocess.run(["git", "pull", "--ff-only"], cwd=d,
+                           capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        return {"ok": False, "output": "git pull gick inte: %s" % e, "restart": False}
+    out = ((r.stdout or "") + (r.stderr or "")).strip()
+    if r.returncode != 0:
+        return {"ok": False,
+                "output": out or ("git pull misslyckades (kod %d)" % r.returncode),
+                "restart": False}
+    low = out.lower()
+    already = ("already up to date" in low or "already up-to-date" in low
+               or "up to date" in low)
+    if not already:
+        # Säkerhetsnät: starta bara om ifall den hämtade koden faktiskt kompilerar,
+        # annars kan en trasig commit "bricka" servern (execv startar då aldrig).
+        chk = subprocess.run([sys.executable, "-m", "py_compile",
+                              os.path.join(d, "ollama_web.py")],
+                             capture_output=True, text=True)
+        if chk.returncode != 0:
+            return {"ok": False,
+                    "output": "Ny kod hämtades men den kompilerar inte – startar INTE om:\n"
+                              + ((chk.stderr or chk.stdout or "").strip()),
+                    "restart": False}
+    return {"ok": True, "output": out or "Redan uppdaterad.",
+            "restart": not already, "updated": not already}
+
+
+def _restart_process():
+    """Ersätt den nuvarande processen med en ny (plockar upp nyss hämtad kod).
+    Återvänder aldrig. Den lyssnande socketen stängs och porten återanvänds
+    (HTTPServer sätter SO_REUSEADDR), så den nya processen kan binda direkt."""
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    script = os.path.abspath(sys.argv[0])
+    os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
+
+
 def _git(args, timeout=30, extra_env=None):
     """Kör git i arbetsytans rot. Returnerar (returkod, stdout, stderr)."""
     root = code_workspace_root()
@@ -1609,7 +1670,7 @@ PAGE = r"""<!doctype html>
       <h1 id="title">Mina modeller</h1>
       <div class="right">
         <span id="summary"></span>
-        <button class="btn ghost small" onclick="refresh()">↻ Uppdatera</button>
+        <button class="btn ghost small" onclick="updateApp()" title="Hämtar senaste kod från GitHub, startar om servern och uppdaterar sedan vyn">↻ Uppdatera</button>
       </div>
     </div>
 
@@ -1995,6 +2056,55 @@ function toast(msg, err){
   t.textContent = (err?'× ':'✓ ')+msg;
   t.className = 'toast show ' + (err?'err':'ok');
   setTimeout(()=>{ t.className='toast'; }, 2800);
+}
+
+function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+async function waitForServer(){
+  // Vänta tills servern svarar igen efter omstarten (upp till ~30 s).
+  await sleep(1500);                       // ge processen tid att gå ner först
+  for(let i=0;i<40;i++){
+    try{
+      const r = await fetch('/api/version', {headers: headers(false)});
+      if(r.ok || r.status===401) return true;   // svar = servern är uppe igen
+    }catch(e){ /* nere ännu – fortsätt polla */ }
+    await sleep(750);
+  }
+  return false;
+}
+
+// "Uppdatera"-knappen: hämta senaste kod från GitHub, starta om servern och
+// kör sedan den vanliga uppdateringen (refresh) / ladda om sidan med nya UI:t.
+async function updateApp(){
+  setStatus('Hämtar senaste kod från GitHub…', 'var(--amber)');
+  let res;
+  try{
+    const r = await api('/api/self-update', {method:'POST', headers: headers(true)});
+    res = await r.json();
+  }catch(e){
+    setStatus('Uppdatering misslyckades', 'var(--danger)');
+    toast('Kunde inte uppdatera: ' + (e && e.message || e), true);
+    refresh();
+    return;
+  }
+  if(!res.ok){
+    setStatus('Uppdatering misslyckades', 'var(--danger)');
+    toast(res.output || 'Uppdatering misslyckades', true);
+    refresh();                              // ändå köra vanlig uppdatering
+    return;
+  }
+  if(res.restart){
+    setStatus('Ny kod hämtad — startar om servern…', 'var(--amber)');
+    toast('Uppdaterad – startar om servern');
+    const back = await waitForServer();
+    if(back){ location.reload(); return; }  // ladda om → nya UI:t + refresh() vid init
+    setStatus('Servern svarar inte efter omstarten', 'var(--danger)');
+    toast('Servern kom inte tillbaka i tid – ladda om sidan manuellt', true);
+    return;
+  }
+  // Redan senaste versionen → bara den vanliga uppdateringen.
+  toast('Redan senaste versionen');
+  refresh();
 }
 
 async function refresh(){
@@ -3655,6 +3765,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True})
             except Exception as e:
                 return self._send_json({"ok": False, "error": str(e)}, 500)
+
+        if path == "/api/self-update":
+            # Hämta senaste kod (git pull) och starta om servern om något nytt hämtades.
+            result = self_update()
+            self._send_json(result)
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
+            if result.get("restart"):
+                # Svara klart först, starta sedan om strax efter så klienten hinner
+                # ta emot svaret och börja polla efter att servern kommer tillbaka.
+                self.close_connection = True
+
+                def _later():
+                    time.sleep(0.8)
+                    _restart_process()
+
+                threading.Thread(target=_later, daemon=True).start()
+            return
 
         if path == "/api/settings/test-mem0":
             # Testa nuvarande (sparade) Mem0-inställningar med en liten sökning
