@@ -1398,6 +1398,8 @@ PAGE = r"""<!doctype html>
   .code-git .gi{font-size:12.5px;color:var(--subtle)}
   .code-git .gi b{color:var(--accent-hov);font-family:ui-monospace,Menlo,Consolas,monospace}
   .code-git .gacts{display:flex;gap:6px;flex-wrap:wrap}
+  .code-batch{background:var(--accent-dim);border:1px solid var(--accent);border-radius:8px;
+    padding:8px 12px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .code-runbar{display:flex;gap:8px;margin:0 2px 8px}
   .code-runbar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;
     color:var(--text);padding:8px 10px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
@@ -2871,6 +2873,30 @@ function rejectEdit(id){
   node.classList.add('done');
   node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✕ Avvisad</span>');
 }
+/* ---- Godkänn/avvisa alla väntande ändringar ---- */
+function pendingEdits(){
+  return [...document.querySelectorAll('#codeLog .code-edit:not(.done)')]
+    .filter(n=>n._edit && (n._edit.local || (!n._edit.scratch && cfg.code_ws)));
+}
+function appendBatchBar(){
+  if(pendingEdits().length < 2) return;
+  const barId='batch'+(codeEditSeq++);
+  const n = pendingEdits().length;
+  codeAppend('<div class="code-batch" id="'+barId+'">'+n+' föreslagna ändringar · '
+    +'<button class="btn accent small" onclick="approveAll(\''+barId+'\')">✓ Godkänn alla</button> '
+    +'<button class="btn ghost small" onclick="rejectAll(\''+barId+'\')">✕ Avvisa alla</button></div>');
+}
+async function approveAll(barId){
+  const bar=document.getElementById(barId); if(bar) bar.remove();
+  for(const node of pendingEdits()){
+    if(node._edit.local) await applyEditLocal(node.id);
+    else await applyEdit(node.id);
+  }
+}
+function rejectAll(barId){
+  const bar=document.getElementById(barId); if(bar) bar.remove();
+  pendingEdits().forEach(node=>rejectEdit(node.id));
+}
 async function sendAgent(){
   const model = document.getElementById('codeModel').value;
   const inp = document.getElementById('codeInput');
@@ -2929,6 +2955,7 @@ async function runAgentServer(model){
       else if(ev.type==='error'){ codeAppend('<div class="code-tool">⚠ '+esc(ev.text)+'</div>'); }
     }
   }
+  appendBatchBar();
   if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
 }
 /* Anropa modellen (via /api/chat) och strömma svaret. Returnerar full text. */
@@ -3103,6 +3130,7 @@ async function runAgentLocal(model){
     if(msg) codeAppend('<div class="code-msg">'+mdToHtml(msg)+'</div>');
     break;
   }
+  appendBatchBar();
   if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
 }
 async function applyEditLocal(id){
