@@ -1704,6 +1704,7 @@ PAGE = r"""<!doctype html>
         <select id="convoSelect" onchange="onConvoSelect()"></select>
         <button class="btn ghost small" onclick="newConversation()">＋ Ny</button>
         <button class="btn ghost small" onclick="renameConversation()">Byt namn</button>
+        <button class="btn ghost small" onclick="clearChatConfirm()" title="Töm den här chatten">🗑 Töm</button>
         <button class="btn ghost small" onclick="deleteConversation()">Radera</button>
       </div>
       <div class="chatbar">
@@ -1822,6 +1823,7 @@ PAGE = r"""<!doctype html>
           <div class="chatbar" style="margin-top:8px">
             <label style="color:var(--subtle);font-size:13px">Modell (Codex):</label>
             <select id="codeModel"></select>
+            <button class="btn ghost small" onclick="clearCode()" title="Töm Codex-loggen">🗑 Töm</button>
             <span class="hint" style="color:var(--faint);font-size:12px">egen · oberoende av chatten</span>
           </div>
           <div id="codeLocalBar" class="chatbar" style="display:none">
@@ -2634,12 +2636,41 @@ function saveCurrentConvo(){
   c.backend = document.getElementById('chatBackend').value;
   c.updatedAt = now;
   persistConvos();
+  setActiveConvo(currentConvoId);   // kom ihåg vilken chatt som var öppen (för omladdning)
   renderConvoSelect();
+}
+function setActiveConvo(id){
+  try{ if(id) localStorage.setItem('os_active_convo', id);
+       else localStorage.removeItem('os_active_convo'); }catch(e){}
+}
+function restoreActiveConvo(){
+  // Återställ den senast öppna chatten vid omladdning så den inte försvinner.
+  let id = '';
+  try{ id = localStorage.getItem('os_active_convo') || ''; }catch(e){}
+  const c = id && conversations.find(x=>x.id === id);
+  if(c){ chatMessages = JSON.parse(JSON.stringify(c.messages || [])); currentConvoId = id; }
+}
+function clearChatConfirm(){
+  if(!chatMessages.length){ toast('Chatten är redan tom'); return; }
+  if(!confirm('Töm den här chatten? Meddelandena tas bort.')) return;
+  if(chatController) chatController.abort();
+  chatMessages = [];
+  if(currentConvoId){
+    conversations = conversations.filter(x=>x.id !== currentConvoId);   // ta bort sparad kopia
+    persistConvos();
+    currentConvoId = null;
+  }
+  setActiveConvo(null);
+  renderChat();
+  renderConvoSelect();
+  updateChatWarning();
+  const inp = document.getElementById('chatInput'); if(inp) inp.focus();
 }
 function newConversation(){
   if(chatController) chatController.abort();
   chatMessages = [];
   currentConvoId = null;
+  setActiveConvo(null);
   renderChat();
   renderConvoSelect();
   updateChatWarning();
@@ -2655,6 +2686,7 @@ function loadConversation(id){
   if(chatController) chatController.abort();
   chatMessages = JSON.parse(JSON.stringify(c.messages || []));
   currentConvoId = id;
+  setActiveConvo(id);
   const ms = document.getElementById('chatModel');
   if(c.model && [...ms.options].some(o=>o.value === c.model)) ms.value = c.model;
   const bs = document.getElementById('chatBackend');
@@ -2677,6 +2709,7 @@ function renameConversation(){
   if(t !== null){ c.title = t.trim() || c.title; persistConvos(); renderConvoSelect(); }
 }
 loadConvos();
+restoreActiveConvo();   // återställ den senast öppna chatten vid omladdning
 
 /* ---- Varning: får modellen plats på vald GPU? ---- */
 function modelSizeBytes(name){
@@ -2943,6 +2976,47 @@ async function testMem0(){
 /* ---- Kodassistent ---- */
 let codeMessages = [];      // {role, content} som skickas till /api/agent
 let codeController = null;
+const CODE_MSGS_KEY = 'os_code_msgs';
+function saveCodeMsgs(){
+  // Spara Codex-konversationen (kontexten) så den överlever omladdning. Behåll de senaste.
+  try{ localStorage.setItem(CODE_MSGS_KEY, JSON.stringify(codeMessages.slice(-40))); }catch(e){}
+}
+function loadCodeMsgs(){
+  try{ const a = JSON.parse(localStorage.getItem(CODE_MSGS_KEY) || '[]');
+       codeMessages = Array.isArray(a) ? a : []; }catch(e){ codeMessages = []; }
+}
+function codeMsgText(content){
+  // Läsbar prosa ur ett assistentsvar: ta bort redigeringsblock och ev. TOOL-rader.
+  let t = stripEditsJs(content || '');
+  t = t.replace(/^\s*TOOL\s+\w+\s+\{[\s\S]*?\}\s*$/gm, '').trim();
+  return t;
+}
+function restoreCodeLog(){
+  // Rita upp den sparade Codex-konversationen igen (som text) efter omladdning.
+  const box = codeLogEl();
+  if(!box || !codeMessages.length) return;
+  box.innerHTML = '';
+  for(const m of codeMessages){
+    if(m.role === 'user'){
+      codeAppend('<div class="code-user">'+esc(m.content||'')+'</div>');
+    } else {
+      const t = codeMsgText(m.content||'');
+      if(t) codeAppend('<div class="code-msg">'+mdToHtml(t)+'</div>');
+      else  codeAppend('<div class="code-tool">↩ tidigare kodförslag (återställt vid omladdning)</div>');
+    }
+  }
+}
+function clearCode(){
+  const box = codeLogEl();
+  if(!codeMessages.length && box && box.querySelector('.chat-empty')){ toast('Codex är redan tom'); return; }
+  if(!confirm('Töm Codex-loggen? Konversationen och kontexten rensas.')) return;
+  if(codeController) codeController.abort();
+  codeMessages = [];
+  try{ localStorage.removeItem(CODE_MSGS_KEY); }catch(e){}
+  if(box) box.innerHTML = '<div class="chat-empty">Be Codex läsa/förklara kod eller föreslå en '
+    + 'ändring. Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>';
+  const inp = document.getElementById('codeInput'); if(inp) inp.focus();
+}
 function populateCodeModels(){
   const sel = document.getElementById('codeModel');
   if(!sel) return;
@@ -3102,6 +3176,7 @@ async function sendAgent(){
   if(!model){ toast('Ingen modell vald', true); return; }
   if(codeController || !text) return;
   codeMessages.push({role:'user', content:text});
+  saveCodeMsgs();
   codeAppend('<div class="code-user">'+esc(text)+'</div>');
   inp.value='';
   const send = document.getElementById('codeSend'); send.textContent='Stoppar…'; send.disabled=true;
@@ -3113,6 +3188,7 @@ async function sendAgent(){
     if(e.name!=='AbortError') codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>');
   }finally{
     codeController=null; send.textContent='Skicka'; send.disabled=false;
+    saveCodeMsgs();   // spara konversationen (överlever omladdning)
   }
 }
 async function runAgentServer(model){
@@ -3567,6 +3643,8 @@ function renderSystem(s){
 loadConfig();
 refresh();
 loadPrefs();   // hämta sparade UI-val (modell, GPU, chattinställningar) från databasen
+loadCodeMsgs();   // återställ Codex-konversationen vid omladdning
+restoreCodeLog();
 </script>
 </body>
 </html>
