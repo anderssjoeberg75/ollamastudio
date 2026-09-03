@@ -182,6 +182,7 @@ def settings_public():
         else:
             out[key] = setting_str(key)
     out["mem0_active"] = mem0_enabled()
+    out["code_toggle"] = code_toggle_on()
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
     out["code_run_active"] = code_run_enabled()
@@ -861,6 +862,17 @@ AGENT_SYSTEM = (
     "*** SLUT\n"
     "Föreslå bara filer du verkligen vill ändra. Användaren granskar och godkänner varje ändring "
     "innan något skrivs till disk – du skriver aldrig själv."
+)
+
+# Skisslage: ingen arbetsyta – inga verktyg, ingen disk. Bara kod-chatt.
+AGENT_SYSTEM_SCRATCH = (
+    "Du är en kodassistent (Codex) utan filåtkomst. Svara på svenska och hjälp användaren "
+    "att skriva och förklara kod. Du kan INTE läsa eller spara filer i något projekt. "
+    "När du föreslår kod, lägg varje fil i ett block så att den blir lätt att kopiera:\n"
+    "*** FIL: förslag/sökväg.py\n"
+    "<hela filens innehåll>\n"
+    "*** SLUT\n"
+    "Använd inga TOOL-rader – det finns inga verktyg i det här läget."
 )
 _TOOL_RE = re.compile(r'^\s*TOOL\s+(\w+)\s+(\{.*\})\s*$', re.MULTILINE)
 _EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)',
@@ -1647,6 +1659,11 @@ PAGE = r"""<!doctype html>
             </span>
           </div>
           <div id="codeGitMsg" class="hint" style="margin:0 2px 6px"></div>
+          <div id="codeNoWs" class="chatwarn warn" style="display:none">
+            💡 Skisslage – ingen arbetsyta vald. Codex skriver kod åt dig men kan inte läsa
+            projektet eller spara till disk. Kopiera koden, eller välj en arbetsyta i
+            <a href="#" onclick="showView('settings');return false">Inställningar</a> för att läsa/spara/köra.
+          </div>
           <div id="codeRunBar" class="code-runbar" style="display:none">
             <input id="codeRunInput" placeholder="Kör kommando (t.ex. pytest) …  – bara tillåtna kommandon"
                    onkeydown="if(event.key==='Enter')runManual()">
@@ -1866,8 +1883,9 @@ function showView(v){
   if(v==='settings'){ loadSettingsForm(); }
   if(v==='code'){
     updateCodeView();
-    if(cfg.code_ready){
-      populateCodeModels(); loadTree(); gitStatus();
+    if(cfg.code){
+      populateCodeModels();
+      if(cfg.code_ws){ loadTree(); gitStatus(); }
       const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
       setTimeout(()=>{ const ci=document.getElementById('codeInput'); if(ci) ci.focus(); }, 0);
     }
@@ -2553,23 +2571,24 @@ async function loadConfig(){
 function updateCodeView(){
   const off = document.getElementById('codeOff');
   const wrap = document.getElementById('codeWrap');
-  const ready = !!cfg.code_ready;   // växeln på OCH giltig arbetsyta
-  if(wrap) wrap.style.display = ready ? 'flex' : 'none';
+  const on = !!cfg.code;        // växeln på → vyn funkar (skisslage utan arbetsyta)
+  const ws = !!cfg.code_ws;     // arbetsyta finns → läsa/spara/git/köra
+  if(wrap) wrap.style.display = on ? 'flex' : 'none';
   if(off){
-    off.style.display = ready ? 'none' : 'block';
-    if(!cfg.code){
+    off.style.display = on ? 'none' : 'block';
+    if(!on){
       off.innerHTML = '<h2>💻 Codex är avstängd</h2>'
-        + '<p>Codex läser en projektmapp och föreslår kodändringar (du godkänner varje ändring).<br>'
-        + 'Slå på den och välj en arbetsyta under Inställningar.</p>'
-        + '<button class="btn accent" onclick="showView(\'settings\')">Öppna Inställningar</button>';
-    } else if(!ready){
-      off.innerHTML = '<h2>💻 Codex: välj en arbetsyta</h2>'
-        + '<p>Codex är påslagen, men ingen giltig <b>arbetsyta</b> är vald.<br>'
-        + 'Ange en absolut sökväg till en projektmapp som finns på servern under Inställningar '
-        + '(t.ex. <code>/opt/mitt-projekt</code> eller <code>D:\\projekt\\mitt-repo</code>).</p>'
+        + '<p>Codex hjälper dig skriva kod. Slå på den under Inställningar.<br>'
+        + 'Utan en arbetsyta funkar den som en kod-chatt (koden sparas inte); med en '
+        + 'arbetsyta kan den även läsa projektet, spara ändringar och köra tester.</p>'
         + '<button class="btn accent" onclick="showView(\'settings\')">Öppna Inställningar</button>';
     }
   }
+  // Fil-trädet och git kräver arbetsyta – dölj i skisslage.
+  const tree = document.querySelector('#view-code .code-tree');
+  if(tree) tree.style.display = ws ? 'flex' : 'none';
+  const noWs = document.getElementById('codeNoWs');
+  if(noWs) noWs.style.display = (on && !ws) ? 'block' : 'none';
 }
 
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
@@ -2617,7 +2636,11 @@ async function loadSettingsForm(){
   set('stRunTimeout', s.code_run_timeout);
   const cg = document.getElementById('stCodeGit');
   if(cg){
-    if(!s.code_active){ cg.textContent = 'Status: slå på och välj en arbetsyta som finns för att aktivera.'; }
+    if(!s.code_toggle){ cg.textContent = 'Status: avstängd – slå på Codex för att använda den.'; }
+    else if(!s.code_active){
+      cg.innerHTML = 'Status: <b>skisslage</b> – ingen arbetsyta vald. Codex skriver kod men '
+        + 'kan inte läsa projektet eller spara. Välj en arbetsyta för att läsa/spara/git/köra.';
+    }
     else{
       const parts = ['✓ Aktiv'];
       parts.push(s.git_available ? 'git finns' : '⚠ git saknas på servern');
@@ -2766,16 +2789,27 @@ function diffToHtml(diff){
 let codeEditSeq = 0;
 function renderEdit(ed){
   const id = 'edit'+(codeEditSeq++);
+  const scratch = ed.scratch || !cfg.code_ws;   // ingen arbetsyta → kan inte spara, bara kopiera
+  const acts = scratch
+    ? '<button class="btn ghost small" onclick="copyEdit(\''+id+'\')">Kopiera</button>'
+    : '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Godkänn</button>'
+      + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
+  const bodyHtml = (!scratch && ed.diff) ? diffToHtml(ed.diff) : esc(ed.content);
   const node = codeAppend(
     '<div class="code-edit" id="'+id+'">'
     + '<div class="eh"><span class="path">'+esc(ed.path)+'</span>'
-    + '<span class="acts">'
-    + '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Godkänn</button>'
-    + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>'
-    + '</span></div>'
-    + '<pre class="code-diff">'+diffToHtml(ed.diff||('(ny fil)\n'+ed.content))+'</pre></div>');
+    + '<span class="acts">'+acts+'</span></div>'
+    + '<pre class="code-diff">'+bodyHtml+'</pre></div>');
   node._edit = ed;
   return node;
+}
+function copyEdit(id){
+  const node = document.getElementById(id);
+  if(!node || !node._edit) return;
+  const text = node._edit.content || '';
+  if(navigator.clipboard){ navigator.clipboard.writeText(text).then(()=>{
+    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Kopierat</span>');
+  }).catch(()=>toast('Kunde inte kopiera', true)); }
 }
 async function applyEdit(id){
   const node = document.getElementById(id);
@@ -3177,7 +3211,8 @@ class Handler(BaseHTTPRequestHandler):
                     "websearch": websearch_enabled(),
                     "memory": mem0_enabled(),
                     "code": code_toggle_on(),
-                    "code_ready": code_enabled(),
+                    "code_ready": code_toggle_on(),   # vyn funkar (skisslage utan arbetsyta)
+                    "code_ws": code_enabled(),        # arbetsyta finns → läsa/spara/git/köra
                     "code_run": code_run_enabled(),
                 })
             if path == "/api/settings":
@@ -3304,8 +3339,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": mem0_delete(data.get("id"))})
 
         if path == "/api/agent":
-            if not code_enabled():
-                return self._send_json({"error": "Kodassistenten är inte påslagen/konfigurerad"}, 400)
+            if not code_toggle_on():   # skisslage funkar utan arbetsyta
+                return self._send_json({"error": "Codex är inte påslagen"}, 400)
             model = (data.get("model") or "").strip()
             messages = [m for m in (data.get("messages") or [])
                         if isinstance(m, dict) and m.get("content")]
@@ -3512,14 +3547,50 @@ class Handler(BaseHTTPRequestHandler):
     # ---- Kodassistent: agent-loop (läs-verktyg + föreslå diffar) ----------
     def _run_agent(self, model, messages, base):
         """Kör agent-loopen: modellen utforskar med läsverktyg och föreslår sedan
-        filändringar som diffar. Strömmar händelser som NDJSON till webbläsaren."""
-        convo = [{"role": "system", "content": AGENT_SYSTEM}] + list(messages)
+        filändringar som diffar. Strömmar händelser som NDJSON till webbläsaren.
+        Utan arbetsyta körs ett 'skisslage': ingen disk/verktyg – bara kod-chatt."""
+        scratch = code_workspace_root() is None
+        sys_prompt = AGENT_SYSTEM_SCRATCH if scratch else AGENT_SYSTEM
+        convo = [{"role": "system", "content": sys_prompt}] + list(messages)
         try:
             self.send_response(200)
             self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         except Exception:
+            return
+
+        if scratch:
+            # Ett enda modellsvar, inga verktyg, ingen diff/disk – bara kod att kopiera.
+            full = ""
+            try:
+                up = self._open_chat_stream(convo, model, None, base)
+                for raw in up:
+                    if not raw:
+                        continue
+                    try:
+                        obj = json.loads(raw.decode("utf-8", "replace"))
+                    except Exception:
+                        continue
+                    chunk = (obj.get("message") or {}).get("content") or ""
+                    if chunk:
+                        full += chunk
+                        self._emit({"type": "delta", "text": chunk})
+                try:
+                    up.close()
+                except Exception:
+                    pass
+                for ed in parse_edits(full):
+                    self._emit({"type": "edit", "path": ed["path"], "content": ed["content"],
+                                "scratch": True})
+                msg = strip_edits(full)
+                if msg:
+                    self._emit({"type": "message", "text": msg})
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception as e:
+                self._emit({"type": "error", "text": "Kunde inte nå modellen: %s" % e})
+            self._emit({"type": "done"})
             return
 
         try:
