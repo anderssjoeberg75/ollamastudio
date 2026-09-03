@@ -2024,6 +2024,12 @@ function humanSize(b){
   while(b>=1024 && i<u.length-1){ b/=1024; i++; }
   return (i<2? b.toFixed(0): b.toFixed(1)) + ' ' + u[i];
 }
+function humanDate(s){
+  // Visa datum i lokal tidszon (som skrivbordsappens human_date), inte råsträngen.
+  if(!s) return '';
+  const d = new Date(s);
+  return isNaN(d) ? (''+s).slice(0,10) : d.toLocaleDateString('sv-SE');
+}
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Codex'};
@@ -2183,7 +2189,7 @@ function renderModels(models){
   const cards = models.map(m=>{
     const d = m.details||{};
     const bits = [d.parameter_size, d.quantization_level, d.family, humanSize(m.size),
-                  (m.modified_at||'').slice(0,10)].filter(Boolean).map(esc).join('     ·     ');
+                  humanDate(m.modified_at)].filter(Boolean).map(esc).join('     ·     ');
     const r = running.get(m.name);
     let liveChip = '', liveMeta = '';
     if(r){
@@ -2193,10 +2199,17 @@ function renderModels(models){
     }
     return '<div class="card hoverable"><div class="top"><div>'
       + '<h3>'+esc(m.name)+liveChip+'</h3><div class="meta">'+bits+'</div>'+liveMeta+'</div>'
-      + '<button class="btn danger small" onclick="confirmDelete(\''+esc(m.name).replace(/'/g,"\\'")+'\')">✕ Avinstallera</button>'
+      // data-name (HTML-escapat) i stället för handbyggd JS-sträng: modellnamn med
+      // ' eller " bryter inte längre onclick-anropet (board #14).
+      + '<button class="btn danger small" data-del="'+esc(m.name)+'">✕ Avinstallera</button>'
       + '</div></div>';
   }).join('');
   box.innerHTML = banner + cards;
+  box.onclick = onModelsClick;   // delegerad klickhantering (tål specialtecken i namn)
+}
+function onModelsClick(ev){
+  const btn = ev.target.closest('button[data-del]');
+  if(btn) confirmDelete(btn.getAttribute('data-del'));
 }
 function renderOffline(){
   document.getElementById('summary').textContent = '';
