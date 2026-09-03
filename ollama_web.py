@@ -2076,6 +2076,11 @@ async function waitForServer(){
 // "Uppdatera"-knappen: hämta senaste kod från GitHub, starta om servern och
 // kör sedan den vanliga uppdateringen (refresh) / ladda om sidan med nya UI:t.
 async function updateApp(){
+  if(!confirm('Hämta senaste kod från GitHub och starta om Ollama Studio?\n\n'
+            + 'Finns ny kod startas servern om och sidan laddas om – pågående chatt '
+            + 'eller Codex-körning avbryts då. Är allt redan uppdaterat sker ingen omstart.')){
+    return;
+  }
   setStatus('Hämtar senaste kod från GitHub…', 'var(--amber)');
   let res;
   try{
