@@ -1491,7 +1491,7 @@ PAGE = r"""<!doctype html>
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
-      <a id="nav-code" onclick="showView('code')" style="display:none"><span class="dot">●</span><span class="label">💻 Codex</span></a>
+      <a id="nav-code" onclick="showView('code')"><span class="dot">●</span><span class="label">💻 Codex</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
       <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
     </div>
@@ -1611,7 +1611,13 @@ PAGE = r"""<!doctype html>
     <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
 
     <div id="view-code" class="view code hidden">
-      <div class="code-wrap">
+      <div id="codeOff" class="empty" style="display:none">
+        <h2>💻 Codex är avstängd</h2>
+        <p>Codex läser en projektmapp och föreslår kodändringar (som du godkänner).<br>
+           Slå på den och välj en arbetsyta under Inställningar för att börja.</p>
+        <button class="btn accent" onclick="showView('settings')">Öppna Inställningar</button>
+      </div>
+      <div id="codeWrap" class="code-wrap">
         <div class="code-tree">
           <div class="code-tree-head">
             <span>Arbetsyta</span>
@@ -1849,9 +1855,14 @@ function showView(v){
   document.getElementById('title').textContent = TITLES[v] || '';
   if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
   if(v==='settings'){ loadSettingsForm(); }
-  if(v==='code'){ populateCodeModels(); loadTree(); gitStatus();
-    const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
-    setTimeout(()=>document.getElementById('codeInput').focus(), 0); }
+  if(v==='code'){
+    updateCodeView();
+    if(cfg.code){
+      populateCodeModels(); loadTree(); gitStatus();
+      const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
+      setTimeout(()=>{ const ci=document.getElementById('codeInput'); if(ci) ci.focus(); }, 0);
+    }
+  }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -2528,8 +2539,13 @@ async function loadConfig(){
   if(memRow) memRow.style.display = cfg.memory ? 'flex' : 'none';
   const memTools = document.getElementById('csMemoryTools');
   if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
-  const codeNav = document.getElementById('nav-code');
-  if(codeNav) codeNav.style.display = cfg.code ? 'flex' : 'none';
+  updateCodeView();   // Codex-fliken syns alltid; visa av-läge om den inte är påslagen
+}
+function updateCodeView(){
+  const off = document.getElementById('codeOff');
+  const wrap = document.getElementById('codeWrap');
+  if(off) off.style.display = cfg.code ? 'none' : 'block';
+  if(wrap) wrap.style.display = cfg.code ? 'flex' : 'none';
 }
 
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
@@ -2635,7 +2651,7 @@ async function saveSettings(){
     const wsRow=document.getElementById('csWebsearchRow'); if(wsRow) wsRow.style.display = cfg.websearch?'flex':'none';
     const memRow=document.getElementById('csMemoryRow'); if(memRow) memRow.style.display = cfg.memory?'flex':'none';
     const memTools=document.getElementById('csMemoryTools'); if(memTools) memTools.style.display = cfg.memory?'block':'none';
-    const codeNav=document.getElementById('nav-code'); if(codeNav) codeNav.style.display = cfg.code?'flex':'none';
+    updateCodeView();
     loadSettingsForm();
   }catch(e){ toast('Kunde inte spara: '+e.message, true); }
 }
