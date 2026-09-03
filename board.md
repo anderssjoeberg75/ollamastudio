@@ -6,16 +6,17 @@ utgå från funktions-/symbolnamnen.
 
 Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 
-> **✅ Åtgärdat hittills:** punkt **2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 19, 20, 21, 23, 24**
-> är fixade (konstant-tids-token, POST-storleksgräns, **trådsäker `_PREV_CPU`**, `OLLAMA_URL` i
-> skrivbordsappen, **enhetstester**, docstrings, vänligt portfel, cachad sida, **TTL-cache på
-> `nvidia-smi`**, **parallell `_running_union` med kort timeout**, **CI-workflow**, **escaping-fix i
-> Avinstallera**, API-404 som JSON, favicon-route, **småfixar (pull-timeout, datumvisning, `.desktop`,
-> död param)**, 0600 på inställnings-DB:n, cache-efter-commit, **kort `mem0_search`-timeout i chatten**,
-> **DuckDuckGo lite-fallback**, **atomisk/trådsäker inställnings-cache**, **tester för ny logik**).
-> Kvar: **1** (öppen-som-standard – kräver medvetet godkännande), **8** (katalog-duplicering,
-> avvägning), **22** (Mem0 list/delete mot live-API). Tester finns i `tests/` –
-> kör `python3 -m unittest discover -s tests`.
+> **✅ Åtgärdat hittills:** punkt **2–21, 23, 24** utom 1 och 22 är fixade
+> (konstant-tids-token, POST-storleksgräns, **trådsäker `_PREV_CPU`**, `OLLAMA_URL` i
+> skrivbordsappen, **enhetstester**, docstrings, **delad `catalog.py`**, vänligt portfel, cachad
+> sida, **TTL-cache på `nvidia-smi`**, **parallell `_running_union` med kort timeout**,
+> **CI-workflow**, **escaping-fix i Avinstallera**, API-404 som JSON, favicon-route,
+> **småfixar (pull-timeout, datumvisning, `.desktop`, död param)**, 0600 på inställnings-DB:n,
+> cache-efter-commit, **kort `mem0_search`-timeout i chatten**, **DuckDuckGo lite-fallback**,
+> **atomisk/trådsäker inställnings-cache**, **tester för ny logik**). Kvar: **1**
+> (öppen-som-standard – kräver medvetet godkännande) och **22** (Mem0 list/delete mot live-API –
+> kräver ett riktigt Mem0-konto). Tester finns i `tests/` – kör
+> `python3 -m unittest discover -s tests`.
 
 ---
 
@@ -307,7 +308,7 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | ✅ 5 | 🟡 | `ollama_studio.py` | Läs `OLLAMA_URL` |
 | ✅ 6 | 🟡 | `tests/` | Enhetstester för rena funktioner |
 | ✅ 7 | ⚪ | båda | Rätta docstrings |
-| 8 | ⚪ | båda | Katalog-duplicering |
+| ✅ 8 | ⚪ | båda | Katalog-duplicering (delad `catalog.py` + reserv) |
 | ✅ 9 | 🟡 | `ollama_web.py` | Vänligt fel vid upptagen port |
 | ✅ 10 | 🟡 | `ollama_web.py` | Cacha `render_page()` |
 | ✅ 11 | 🟡 | `ollama_web.py` | Strypa/cacha `nvidia-smi` |

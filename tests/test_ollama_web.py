@@ -15,6 +15,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ollama_web as w  # noqa: E402
 
 
+class TestCatalog(unittest.TestCase):
+    def test_shared_catalog_source(self):
+        # ollama_web ska använda den delade catalog.py (ingen tyst drift) – board #8.
+        import catalog
+        self.assertGreaterEqual(len(catalog.CATALOG), 10)
+        self.assertEqual(w.CATALOG, catalog.CATALOG)
+        for item in catalog.CATALOG:            # varje post har fälten UI:t förväntar sig
+            for key in ("pull", "name", "size", "tag", "desc"):
+                self.assertIn(key, item)
+
+
 class TestSmallHelpers(unittest.TestCase):
     def test_num(self):
         self.assertEqual(w._num("3.5"), 3.5)
