@@ -376,9 +376,21 @@ under **Mina modeller** visas på vilken GPU varje aktiv modell körs.
 > har. Justera `User`/`OLLAMA_MODELS` i `ollama-gpu@.service` om din Ollama inte kör som
 > användaren `ollama` (kommentarer finns i filen).
 
-### Uppdatera listan
+### Uppdatera (hämta senaste kod + starta om)
 
-Klicka **↻ Uppdatera** uppe till höger (t.ex. efter att du kört `ollama pull` i terminalen).
+Klicka **↻ Uppdatera** uppe till höger. Knappen gör tre saker i tur och ordning:
+
+1. **Hämtar senaste kod från GitHub** (`git pull --ff-only` i appmappen).
+2. **Startar om servern** om något nytt hämtades, så den nya koden träder i kraft
+   (webbsidan laddas då om automatiskt när servern kommit tillbaka).
+3. **Uppdaterar vyn** som förut (modell-lista, aktiv modell, system/GPU) – t.ex. efter
+   att du kört `ollama pull` i terminalen.
+
+Om ingen ny kod finns hoppas omstarten över och bara vyn uppdateras. Självuppdateringen
+kräver att projektet är klonat från GitHub (appmappen är ett git-repo) och att `git`
+finns på servern; annars visas ett meddelande och vyn uppdateras ändå. Hämtad kod som
+inte kompilerar gör att omstarten hoppas över (servern kan inte "brickas" av en trasig
+commit).
 
 ### Chatta med en modell (webbversionen)
 
