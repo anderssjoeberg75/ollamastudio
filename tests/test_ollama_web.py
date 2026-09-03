@@ -26,6 +26,30 @@ class TestCatalog(unittest.TestCase):
                 self.assertIn(key, item)
 
 
+class TestMem0DeleteRequest(unittest.TestCase):
+    def test_delete_all_needs_explicit_flag(self):
+        self.assertEqual(w.mem0_delete_request({"all": True}), ("all", None))
+
+    def test_single_delete(self):
+        self.assertEqual(w.mem0_delete_request({"id": "abc"}), ("one", "abc"))
+        self.assertEqual(w.mem0_delete_request({"id": "  x  "}), ("one", "x"))
+
+    def test_empty_or_missing_id_is_error_not_delete_all(self):
+        # Kärnan i footgun-fixen: tomt/saknat id får ALDRIG bli "radera allt".
+        for body in ({}, {"id": ""}, {"id": "   "}, {"id": None}, {"all": False}):
+            action, _ = w.mem0_delete_request(body)
+            self.assertEqual(action, "error", body)
+
+    def test_non_dict_is_error(self):
+        self.assertEqual(w.mem0_delete_request(None)[0], "error")
+
+    def test_delete_and_clear_disabled_without_config(self):
+        # Utan Mem0 påslaget ska varken delete eller clear göra något (returnerar False).
+        self.assertFalse(w.mem0_delete("abc"))
+        self.assertFalse(w.mem0_delete(""))
+        self.assertFalse(w.mem0_clear())
+
+
 class TestAccessWarning(unittest.TestCase):
     def test_loopback_detection(self):
         for h in ("127.0.0.1", "localhost", "::1", "LOCALHOST"):

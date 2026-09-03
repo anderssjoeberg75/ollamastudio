@@ -758,18 +758,50 @@ def mem0_list(limit=100):
     return out[:limit]
 
 
-def mem0_delete(memory_id=None):
-    """Ta bort ett minne (id) eller alla för användaren (id=None). True/False."""
+def mem0_delete(memory_id):
+    """Ta bort ETT minne med givet id. True/False.
+
+    Kräver ett icke-tomt id – ett tomt/saknat id raderar INTE allt (det gjorde
+    den gamla `if memory_id:`-varianten av misstag). Använd `mem0_clear()` för
+    att medvetet radera allt.
+    """
     if not mem0_enabled():
         return False
+    mid = str(memory_id).strip() if memory_id is not None else ""
+    if not mid:
+        return False
     try:
-        if memory_id:
-            _mem0_call("DELETE", "memories/%s/" % urllib.parse.quote(str(memory_id)))
-        else:
-            _mem0_call("DELETE", "memories/", query=_mem0_scope({}))
+        _mem0_call("DELETE", "memories/%s/" % urllib.parse.quote(mid, safe=""))
         return True
     except Exception:
         return False
+
+
+def mem0_clear():
+    """Ta bort ALLA minnen för den inställda användaren (medvetet val). True/False."""
+    if not mem0_enabled():
+        return False
+    try:
+        _mem0_call("DELETE", "memories/", query=_mem0_scope({}))
+        return True
+    except Exception:
+        return False
+
+
+def mem0_delete_request(data):
+    """Avgör vad ett /api/memory/delete-anrop ska göra utifrån JSON-kroppen.
+
+    Returnerar ('all', None) | ('one', id) | ('error', meddelande). Delete-all
+    kräver ett uttryckligt {"all": true} – ett tomt id ger 'error', aldrig 'all'.
+    """
+    if not isinstance(data, dict):
+        return ("error", "ogiltig begäran")
+    if data.get("all"):
+        return ("all", None)
+    mid = data.get("id")
+    if mid is None or not str(mid).strip():
+        return ("error", "inget id angivet")
+    return ("one", str(mid).strip())
 
 
 def mem0_context(memories):
@@ -3537,17 +3569,21 @@ async function addMemory(){
 }
 async function deleteMemory(id){
   try{
-    await api('/api/memory/delete', {method:'POST', headers:headers(true),
+    const r = await api('/api/memory/delete', {method:'POST', headers:headers(true),
       body: JSON.stringify({id})});
-    loadMemories();
+    const d = await r.json().catch(()=>({}));
+    if(!d.ok){ toast('Kunde inte ta bort'+(d.error?': '+d.error:''), true); }
+    loadMemories();   // ladda om oavsett så listan speglar faktiskt läge
   }catch(e){ toast('Kunde inte ta bort', true); }
 }
 async function clearMemories(){
   if(!confirm('Rensa ALLA sparade minnen för den här användaren?')) return;
   try{
-    await api('/api/memory/delete', {method:'POST', headers:headers(true),
-      body: JSON.stringify({})});
-    toast('Minnet rensat');
+    const r = await api('/api/memory/delete', {method:'POST', headers:headers(true),
+      body: JSON.stringify({all:true})});   // uttryckligt val – aldrig via tomt id
+    const d = await r.json().catch(()=>({}));
+    if(d.ok) toast('Minnet rensat');
+    else toast('Kunde inte rensa'+(d.error?': '+d.error:''), true);
     loadMemories();
   }catch(e){ toast('Kunde inte rensa', true); }
 }
@@ -3891,7 +3927,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/memory/delete":
             if not mem0_enabled():
                 return self._send_json({"ok": False, "disabled": True})
-            return self._send_json({"ok": mem0_delete(data.get("id"))})
+            action, mid = mem0_delete_request(data)
+            if action == "all":
+                return self._send_json({"ok": mem0_clear()})
+            if action == "one":
+                return self._send_json({"ok": mem0_delete(mid)})
+            return self._send_json({"ok": False, "error": mid}, 400)
 
         if path == "/api/agent":
             if not code_toggle_on():   # skisslage funkar utan arbetsyta

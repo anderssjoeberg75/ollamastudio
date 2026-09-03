@@ -14,8 +14,9 @@ Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 > **småfixar (pull-timeout, datumvisning, `.desktop`, död param)**, 0600 på inställnings-DB:n,
 > cache-efter-commit, **kort `mem0_search`-timeout i chatten**, **DuckDuckGo lite-fallback**,
 > **atomisk/trådsäker inställnings-cache**, **startvarning när servern är öppen utan token (#1,
-> per ägarens beslut – defaults oförändrade)**, **tester för ny logik**). Kvar: **22** (Mem0
-> list/delete mot live-API – kräver ett riktigt Mem0-konto). Tester finns i `tests/` – kör
+> per ägarens beslut – defaults oförändrade)**, **Mem0-radering: footgun + tyst fel fixat (#22,
+> statisk genomgång)**, **tester för ny logik**). Kvar: bara **live-verifiering av #22** (Mem0
+> list/delete mot ett riktigt Mem0-konto – kräver API-nyckel). Tester finns i `tests/` – kör
 > `python3 -m unittest discover -s tests`.
 
 ---
@@ -264,16 +265,24 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
   - [ ] Om primär endpoint ger noll träffar provas fallbacken.
   - [ ] Parsning av båda formaten är enhetstestad.
 
-## 🟡 22. Verifiera Mem0 list/delete mot faktiskt API
+## 🟡 22. Verifiera Mem0 list/delete mot faktiskt API (statisk genomgång gjord)
 
-- **Fil:** `ollama_web.py` → `mem0_list` (`page_size`-param) och `mem0_delete` (bulk-DELETE)
-- **Problem:** Parametrar och bulk-radering är byggda mot Mem0:s dokumenterade REST-API men inte
-  körda live här. `page_size`/paginering och "rensa alla" kan behöva justeras.
-- **Att göra:** Testa mot ett riktigt Mem0-konto; rätta paginering (`page`/`page_size`) och
-  bekräfta att radera-en och rensa-alla fungerar. Hantera svarsformer defensivt (redan delvis gjort).
+- **Fil:** `ollama_web.py` → `mem0_list`, `mem0_delete`, `mem0_clear`, `mem0_delete_request`
+- **Problem (ursprung):** Parametrar och bulk-radering byggda mot Mem0:s REST-API men inte körda live.
+- **Statisk genomgång hittade och åtgärdade två fel utan live-anrop:**
+  - **Footgun:** gamla `mem0_delete(memory_id=None)` raderade ALLT när id var falsy (`None`/`""`/`0`),
+    och endpointen skickade `data.get("id")` rakt in – ett tomt id kunde tömma hela minnet. Nu kräver
+    "radera allt" ett uttryckligt `{"all": true}`; tomt/saknat id ger fel (400), aldrig radera-allt.
+    Delete-en och rensa-allt är uppdelade i `mem0_delete(id)` resp. `mem0_clear()`.
+  - **Tyst fel:** frontend påstod alltid att radering lyckades (backend svarar 200 `{ok:false}` vid
+    fel, så JS-`catch` slog aldrig till). Nu läses `ok` och en felruta visas när det misslyckas.
+  - Enhetstester för `mem0_delete_request` (all/one/error-beslut) låser fast footgun-fixen.
+- **Kvar (kräver live-konto):** bekräfta `page_size`/paginering i `mem0_list` och att DELETE-endpoints
+  (per-id och rensa-allt) svarar som väntat mot en riktig Mem0-instans. Kan inte göras utan API-nyckel.
 - **Acceptans:**
-  - [ ] Minnesvyn listar rätt antal och kan ta bort ett enskilt minne.
-  - [ ] "Rensa alla" tömmer minnet för `MEM0_USER_ID` (eller ersätts med per-post-radering).
+  - [x] Tomt/saknat id kan inte längre radera allt (test).
+  - [x] UI:t rapporterar radering ärligt (kollar `ok`).
+  - [ ] Live: minnesvyn listar rätt antal och radera-en/rensa-alla fungerar mot riktigt Mem0.
 
 ## ⚪ 23. Trådsäker läsning av inställnings-cachen
 
@@ -321,6 +330,6 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | ✅ 19 | 🟡 | `ollama_web.py` | `settings_set` uppdaterar cache före commit |
 | ✅ 20 | 🟡 | `ollama_web.py` | Kortare `mem0_search`-timeout i chattvägen |
 | ✅ 21 | 🟡 | `ollama_web.py` | Robustare DuckDuckGo (lite-fallback) |
-| 22 | 🟡 | `ollama_web.py` | Verifiera Mem0 list/delete mot API |
+| 🟡 22 | 🟡 | `ollama_web.py` | Mem0 list/delete: footgun + tyst fel fixat; live-test kvar |
 | ✅ 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
 | ✅ 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |
