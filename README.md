@@ -74,7 +74,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   Mem0 (API-nyckel, användar-ID m.m.) direkt i gränssnittet. Allt sparas i en **lokal
   SQLite-databas** på servern och gäller framför miljövariabler – inga omstarter behövs.
 - **Codex – kodassistent (experimentell)** (webbversionen) – utan arbetsyta fungerar Codex som
-  en **kod-chatt** (skriver kod du kopierar, ingen GitHub eller mapp krävs). Med en arbetsyta blir
+  en **kod-chatt** (skriver kod du kopierar, ingen GitHub eller mapp krävs). Du kan också öppna en
+  **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser/skriver Codex filerna
+  på **din egen dator**, även om servern kör på en annan maskin. Med en arbetsyta på servern blir
   det en **💻 Codex**-vy där en lokal modell
   (t.ex. `qwen2.5-coder`) läser en projektmapp och **föreslår filändringar som diffar** – du
   **godkänner varje ändring** innan något skrivs. Kan även arbeta mot **git/GitHub**: skapa

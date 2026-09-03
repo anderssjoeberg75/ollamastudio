@@ -1678,6 +1678,12 @@ PAGE = r"""<!doctype html>
             <select id="codeModel"></select>
             <span class="hint" style="color:var(--faint);font-size:12px">egen · oberoende av chatten</span>
           </div>
+          <div id="codeLocalBar" class="chatbar" style="display:none">
+            <button class="btn ghost small" type="button" onclick="pickLocalDir()">📂 Öppna lokal mapp</button>
+            <span id="codeLocalInfo" class="hint" style="color:var(--accent-hov);font-size:12px"></span>
+            <button id="codeLocalClose" class="btn ghost small" type="button" onclick="closeLocalDir()" style="display:none">Stäng mapp</button>
+            <span class="hint" style="color:var(--faint);font-size:12px">arbetar mot en mapp på din dator (i webbläsaren) – funkar även om servern kör någon annanstans</span>
+          </div>
           <div class="chat-input">
             <textarea id="codeInput" rows="2" placeholder="T.ex. ”Förklara vad app.py gör” eller ”Lägg till en /health-endpoint”  (Enter skickar)"></textarea>
             <button class="btn accent" id="codeSend">Skicka</button>
@@ -1885,7 +1891,8 @@ function showView(v){
     updateCodeView();
     if(cfg.code){
       populateCodeModels();
-      if(cfg.code_ws){ loadTree(); gitStatus(); }
+      if(localDir) loadLocalTree();
+      else if(cfg.code_ws){ loadTree(); gitStatus(); }
       const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
       setTimeout(()=>{ const ci=document.getElementById('codeInput'); if(ci) ci.focus(); }, 0);
     }
@@ -2571,24 +2578,30 @@ async function loadConfig(){
 function updateCodeView(){
   const off = document.getElementById('codeOff');
   const wrap = document.getElementById('codeWrap');
-  const on = !!cfg.code;        // växeln på → vyn funkar (skisslage utan arbetsyta)
-  const ws = !!cfg.code_ws;     // arbetsyta finns → läsa/spara/git/köra
+  const on = !!cfg.code;                        // växeln på → vyn funkar
+  const ws = !!cfg.code_ws || !!localDir;       // server-arbetsyta ELLER lokal mapp → fil-träd/spara
   if(wrap) wrap.style.display = on ? 'flex' : 'none';
   if(off){
     off.style.display = on ? 'none' : 'block';
     if(!on){
       off.innerHTML = '<h2>💻 Codex är avstängd</h2>'
         + '<p>Codex hjälper dig skriva kod. Slå på den under Inställningar.<br>'
-        + 'Utan en arbetsyta funkar den som en kod-chatt (koden sparas inte); med en '
-        + 'arbetsyta kan den även läsa projektet, spara ändringar och köra tester.</p>'
+        + 'Utan en arbetsyta funkar den som en kod-chatt; med en arbetsyta (på servern eller '
+        + 'en lokal mapp i webbläsaren) kan den läsa projektet och spara ändringar.</p>'
         + '<button class="btn accent" onclick="showView(\'settings\')">Öppna Inställningar</button>';
     }
   }
-  // Fil-trädet och git kräver arbetsyta – dölj i skisslage.
   const tree = document.querySelector('#view-code .code-tree');
   if(tree) tree.style.display = ws ? 'flex' : 'none';
   const noWs = document.getElementById('codeNoWs');
   if(noWs) noWs.style.display = (on && !ws) ? 'block' : 'none';
+  // Knapp för lokal mapp: visa när växeln är på (och webbläsaren stödjer det)
+  const lb = document.getElementById('codeLocalBar');
+  if(lb) lb.style.display = (on && FS_OK) ? 'flex' : 'none';
+  const li = document.getElementById('codeLocalInfo');
+  if(li) li.textContent = localDir ? ('📂 '+localDirName) : '';
+  const cb = document.getElementById('codeLocalClose');
+  if(cb) cb.style.display = localDir ? '' : 'none';
 }
 
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
@@ -2789,15 +2802,23 @@ function diffToHtml(diff){
 let codeEditSeq = 0;
 function renderEdit(ed){
   const id = 'edit'+(codeEditSeq++);
-  const scratch = ed.scratch || !cfg.code_ws;   // ingen arbetsyta → kan inte spara, bara kopiera
-  const acts = scratch
-    ? '<button class="btn ghost small" onclick="copyEdit(\''+id+'\')">Kopiera</button>'
-    : '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Godkänn</button>'
-      + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
-  const bodyHtml = (!scratch && ed.diff) ? diffToHtml(ed.diff) : esc(ed.content);
+  let acts, bodyHtml;
+  if(ed.local){                                   // lokal mapp i webbläsaren → skriv lokalt
+    acts = '<button class="btn accent small" onclick="applyEditLocal(\''+id+'\')">Godkänn</button>'
+         + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
+    bodyHtml = esc(ed.content);
+  } else if(ed.scratch || !cfg.code_ws){          // ingen arbetsyta → bara kopiera
+    acts = '<button class="btn ghost small" onclick="copyEdit(\''+id+'\')">Kopiera</button>';
+    bodyHtml = esc(ed.content);
+  } else {                                        // server-arbetsyta → skriv på servern
+    acts = '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Godkänn</button>'
+         + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
+    bodyHtml = ed.diff ? diffToHtml(ed.diff) : esc(ed.content);
+  }
+  const tag = ed.local && ed.isNew ? ' <span class="hint">(ny fil)</span>' : '';
   const node = codeAppend(
     '<div class="code-edit" id="'+id+'">'
-    + '<div class="eh"><span class="path">'+esc(ed.path)+'</span>'
+    + '<div class="eh"><span class="path">'+esc(ed.path)+tag+'</span>'
     + '<span class="acts">'+acts+'</span></div>'
     + '<pre class="code-diff">'+bodyHtml+'</pre></div>');
   node._edit = ed;
@@ -2841,58 +2862,239 @@ async function sendAgent(){
   codeAppend('<div class="code-user">'+esc(text)+'</div>');
   inp.value='';
   const send = document.getElementById('codeSend'); send.textContent='Stoppar…'; send.disabled=true;
-  let think = null, thinkText='';
   codeController = new AbortController();
-  let assistantFull = '';
   try{
-    const r = await api('/api/agent', {method:'POST', headers:headers(true),
-      body: JSON.stringify({model, messages: codeMessages}), signal: codeController.signal});
-    if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.error||('HTTP '+r.status)); }
-    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
-    while(true){
-      const {done, value} = await reader.read();
-      if(done) break;
-      buf += dec.decode(value, {stream:true});
-      let i;
-      while((i = buf.indexOf('\n')) >= 0){
-        const line = buf.slice(0,i).trim(); buf = buf.slice(i+1);
-        if(!line) continue;
-        let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
-        if(ev.type==='step'){ thinkText=''; think=null; }
-        else if(ev.type==='delta'){
-          thinkText += ev.text; assistantFull += ev.text;
-          if(!think) think = codeAppend('<div class="code-think"></div>');
-          think.textContent = thinkText;
-          codeLogEl().scrollTop = codeLogEl().scrollHeight;
-        }
-        else if(ev.type==='tool'){
-          if(think){ think.remove(); think=null; }   // dölj rå-tänk för verktygssteg
-          const icon = ev.name==='run_command' ? '▶' : '🔧';
-          let html = '<div class="code-tool">'+icon+' <b>'+esc(ev.name)+'</b> '
-            + esc(JSON.stringify(ev.args))+' → '+esc(ev.summary||'');
-          if(ev.detail) html += '<pre class="code-diff" style="margin-top:6px">'+esc(ev.detail)+'</pre>';
-          codeAppend(html+'</div>');
-        }
-        else if(ev.type==='message'){
-          if(think){ think.remove(); think=null; }
-          if(ev.text) codeAppend('<div class="code-msg">'+mdToHtml(ev.text)+'</div>');
-        }
-        else if(ev.type==='edit'){ renderEdit(ev); }
-        else if(ev.type==='error'){ codeAppend('<div class="code-tool">⚠ '+esc(ev.text)+'</div>'); }
-      }
-    }
-    if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
+    if(localDir) await runAgentLocal(model);      // lokal mapp i webbläsaren
+    else await runAgentServer(model);             // server-arbetsyta eller skisslage
   }catch(e){
     if(e.name!=='AbortError') codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>');
   }finally{
     codeController=null; send.textContent='Skicka'; send.disabled=false;
   }
 }
+async function runAgentServer(model){
+  let think = null, thinkText='', assistantFull='';
+  const r = await api('/api/agent', {method:'POST', headers:headers(true),
+    body: JSON.stringify({model, messages: codeMessages}), signal: codeController.signal});
+  if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.error||('HTTP '+r.status)); }
+  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while((i = buf.indexOf('\n')) >= 0){
+      const line = buf.slice(0,i).trim(); buf = buf.slice(i+1);
+      if(!line) continue;
+      let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
+      if(ev.type==='step'){ thinkText=''; think=null; }
+      else if(ev.type==='delta'){
+        thinkText += ev.text; assistantFull += ev.text;
+        if(!think) think = codeAppend('<div class="code-think"></div>');
+        think.textContent = thinkText;
+        codeLogEl().scrollTop = codeLogEl().scrollHeight;
+      }
+      else if(ev.type==='tool'){
+        if(think){ think.remove(); think=null; }
+        const icon = ev.name==='run_command' ? '▶' : '🔧';
+        let html = '<div class="code-tool">'+icon+' <b>'+esc(ev.name)+'</b> '
+          + esc(JSON.stringify(ev.args))+' → '+esc(ev.summary||'');
+        if(ev.detail) html += '<pre class="code-diff" style="margin-top:6px">'+esc(ev.detail)+'</pre>';
+        codeAppend(html+'</div>');
+      }
+      else if(ev.type==='message'){
+        if(think){ think.remove(); think=null; }
+        if(ev.text) codeAppend('<div class="code-msg">'+mdToHtml(ev.text)+'</div>');
+      }
+      else if(ev.type==='edit'){ renderEdit(ev); }
+      else if(ev.type==='error'){ codeAppend('<div class="code-tool">⚠ '+esc(ev.text)+'</div>'); }
+    }
+  }
+  if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
+}
+/* Anropa modellen (via /api/chat) och strömma svaret. Returnerar full text. */
+async function streamModel(convo, onDelta){
+  const model = document.getElementById('codeModel').value;
+  const r = await api('/api/chat', {method:'POST', headers:headers(true),
+    body: JSON.stringify({model, messages: convo}), signal: codeController.signal});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='', full='';
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let i;
+    while((i = buf.indexOf('\n')) >= 0){
+      const line = buf.slice(0,i).trim(); buf = buf.slice(i+1);
+      if(!line) continue;
+      let msg; try{ msg = JSON.parse(line); }catch(e){ continue; }
+      const c = msg.message && msg.message.content;
+      if(c){ full += c; if(onDelta) onDelta(c); }
+    }
+  }
+  return full;
+}
 document.getElementById('codeSend').onclick = ()=>{ if(codeController) codeController.abort(); else sendAgent(); };
 document.getElementById('codeInput').addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendAgent(); }
 });
 document.getElementById('codeModel').addEventListener('change', saveCodeModel);
+
+/* ---- Lokal mapp i webbläsaren (File System Access API) ----
+   Låter Codex arbeta mot en mapp på DIN dator även om servern kör någon annanstans.
+   Filerna läses/skrivs lokalt i webbläsaren; bara modell-anropen går till servern. */
+const FS_OK = ('showDirectoryPicker' in window);
+let localDir = null, localDirName = '';
+const LOCAL_SKIP = new Set(['.git','__pycache__','node_modules','.venv','venv','.idea','.vscode','dist','build','.mypy_cache']);
+const AGENT_LOCAL_SYS =
+  'Du är en kodassistent (Codex) som arbetar i en projektmapp. Svara på svenska. '
+  + 'Du har läsverktyg. Använd ett verktyg genom att skriva EXAKT en rad som börjar med "TOOL " '
+  + 'följt av verktygsnamn och ett JSON-objekt, och inget annat på den raden:\n'
+  + '  TOOL list_dir {"path": "."}\n'
+  + '  TOOL read_file {"path": "fil.py", "start": 1, "end": 200}\n'
+  + '  TOOL search {"query": "text"}\n'
+  + 'Efter varje verktyg får du resultatet och kan använda fler. När du är klar, skriv ditt svar. '
+  + 'Vill du ÄNDRA/SKAPA filer, föreslå varje fil som ett block med FULLSTÄNDIGT nytt innehåll:\n'
+  + '*** FIL: relativ/sökväg.py\n<hela filens nya innehåll>\n*** SLUT\n'
+  + 'Användaren godkänner varje skrivning – du skriver aldrig själv.';
+
+async function pickLocalDir(){
+  if(!FS_OK){ toast('Din webbläsare stödjer inte lokal mapp – använd Chrome/Edge', true); return; }
+  try{ localDir = await window.showDirectoryPicker(); }
+  catch(e){ return; }   // användaren avbröt
+  localDirName = localDir.name;
+  try{ if(localDir.requestPermission) await localDir.requestPermission({mode:'readwrite'}); }catch(e){}
+  toast('Lokal mapp öppnad: '+localDirName);
+  updateCodeView(); loadLocalTree();
+}
+function closeLocalDir(){ localDir=null; localDirName=''; updateCodeView(); }
+
+async function fsSubdir(path){
+  let dir = localDir;
+  for(const part of (path||'.').split('/')){ if(part && part!=='.') dir = await dir.getDirectoryHandle(part); }
+  return dir;
+}
+async function fsGetFile(path, create){
+  const parts = path.split('/').filter(Boolean);
+  let dir = localDir;
+  for(let i=0;i<parts.length-1;i++){ dir = await dir.getDirectoryHandle(parts[i], {create}); }
+  return await dir.getFileHandle(parts[parts.length-1], {create});
+}
+async function fsRead(path){ const fh=await fsGetFile(path,false); const f=await fh.getFile(); return await f.text(); }
+async function fsWrite(path, content){ const fh=await fsGetFile(path,true); const w=await fh.createWritable(); await w.write(content); await w.close(); }
+async function fsWalk(dir, prefix, out, depth){
+  for await (const [name, handle] of dir.entries()){
+    if(LOCAL_SKIP.has(name)) continue;
+    const p = prefix ? prefix+'/'+name : name;
+    if(handle.kind==='directory'){ out.push(p+'/'); if(depth<8) await fsWalk(handle,p,out,depth+1); }
+    else out.push(p);
+    if(out.length>1200) return;
+  }
+}
+async function loadLocalTree(){
+  const box = document.getElementById('codeTree'); const pathEl=document.getElementById('codeWsPath');
+  if(!box) return;
+  if(pathEl) pathEl.textContent = '📂 '+localDirName+' (lokal, i webbläsaren)';
+  box.innerHTML = '<div class="hint" style="padding:6px 8px">Läser…</div>';
+  try{
+    const out=[]; await fsWalk(localDir, '', out, 0);
+    out.sort();
+    box.innerHTML = out.map(f=>'<div class="f" title="'+esc(f)+'" onclick="askAboutFile(\''
+      + esc(f).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">'+esc(f)+'</div>').join('')
+      || '<div class="hint" style="padding:6px 8px">(tom mapp)</div>';
+  }catch(e){ box.innerHTML='<div class="hint" style="padding:6px 8px">Kunde inte läsa mappen.</div>'; }
+}
+function parseToolJs(text){
+  const m = (text||'').match(/^\s*TOOL\s+(\w+)\s+(\{.*\})\s*$/m);
+  if(!m) return null;
+  try{ const a=JSON.parse(m[2]); return (a&&typeof a==='object')?{name:m[1],args:a}:null; }catch(e){ return null; }
+}
+function parseEditsJs(text){
+  const edits=[]; const lines=(text||'').split('\n'); let i=0;
+  while(i<lines.length){
+    const m = lines[i].match(/^\*\*\* ?FIL:\s*(.+?)\s*$/);
+    if(m){ const path=m[1].trim(); i++; const body=[];
+      while(i<lines.length && !/^\*\*\* ?SLUT\s*$/.test(lines[i])){ body.push(lines[i]); i++; }
+      edits.push({path, content: body.join('\n')}); i++; continue; }
+    i++;
+  }
+  return edits;
+}
+function stripEditsJs(text){
+  const lines=(text||'').split('\n'); const out=[]; let i=0;
+  while(i<lines.length){
+    if(/^\*\*\* ?FIL:/.test(lines[i])){ i++; while(i<lines.length && !/^\*\*\* ?SLUT\s*$/.test(lines[i])) i++; i++; continue; }
+    out.push(lines[i]); i++;
+  }
+  return out.join('\n').trim();
+}
+async function execToolLocal(call){
+  try{
+    if(call.name==='list_dir'){
+      const out=[]; await fsWalk(await fsSubdir(call.args.path||'.'), '', out, 6);
+      return 'Innehåll:\n'+(out.slice(0,300).join('\n')||'(tom)');
+    }
+    if(call.name==='read_file'){
+      const t = await fsRead(call.args.path); const ln=t.split('\n');
+      let s=Math.max(1, call.args.start||1), e=Math.min(ln.length, call.args.end||ln.length);
+      return 'Fil '+call.args.path+' (rad '+s+'–'+e+' av '+ln.length+'):\n'
+        + ln.slice(s-1,e).map((l,k)=>(s+k)+'\t'+l).join('\n');
+    }
+    if(call.name==='search'){
+      const q=call.args.query||''; const files=[]; await fsWalk(localDir,'',files,8);
+      const hits=[];
+      for(const f of files){ if(f.endsWith('/')) continue;
+        try{ const t=await fsRead(f); const ln=t.split('\n');
+          for(let k=0;k<ln.length;k++){ if(ln[k].includes(q)){ hits.push(f+':'+(k+1)+': '+ln[k].trim().slice(0,200)); if(hits.length>=40) break; } }
+        }catch(e){}
+        if(hits.length>=40) break;
+      }
+      return 'Sökträffar för '+JSON.stringify(q)+':\n'+(hits.join('\n')||'(inga)');
+    }
+    return 'Okänt verktyg: '+call.name;
+  }catch(e){ return 'FEL: '+(e.message||e); }
+}
+async function runAgentLocal(model){
+  let convo = [{role:'system', content: AGENT_LOCAL_SYS}].concat(codeMessages);
+  let assistantFull='';
+  for(let step=0; step<12; step++){
+    if(codeController.signal.aborted) break;
+    let think=null, thinkText='';
+    const full = await streamModel(convo, d=>{
+      thinkText+=d; if(!think) think=codeAppend('<div class="code-think"></div>');
+      think.textContent=thinkText; codeLogEl().scrollTop=codeLogEl().scrollHeight;
+    });
+    assistantFull = full;
+    const call = parseToolJs(full);
+    if(call && step<11){
+      if(think) think.remove();
+      const res = await execToolLocal(call);
+      codeAppend('<div class="code-tool">🔧 <b>'+esc(call.name)+'</b> '+esc(JSON.stringify(call.args))
+        +'<pre class="code-diff" style="margin-top:6px">'+esc(res.slice(0,4000))+'</pre></div>');
+      convo.push({role:'assistant', content:full});
+      convo.push({role:'user', content:'VERKTYGSRESULTAT ('+call.name+'):\n'+res});
+      continue;
+    }
+    if(think) think.remove();
+    for(const ed of parseEditsJs(full)){
+      let cur=''; try{ cur = await fsRead(ed.path); }catch(e){}
+      renderEdit({path:ed.path, content:ed.content, local:true, isNew: cur===''});
+    }
+    const msg = stripEditsJs(full);
+    if(msg) codeAppend('<div class="code-msg">'+mdToHtml(msg)+'</div>');
+    break;
+  }
+  if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
+}
+async function applyEditLocal(id){
+  const node=document.getElementById(id); if(!node||!node._edit) return;
+  try{
+    await fsWrite(node._edit.path, node._edit.content);
+    node.classList.add('done');
+    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Skrivet lokalt</span>');
+    toast('Skrivet: '+node._edit.path); loadLocalTree();
+  }catch(e){ toast('Kunde inte skriva: '+(e.message||e), true); }
+}
 
 /* ---- Kommandokörning (fas 4) ---- */
 async function runManual(){
