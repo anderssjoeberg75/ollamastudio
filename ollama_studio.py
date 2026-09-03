@@ -190,7 +190,7 @@ class OllamaClient:
             self._url("/api/pull"), data=body, method="POST",
             headers={"Content-Type": "application/json"},
         )
-        resp = urllib.request.urlopen(req, timeout=60)
+        resp = urllib.request.urlopen(req, timeout=120)   # samma som webbversionen
         self._active_response = resp
         success = False
         try:
@@ -564,7 +564,12 @@ class OllamaManagerApp:
         self.installed = []
         self.installed_names = set()
         self.running_info = {}
-        self._set_status("Ollama körs inte", C["danger"])
+        msg = "Ollama körs inte"
+        if detail:
+            d = str(detail).strip().replace("\n", " ")
+            if d:
+                msg += " (%s)" % (d[:60] + "…" if len(d) > 60 else d)
+        self._set_status(msg, C["danger"])
         self._render_models_offline()
         self._render_catalog()
 

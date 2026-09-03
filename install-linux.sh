@@ -15,7 +15,7 @@ cat > "$DESKTOP_FILE" <<EOF
 Type=Application
 Name=Ollama Studio
 Comment=Hantera lokala Ollama-modeller (installera/avinstallera)
-Exec=$DIR/run.sh
+Exec="$DIR/run.sh"
 Icon=$DIR/icon.svg
 Terminal=false
 Categories=Utility;Development;
