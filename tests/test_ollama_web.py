@@ -26,6 +26,27 @@ class TestCatalog(unittest.TestCase):
                 self.assertIn(key, item)
 
 
+class TestAccessWarning(unittest.TestCase):
+    def test_loopback_detection(self):
+        for h in ("127.0.0.1", "localhost", "::1", "LOCALHOST"):
+            self.assertTrue(w.is_loopback_host(h))
+        for h in ("0.0.0.0", "", "192.168.1.10", "::"):
+            self.assertFalse(w.is_loopback_host(h))
+
+    def test_warns_only_when_open_and_no_token(self):
+        # Öppen på nätverket utan token → varning.
+        self.assertTrue(w.access_warning_lines("0.0.0.0", 8080, ""))
+        # Token satt → ingen varning.
+        self.assertEqual(w.access_warning_lines("0.0.0.0", 8080, "hemlig"), [])
+        # Bunden lokalt → ingen varning.
+        self.assertEqual(w.access_warning_lines("127.0.0.1", 8080, ""), [])
+
+    def test_warning_mentions_lockdown_options(self):
+        text = "\n".join(w.access_warning_lines("0.0.0.0", 8080, ""))
+        self.assertIn("OLLAMA_STUDIO_TOKEN", text)
+        self.assertIn("OLLAMA_STUDIO_HOST", text)
+
+
 class TestSmallHelpers(unittest.TestCase):
     def test_num(self):
         self.assertEqual(w._num("3.5"), 3.5)
