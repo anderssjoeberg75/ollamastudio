@@ -185,6 +185,10 @@ def settings_public():
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
     out["code_run_active"] = code_run_enabled()
+    # Hjälp för att förstå sökvägsproblem: arbetsytan måste finnas på SERVERNS filsystem.
+    out["server_os"] = ("Windows" if os.name == "nt"
+                        else ("macOS" if sys.platform == "darwin" else "Linux/Unix"))
+    out["server_cwd"] = os.getcwd()
     # Git-redo? (bara om arbetsytan finns – undvik onödiga subprocess-anrop)
     out["git_available"] = git_available()
     if out["code_workspace_ok"]:
@@ -1616,7 +1620,7 @@ PAGE = r"""<!doctype html>
     <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
 
     <div id="view-code" class="view code hidden">
-      <div id="codeOff" class="empty" style="display:none">
+      <div id="codeOff" class="empty" style="display:none;max-width:560px;margin:48px auto">
         <h2>💻 Codex är avstängd</h2>
         <p>Codex läser en projektmapp och föreslår kodändringar (som du godkänner).<br>
            Slå på den och välj en arbetsyta under Inställningar för att börja.</p>
@@ -2594,8 +2598,19 @@ async function loadSettingsForm(){
   chk('stCodeEnabled', s.code_enabled);
   set('stCodeWs', s.code_workspace);
   const cws = document.getElementById('stCodeWsState');
-  if(cws) cws.textContent = !s.code_workspace ? ''
-    : (s.code_workspace_ok ? '✓ Mappen hittades' : '✕ Mappen finns inte / går inte att läsa');
+  if(cws){
+    if(!s.code_workspace){
+      cws.innerHTML = 'Servern kör på <b>'+esc(s.server_os||'?')+'</b> – ange en sökväg som finns '
+        + 'på <b>serverns</b> filsystem (aktuell mapp: <code>'+esc(s.server_cwd||'')+'</code>).';
+    } else if(s.code_workspace_ok){
+      cws.textContent = '✓ Mappen hittades';
+    } else {
+      cws.innerHTML = '✕ Mappen finns inte på servern. Servern kör på <b>'+esc(s.server_os||'?')+'</b> – '
+        + 'sökvägen måste finnas där appen körs (inte på din egen dator). '
+        + (s.server_os==='Windows' ? '' : 'En Windows-sökväg som <code>D:\\…</code> funkar inte på en Linux-server. ')
+        + 'Serverns aktuella mapp: <code>'+esc(s.server_cwd||'')+'</code>.';
+    }
+  }
   set('stGhBase', s.github_base);
   chk('stRunEnabled', s.code_run_enabled);
   set('stRunAllow', s.code_run_allowlist);
