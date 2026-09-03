@@ -75,7 +75,7 @@ SETTINGS_SPEC = {
     "mem0_auth_scheme": ("MEM0_AUTH_SCHEME", "Token", "str", False),
     "mem0_org_id":      ("MEM0_ORG_ID", "", "str", False),
     "mem0_project_id":  ("MEM0_PROJECT_ID", "", "str", False),
-    "code_enabled":     ("OLLAMA_STUDIO_CODE", "0", "bool", False),
+    "code_enabled":     ("OLLAMA_STUDIO_CODE", "1", "bool", False),
     "code_workspace":   ("OLLAMA_STUDIO_WORKSPACE", "", "str", False),
     "github_token":     ("GITHUB_TOKEN", "", "str", True),
     "github_base":      ("OLLAMA_STUDIO_GITHUB_BASE", "main", "str", False),
@@ -257,9 +257,14 @@ def code_workspace_root():
     return root if os.path.isdir(root) else None
 
 
+def code_toggle_on():
+    """Codex-fliken/vyn är aktiv (växeln är på) – oberoende av om en arbetsyta valts."""
+    return setting_bool("code_enabled")
+
+
 def code_enabled():
-    """Kodassistenten är aktiv bara om påslagen OCH arbetsytan finns."""
-    return setting_bool("code_enabled") and code_workspace_root() is not None
+    """Codex är FUNKTIONELL bara om påslagen OCH arbetsytan finns (gate för endpoints)."""
+    return code_toggle_on() and code_workspace_root() is not None
 
 
 # --------------------------------------------------------------------------
@@ -1857,7 +1862,7 @@ function showView(v){
   if(v==='settings'){ loadSettingsForm(); }
   if(v==='code'){
     updateCodeView();
-    if(cfg.code){
+    if(cfg.code_ready){
       populateCodeModels(); loadTree(); gitStatus();
       const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
       setTimeout(()=>{ const ci=document.getElementById('codeInput'); if(ci) ci.focus(); }, 0);
@@ -2544,8 +2549,23 @@ async function loadConfig(){
 function updateCodeView(){
   const off = document.getElementById('codeOff');
   const wrap = document.getElementById('codeWrap');
-  if(off) off.style.display = cfg.code ? 'none' : 'block';
-  if(wrap) wrap.style.display = cfg.code ? 'flex' : 'none';
+  const ready = !!cfg.code_ready;   // växeln på OCH giltig arbetsyta
+  if(wrap) wrap.style.display = ready ? 'flex' : 'none';
+  if(off){
+    off.style.display = ready ? 'none' : 'block';
+    if(!cfg.code){
+      off.innerHTML = '<h2>💻 Codex är avstängd</h2>'
+        + '<p>Codex läser en projektmapp och föreslår kodändringar (du godkänner varje ändring).<br>'
+        + 'Slå på den och välj en arbetsyta under Inställningar.</p>'
+        + '<button class="btn accent" onclick="showView(\'settings\')">Öppna Inställningar</button>';
+    } else if(!ready){
+      off.innerHTML = '<h2>💻 Codex: välj en arbetsyta</h2>'
+        + '<p>Codex är påslagen, men ingen giltig <b>arbetsyta</b> är vald.<br>'
+        + 'Ange en absolut sökväg till en projektmapp som finns på servern under Inställningar '
+        + '(t.ex. <code>/opt/mitt-projekt</code> eller <code>D:\\projekt\\mitt-repo</code>).</p>'
+        + '<button class="btn accent" onclick="showView(\'settings\')">Öppna Inställningar</button>';
+    }
+  }
 }
 
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
@@ -3141,7 +3161,8 @@ class Handler(BaseHTTPRequestHandler):
                     "auth": bool(TOKEN),
                     "websearch": websearch_enabled(),
                     "memory": mem0_enabled(),
-                    "code": code_enabled(),
+                    "code": code_toggle_on(),
+                    "code_ready": code_enabled(),
                     "code_run": code_run_enabled(),
                 })
             if path == "/api/settings":
