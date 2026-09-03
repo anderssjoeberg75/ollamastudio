@@ -6,11 +6,15 @@ utgå från funktions-/symbolnamnen.
 
 Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 
-> **✅ Åtgärdat hittills:** punkt **2, 3, 5, 6, 7, 9, 10, 13, 15, 16, 18, 19, 24** är fixade
-> (konstant-tids-token, POST-storleksgräns, `OLLAMA_URL` i skrivbordsappen, **enhetstester**,
-> docstrings, vänligt portfel, cachad sida, **CI-workflow**, API-404 som JSON, favicon-route,
-> 0600 på inställnings-DB:n, cache-efter-commit, **tester för ny logik**). Övriga punkter är
-> fortfarande öppna. Tester finns i `tests/` – kör `python3 -m unittest discover -s tests`.
+> **✅ Åtgärdat hittills:** punkt **2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 18, 19, 20, 21, 23, 24**
+> är fixade (konstant-tids-token, POST-storleksgräns, **trådsäker `_PREV_CPU`**, `OLLAMA_URL` i
+> skrivbordsappen, **enhetstester**, docstrings, vänligt portfel, cachad sida, **TTL-cache på
+> `nvidia-smi`**, **parallell `_running_union` med kort timeout**, **CI-workflow**, API-404 som JSON,
+> favicon-route, 0600 på inställnings-DB:n, cache-efter-commit, **kort `mem0_search`-timeout i
+> chatten**, **DuckDuckGo lite-fallback**, **atomisk/trådsäker inställnings-cache**, **tester för ny
+> logik**). Kvar: **1** (öppen-som-standard – kräver medvetet godkännande), **8** (katalog-duplicering,
+> avvägning), **14, 17** (kosmetik), **22** (Mem0 list/delete mot live-API). Tester finns i `tests/` –
+> kör `python3 -m unittest discover -s tests`.
 
 ---
 
@@ -298,15 +302,15 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | 1 | 🔴 | `ollama_web.py` | Öppen som standard |
 | ✅ 2 | 🔴 | `ollama_web.py` | Konstant-tids-token (`hmac.compare_digest`) |
 | ✅ 3 | 🔴 | `ollama_web.py` | Storleksgräns på POST-body (413) |
-| 4 | 🟡 | `ollama_web.py` | Trådsäker `_PREV_CPU` |
+| ✅ 4 | 🟡 | `ollama_web.py` | Trådsäker `_PREV_CPU` |
 | ✅ 5 | 🟡 | `ollama_studio.py` | Läs `OLLAMA_URL` |
 | ✅ 6 | 🟡 | `tests/` | Enhetstester för rena funktioner |
 | ✅ 7 | ⚪ | båda | Rätta docstrings |
 | 8 | ⚪ | båda | Katalog-duplicering |
 | ✅ 9 | 🟡 | `ollama_web.py` | Vänligt fel vid upptagen port |
 | ✅ 10 | 🟡 | `ollama_web.py` | Cacha `render_page()` |
-| 11 | 🟡 | `ollama_web.py` | Strypa/cacha `nvidia-smi` |
-| 12 | 🟡 | `ollama_web.py` | `_running_union` stallar på död backend |
+| ✅ 11 | 🟡 | `ollama_web.py` | Strypa/cacha `nvidia-smi` |
+| ✅ 12 | 🟡 | `ollama_web.py` | `_running_union` stallar på död backend |
 | ✅ 13 | 🟡 | `.github/` | CI-workflow (py_compile + unittest) |
 | 14 | ⚪ | `ollama_web.py` | Escaping-bugg i Avinstallera-knappen |
 | ✅ 15 | ⚪ | `ollama_web.py` | API-404 som JSON |
@@ -314,8 +318,8 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | 17 | ⚪ | diverse | Småfix (timeout, datum, `.desktop`, död param) |
 | ✅ 18 | 🟡 | `ollama_web.py` | 0600-rättigheter på inställnings-DB (nyckel i klartext) |
 | ✅ 19 | 🟡 | `ollama_web.py` | `settings_set` uppdaterar cache före commit |
-| 20 | 🟡 | `ollama_web.py` | Kortare `mem0_search`-timeout i chattvägen |
-| 21 | 🟡 | `ollama_web.py` | Robustare DuckDuckGo (lite-fallback) |
+| ✅ 20 | 🟡 | `ollama_web.py` | Kortare `mem0_search`-timeout i chattvägen |
+| ✅ 21 | 🟡 | `ollama_web.py` | Robustare DuckDuckGo (lite-fallback) |
 | 22 | 🟡 | `ollama_web.py` | Verifiera Mem0 list/delete mot API |
-| 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
+| ✅ 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
 | ✅ 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |
