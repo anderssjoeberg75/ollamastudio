@@ -6,10 +6,11 @@ utgå från funktions-/symbolnamnen.
 
 Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 
-> **✅ Åtgärdat hittills:** punkt **2, 3, 5, 7, 9, 10, 15, 16, 18, 19** är fixade
-> (konstant-tids-token, POST-storleksgräns, `OLLAMA_URL` i skrivbordsappen, docstrings,
-> vänligt portfel, cachad sida, API-404 som JSON, favicon-route, 0600 på inställnings-DB:n,
-> cache-efter-commit). Övriga punkter är fortfarande öppna.
+> **✅ Åtgärdat hittills:** punkt **2, 3, 5, 6, 7, 9, 10, 13, 15, 16, 18, 19, 24** är fixade
+> (konstant-tids-token, POST-storleksgräns, `OLLAMA_URL` i skrivbordsappen, **enhetstester**,
+> docstrings, vänligt portfel, cachad sida, **CI-workflow**, API-404 som JSON, favicon-route,
+> 0600 på inställnings-DB:n, cache-efter-commit, **tester för ny logik**). Övriga punkter är
+> fortfarande öppna. Tester finns i `tests/` – kör `python3 -m unittest discover -s tests`.
 
 ---
 
@@ -299,14 +300,14 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | ✅ 3 | 🔴 | `ollama_web.py` | Storleksgräns på POST-body (413) |
 | 4 | 🟡 | `ollama_web.py` | Trådsäker `_PREV_CPU` |
 | ✅ 5 | 🟡 | `ollama_studio.py` | Läs `OLLAMA_URL` |
-| 6 | 🟡 | `tests/` | Enhetstester för rena funktioner |
+| ✅ 6 | 🟡 | `tests/` | Enhetstester för rena funktioner |
 | ✅ 7 | ⚪ | båda | Rätta docstrings |
 | 8 | ⚪ | båda | Katalog-duplicering |
 | ✅ 9 | 🟡 | `ollama_web.py` | Vänligt fel vid upptagen port |
 | ✅ 10 | 🟡 | `ollama_web.py` | Cacha `render_page()` |
 | 11 | 🟡 | `ollama_web.py` | Strypa/cacha `nvidia-smi` |
 | 12 | 🟡 | `ollama_web.py` | `_running_union` stallar på död backend |
-| 13 | 🟡 | `.github/` | CI-workflow (py_compile + unittest) |
+| ✅ 13 | 🟡 | `.github/` | CI-workflow (py_compile + unittest) |
 | 14 | ⚪ | `ollama_web.py` | Escaping-bugg i Avinstallera-knappen |
 | ✅ 15 | ⚪ | `ollama_web.py` | API-404 som JSON |
 | ✅ 16 | ⚪ | `ollama_web.py` | Favicon-route |
@@ -317,4 +318,4 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | 21 | 🟡 | `ollama_web.py` | Robustare DuckDuckGo (lite-fallback) |
 | 22 | 🟡 | `ollama_web.py` | Verifiera Mem0 list/delete mot API |
 | 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
-| 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |
+| ✅ 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |

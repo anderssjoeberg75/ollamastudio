@@ -1112,7 +1112,10 @@ def github_create_pr(title, body, base=None, head=None):
 # Ingen shell, ingen kedjning, jailad till arbetsytan, timeout + utskriftstak.
 # --------------------------------------------------------------------------
 CODE_RUN_OUTPUT_CAP = 20000
-_SHELL_META = re.compile(r"[;&|<>`$(){}\n\r]")
+# Blockera shell-operatorer (kedjning/pipe/omdirigering). Parenteser/klammer tillåts –
+# vi kör aldrig via shell (shlex.split + subprocess-lista), så de är ofarliga i argument
+# (t.ex. python -c "print(1)").
+_SHELL_META = re.compile(r"[;&|<>`\n\r]")
 
 
 def code_run_enabled():
