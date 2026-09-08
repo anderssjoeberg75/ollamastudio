@@ -34,6 +34,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   - [Lägg till i programmenyn](#lägg-till-i-programmenyn-linux)
 - [Installera Ollama (behövs för båda)](#installera-ollama-behövs-för-båda)
 - [Använda appen](#använda-appen)
+- [🤗 Hugging Face-modeller](#-hugging-face-modeller)
 - [Rekommenderade modeller](#rekommenderade-modeller)
 - [Felsökning](#felsökning)
 - [Så fungerar det (teknik)](#så-fungerar-det-teknik)
@@ -48,6 +49,10 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Upptäck / Installera** – en kurerad lista över populära modeller som du installerar
   direkt, samt ett fält där du kan skriva vilket modellnamn som helst från
   [ollama.com/library](https://ollama.com/library).
+- **🤗 Hugging Face** – finns inte modellnamnet i Ollamas bibliotek söker appen automatiskt
+  vidare efter en GGUF-version på [Hugging Face](https://huggingface.co) och laddar ner den
+  istället. Det finns också ett eget sökfält där du bläddrar bland GGUF-modeller och väljer
+  kvantisering själv (Q4_K_M, Q8_0 …). Se [Hugging Face-modeller](#-hugging-face-modeller).
 - **Nedladdning i realtid** – progressbar med procent, storlek och status medan modellen
   laddas ner. Går att avbryta.
 - **Aktiv modell** – se vilken modell som just nu är inläst i minnet ("körs nu"), inklusive
@@ -173,6 +178,9 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
+| `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: sökfältet i "Upptäck / Installera" och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
+| `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
+| `HF_TOKEN` | *(tomt)* | Valfri Hugging Face-token. Används **bara för sökningen** (högre kvot, egna privata repon) – nedladdningen gör Ollama själv. Kan också sättas i ⚙ Inställningar. |
 | `OLLAMA_STUDIO_MEM0` | `0` (av) | Sätt `1` för att slå på delat långtidsminne via Mem0. Kräver också `MEM0_API_KEY` (Mem0 Cloud) eller en egen `MEM0_BASE_URL` (självhostad). |
 | `OLLAMA_STUDIO_CODE` | `1` (på) | Codex (💻-vyn). Fliken syns alltid; Codex blir funktionell först när en giltig `OLLAMA_STUDIO_WORKSPACE` är vald. Sätt `0` för att dölja/stänga av. |
 | `OLLAMA_STUDIO_WORKSPACE` | *(tomt)* | Absolut sökväg till projektmappen kodassistenten får läsa/skriva i (allt utanför blockeras). |
@@ -313,9 +321,13 @@ vänster.
 2. Antingen:
    - klicka **↓ Installera** på en modell i listan, **eller**
    - skriv ett exakt modellnamn (t.ex. `llama3.2` eller `qwen2.5:7b`) i fältet högst upp
-     och klicka **↓ Ladda ner**.
+     och klicka **↓ Ladda ner**, **eller**
+   - sök efter modellen på **🤗 Hugging Face** och välj variant där.
 3. En panel längst ner visar nedladdningen i realtid. Du kan **Avbryta** när som helst.
 4. När den är klar hittar du modellen under **Mina modeller**.
+
+> Hittas inte namnet i Ollamas bibliotek söker appen automatiskt vidare på Hugging Face och
+> fortsätter nedladdningen därifrån – i samma panel. Se nästa avsnitt.
 
 ### Avinstallera en modell
 
@@ -417,6 +429,63 @@ mindre/mer kvantiserad modell.
 
 ---
 
+## 🤗 Hugging Face-modeller
+
+Ollamas eget bibliotek täcker de stora modellerna, men [Hugging Face](https://huggingface.co)
+har tusentals fler – inklusive finjusterade och svenska modeller. Ollama kan läsa dem direkt
+så länge de finns i **GGUF-format**, och Ollama Studio kopplar ihop de två.
+
+### 1. Skriv bara modellnamnet
+
+Skriv namnet i **Upptäck / Installera → Installera valfri modell** och klicka **↓ Ladda ner**.
+
+1. Appen provar först Ollamas bibliotek (`ollama.com/library`).
+2. Finns modellen inte där söker den vidare på Hugging Face efter en GGUF-version.
+3. Bästa träffen (namnlikhet + antal nedladdningar) laddas ner automatiskt, med
+   kvantiseringen `Q4_K_M` när den finns – samma standard som Ollama själv använder.
+4. Nedladdningspanelen visar vilket repo som valdes, storleken och en länk till det.
+   Blev det fel modell: klicka **Avbryt** och välj någon av de andra träffarna som visas.
+
+Vill du hellre välja själv varje gång: stäng av automatiken med `OLLAMA_STUDIO_HF_AUTO=0`
+(eller kryssrutan i ⚙ Inställningar). Då visas träffarna men ingenting hämtas.
+
+### 2. Sök och välj variant
+
+Rutan **🤗 Sök på Hugging Face** listar GGUF-repon med antal nedladdningar. Klicka
+**Varianter** för att se alla kvantiseringar med storlek, och installera den du vill ha:
+
+| Kvantisering | Ungefärlig storlek (7–8B) | När |
+| --- | --- | --- |
+| `Q4_K_M` | ~4,5 GB | Standardvalet – bra kvalitet, liten. |
+| `Q5_K_M` | ~5,5 GB | Något bättre kvalitet om minnet räcker. |
+| `Q8_0` | ~8 GB | Nära originalkvalitet, dubbelt så stor. |
+| `IQ3_XXS` / `Q3_K_M` | ~3 GB | När modellen annars inte får plats. |
+
+### 3. Skriv namnet direkt
+
+Du kan också klistra in en länk eller skriva Ollamas eget Hugging Face-namn – båda funkar:
+
+```
+https://huggingface.co/bartowski/Qwen3-8B-GGUF        →  hf.co/bartowski/Qwen3-8B-GGUF
+https://huggingface.co/…/blob/main/Qwen3-8B-Q5_K_M.gguf  →  hf.co/…:Q5_K_M   (varianten följer med)
+hf.co/bartowski/Qwen3-8B-GGUF:Q8_0                    →  används som det är
+```
+
+### Bra att veta
+
+- **Bara GGUF.** Ollama kan inte läsa vanliga PyTorch-/safetensors-repon. Sökningen filtrerar
+  därför på GGUF, och repon utan GGUF-filer hoppas över.
+- **Gated repon** (t.ex. Metas officiella Llama) kräver att du godkänner villkoren på
+  Hugging Face och att din Ollama-server är auktoriserad. De markeras med ⚠ och hämtas
+  aldrig automatiskt.
+- **`HF_TOKEN` är valfri** och används bara för *sökningen*. Själva nedladdningen sköter
+  Ollama, som inte tar emot någon token från Ollama Studio.
+- **Kräver internet på servern** (både sökningen och nedladdningen).
+- **Stäng av allt** med `OLLAMA_STUDIO_HF=0`, eller kryssrutan i ⚙ Inställningar. Då beter
+  sig appen exakt som förut: bara Ollamas bibliotek.
+
+---
+
 ## Rekommenderade modeller
 
 Osäker på var du ska börja? (Storlekar är ungefärliga.)
@@ -462,8 +531,15 @@ Båda varianterna pratar med Ollamas HTTP-API:
 | Lista "Mina modeller" | `GET /api/tags` |
 | Aktiv modell ("körs nu") | `GET /api/ps` |
 | Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
+| Hugging Face-sök | `GET https://huggingface.co/api/models` (utanför Ollama) |
 | Avinstallera | `DELETE /api/delete` |
 | Chatta (webbversionen) | `POST /api/chat` (strömmar svaret) |
+
+Hugging Face-stödet är ett lager ovanpå `POST /api/pull`: misslyckas en nedladdning med
+"modellen finns inte" söker servern på Hugging Faces öppna API, väljer repo och kvantisering
+och gör om anropet med namnet `hf.co/ägare/repo:kvantisering` – i **samma** ström, så
+webbläsaren ser en enda nedladdning som byter källa. Modulen `huggingface.py` är valfri:
+saknas den fungerar allt som förut, utan Hugging Face.
 
 System-/GPU-vyn läser CPU/RAM från `/proc` och GPU-info via `nvidia-smi` – inget av det går
 via Ollama. Kör du flera Ollama-instanser (en per GPU) slår webbappen ihop `/api/ps` från
@@ -480,6 +556,8 @@ Allt bygger enbart på Pythons standardbibliotek – inga `pip install` behövs.
 | --- | --- |
 | `ollama_web.py` | Webbversionen (server + inbyggt webb-UI) |
 | `ollama_studio.py` | Skrivbordsappen (tkinter) |
+| `catalog.py` | Delad lista över populära modeller (används av båda) |
+| `huggingface.py` | Delad Hugging Face-hjälp: sök, GGUF-filer, kvantiseringsval |
 | `ollama-studio-web.service` | systemd-tjänst för webbversionen |
 | `run.sh` / `run.bat` | Startskript för skrivbordsappen (Linux-mac / Windows) |
 | `install-linux.sh` / `icon.svg` | Menygenväg + ikon (skrivbordsappen på Linux) |

@@ -5,14 +5,39 @@ Nätverk (Mem0/DuckDuckGo) och nvidia-smi anropas aldrig här.
 """
 import os
 import sys
+import json
 import shutil
 import tempfile
+import threading
 import unittest
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Peka inställnings-DB:n till en temp-fil INNAN modulen importeras (DB_PATH sätts vid import).
 os.environ.setdefault("OLLAMA_STUDIO_DB", os.path.join(tempfile.gettempdir(), "os_test_import.db"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ollama_web as w  # noqa: E402
+
+
+class TestHuggingFaceWiring(unittest.TestCase):
+    """ollama_web ska använda den delade huggingface.py – inte en egen kopia."""
+    def test_shared_module(self):
+        import huggingface
+        self.assertIs(w.HF, huggingface)
+
+    def test_pull_error_text_reads_json_body(self):
+        class FakeHTTPError:
+            code = 500
+            def __init__(self, body):
+                self._body = body
+            def read(self):
+                return self._body
+
+        self.assertEqual(
+            w._pull_error_text(FakeHTTPError(b'{"error":"pull model manifest: file does not exist"}')),
+            "pull model manifest: file does not exist")
+        self.assertEqual(w._pull_error_text(FakeHTTPError(b"")), "HTTP 500")
+        self.assertTrue(w._pull_error_text(FakeHTTPError(b"trasigt")).startswith("HTTP 500: trasigt"))
 
 
 class TestCatalog(unittest.TestCase):
@@ -196,7 +221,8 @@ class _DBTest(unittest.TestCase):
         w.DB_PATH = os.path.join(self.tmp, "t.db")
         # nollställ ev. env som annars kan störa default-assertions
         for k in ("OLLAMA_STUDIO_WEBSEARCH", "OLLAMA_STUDIO_MEM0", "OLLAMA_STUDIO_CODE",
-                  "OLLAMA_STUDIO_CODE_RUN", "OLLAMA_STUDIO_WORKSPACE", "MEM0_API_KEY"):
+                  "OLLAMA_STUDIO_CODE_RUN", "OLLAMA_STUDIO_WORKSPACE", "MEM0_API_KEY",
+                  "OLLAMA_STUDIO_HF", "OLLAMA_STUDIO_HF_AUTO", "HF_TOKEN"):
             os.environ.pop(k, None)
         w.db_init()
 
@@ -227,6 +253,27 @@ class TestSettings(_DBTest):
         self.assertEqual(w.setting_str("mem0_api_key"), "SECRET")
         w.settings_set({"mem0_api_key": None})            # None = rensa
         self.assertEqual(w.setting_str("mem0_api_key"), "")
+
+    def test_huggingface_defaults_and_toggles(self):
+        self.assertTrue(w.hf_enabled())          # på som standard (om modulen finns)
+        self.assertTrue(w.hf_auto_enabled())
+        w.settings_set({"hf_auto": False})
+        self.assertTrue(w.hf_enabled())
+        self.assertFalse(w.hf_auto_enabled())    # bara förslag, ingen automatisk hämtning
+        w.settings_set({"hf_enabled": False, "hf_auto": True})
+        self.assertFalse(w.hf_enabled())
+        self.assertFalse(w.hf_auto_enabled())    # av-växeln slår ut autoläget
+        pub = w.settings_public()
+        self.assertFalse(pub["hf_active"])
+        self.assertTrue(pub["hf_module"])
+
+    def test_huggingface_token_is_masked(self):
+        w.settings_set({"hf_token": "hf_HEMLIG"})
+        pub = w.settings_public()
+        self.assertEqual(pub["hf_token"], "")
+        self.assertTrue(pub["hf_token_set"])
+        self.assertNotIn("hf_HEMLIG", str(pub))
+        self.assertEqual(w.hf_token(), "hf_HEMLIG")
 
     def test_prefs(self):
         self.assertEqual(w.prefs_all(), {})
@@ -295,6 +342,132 @@ class TestCodeAssistant(_DBTest):
         ok, out = w.run_command('python -c "print(2+2)"')
         self.assertTrue(ok)
         self.assertIn("4", out)
+
+
+class TestPullFallback(_DBTest):
+    """Hela kedjan: okänt modellnamn → sökning på Hugging Face → nedladdning.
+
+    En liten fejkad Ollama svarar "file does not exist" på allt utom hf.co-namn,
+    och Hugging Faces API ersätts med sparade svar – inget nätverk inblandat.
+    """
+    HF_HITS = [
+        {"id": "bartowski/Viking-7B-GGUF", "downloads": 5000, "likes": 20},
+        {"id": "annan/Viking-7B-i1-GGUF", "downloads": 100, "likes": 1},
+    ]
+    HF_FILES = [{"file": "Viking-7B-Q4_K_M.gguf", "size": 4_000_000_000, "quant": "Q4_K_M"},
+                {"file": "Viking-7B-Q8_0.gguf", "size": 8_000_000_000, "quant": "Q8_0"}]
+
+    class _FakeOllama(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            name = (json.loads(self.rfile.read(length) or b"{}") or {}).get("name", "")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            if name.startswith("hf.co/"):
+                lines = [{"status": "pulling manifest"},
+                         {"status": "pulling 1a2b", "total": 100, "completed": 100},
+                         {"status": "success"}]
+            else:
+                lines = [{"error": "pull model manifest: file does not exist"}]
+            for line in lines:
+                self.wfile.write((json.dumps(line) + "\n").encode())
+
+    def setUp(self):
+        super().setUp()
+        self._old_log = w.Handler.log_message
+        w.Handler.log_message = lambda *a, **k: None      # tyst åtkomstlogg i testerna
+        self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._FakeOllama)
+        threading.Thread(target=self.ollama.serve_forever, daemon=True).start()
+        self._old_primary = w.PRIMARY
+        w.PRIMARY = {"label": "test", "gpu": None,
+                     "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
+        self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
+        threading.Thread(target=self.studio.serve_forever, daemon=True).start()
+        self.base = "http://127.0.0.1:%d" % self.studio.server_address[1]
+        self._old_search, self._old_files = w.HF.search_models, w.HF.list_gguf_files
+        w.HF.search_models = lambda q, limit=8, token=None, timeout=12: \
+            w.HF.parse_search(self.HF_HITS)
+        w.HF.list_gguf_files = lambda repo, token=None, timeout=12: list(self.HF_FILES)
+
+    def tearDown(self):
+        w.HF.search_models, w.HF.list_gguf_files = self._old_search, self._old_files
+        w.Handler.log_message = self._old_log
+        for srv in (self.studio, self.ollama):
+            srv.shutdown()
+            srv.server_close()
+        w.PRIMARY = self._old_primary
+        super().tearDown()
+
+    def _pull(self, name):
+        req = urllib.request.Request(self.base + "/api/pull",
+                                     data=json.dumps({"name": name}).encode(),
+                                     headers={"Content-Type": "application/json"},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = resp.read().decode()
+        return [json.loads(line) for line in body.splitlines() if line.strip()]
+
+    def test_unknown_name_falls_back_to_hugging_face(self):
+        lines = self._pull("viking-7b")
+        hit = next(m["hf"] for m in lines if "hf" in m)
+        self.assertEqual(hit["repo"], "bartowski/Viking-7B-GGUF")
+        self.assertEqual(hit["pull"], "hf.co/bartowski/Viking-7B-GGUF:Q4_K_M")
+        self.assertEqual(hit["quant"], "Q4_K_M")
+        self.assertTrue(hit["auto"])
+        self.assertEqual([a["id"] for a in hit["alternatives"]], ["annan/Viking-7B-i1-GGUF"])
+        self.assertEqual(lines[-1].get("status"), "success")   # nedladdningen fullföljdes
+        self.assertFalse(any("error" in m for m in lines))
+
+    def test_hf_name_is_pulled_directly_without_search(self):
+        w.HF.search_models = lambda *a, **k: self.fail("skulle inte söka på ett hf.co-namn")
+        lines = self._pull("https://huggingface.co/bartowski/Viking-7B-GGUF/blob/main/"
+                           "Viking-7B-Q8_0.gguf")
+        self.assertEqual(lines[-1].get("status"), "success")
+        self.assertFalse(any("hf" in m for m in lines))
+
+    def test_auto_off_only_suggests(self):
+        w.settings_set({"hf_auto": False})
+        lines = self._pull("viking-7b")
+        hit = next(m["hf"] for m in lines if "hf" in m)
+        self.assertFalse(hit["auto"])
+        self.assertNotIn("success", [m.get("status") for m in lines])   # inget hämtades
+
+    def test_disabled_shows_ollamas_own_error(self):
+        w.settings_set({"hf_enabled": False})
+        lines = self._pull("viking-7b")
+        self.assertEqual(lines, [{"error": "pull model manifest: file does not exist"}])
+
+    def test_no_match_gives_clear_error(self):
+        w.HF.search_models = lambda q, limit=8, token=None, timeout=12: []
+        lines = self._pull("finns-inte-nagonstans")
+        self.assertIn("varken i Ollamas bibliotek", lines[-1]["error"])
+
+    def test_gated_repo_is_not_auto_pulled(self):
+        w.HF.search_models = lambda q, limit=8, token=None, timeout=12: w.HF.parse_search(
+            [{"id": "gated/Viking-7B-GGUF", "downloads": 10, "gated": True}])
+        lines = self._pull("viking-7b")
+        self.assertTrue(next(m["hf"] for m in lines if "hf" in m)["gated"])
+        self.assertIn("gated", lines[-1]["error"])
+
+    def test_repo_without_gguf_files(self):
+        w.HF.list_gguf_files = lambda repo, token=None, timeout=12: []
+        lines = self._pull("viking-7b")
+        self.assertIn("inga GGUF-filer", lines[-1]["error"])
+
+    def test_search_and_files_endpoints(self):
+        with urllib.request.urlopen(self.base + "/api/hf/search?q=viking", timeout=20) as r:
+            data = json.loads(r.read().decode())
+        self.assertEqual(data["models"][0]["pull"], "hf.co/bartowski/Viking-7B-GGUF")
+        with urllib.request.urlopen(
+                self.base + "/api/hf/files?repo=bartowski/Viking-7B-GGUF", timeout=20) as r:
+            data = json.loads(r.read().decode())
+        self.assertEqual(data["default"], "Q4_K_M")
+        self.assertEqual([q["quant"] for q in data["quants"]], ["Q4_K_M", "Q8_0"])
+        self.assertEqual(data["quants"][1]["pull"], "hf.co/bartowski/Viking-7B-GGUF:Q8_0")
 
 
 class TestSelfUpdate(_DBTest):

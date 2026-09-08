@@ -25,6 +25,34 @@ class TestDesktopHelpers(unittest.TestCase):
         self.assertEqual(d.human_size(5 * 1024 * 1024), "5.0 MB")
         self.assertEqual(d.human_size(None), "?")
 
+    def test_pull_error_text(self):
+        class FakeHTTPError:
+            code = 404
+            def __init__(self, body):
+                self._body = body
+            def read(self):
+                return self._body
+
+        self.assertEqual(d.pull_error_text(FakeHTTPError(b'{"error":"file does not exist"}')),
+                         "file does not exist")
+        self.assertEqual(d.pull_error_text(FakeHTTPError(b"")), "HTTP 404")
+
+    def test_huggingface_env_toggles(self):
+        import huggingface
+        self.assertIs(d.HF, huggingface)          # delad modul, ingen egen kopia
+        for key in ("OLLAMA_STUDIO_HF", "OLLAMA_STUDIO_HF_AUTO"):
+            os.environ.pop(key, None)
+        self.assertTrue(d.hf_enabled())           # på som standard
+        self.assertTrue(d.hf_auto_enabled())
+        os.environ["OLLAMA_STUDIO_HF_AUTO"] = "0"
+        self.assertTrue(d.hf_enabled())
+        self.assertFalse(d.hf_auto_enabled())     # bara förslag
+        os.environ["OLLAMA_STUDIO_HF"] = "0"
+        self.assertFalse(d.hf_enabled())
+        self.assertFalse(d.hf_auto_enabled())
+        for key in ("OLLAMA_STUDIO_HF", "OLLAMA_STUDIO_HF_AUTO"):
+            os.environ.pop(key, None)
+
     def test_human_date(self):
         # ISO med nanosekunder + Z ska klippas och formateras till YYYY-MM-DD
         self.assertEqual(d.human_date("2026-08-29T12:00:00.123456789Z")[:4], "2026")

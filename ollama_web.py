@@ -73,6 +73,9 @@ DB_PATH = os.environ.get(
 # Kända inställningar: nyckel -> (env-namn, standard, typ, hemlig?)
 SETTINGS_SPEC = {
     "websearch":        ("OLLAMA_STUDIO_WEBSEARCH", "1", "bool", False),
+    "hf_enabled":       ("OLLAMA_STUDIO_HF", "1", "bool", False),
+    "hf_auto":          ("OLLAMA_STUDIO_HF_AUTO", "1", "bool", False),
+    "hf_token":         ("HF_TOKEN", "", "str", True),
     "mem0_enabled":     ("OLLAMA_STUDIO_MEM0", "0", "bool", False),
     "mem0_api_key":     ("MEM0_API_KEY", "", "str", True),
     "mem0_user_id":     ("MEM0_USER_ID", "default_user", "str", False),
@@ -198,6 +201,9 @@ def settings_public():
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
     out["code_run_active"] = code_run_enabled()
+    out["hf_module"] = HF is not None          # ligger huggingface.py bredvid appen?
+    out["hf_active"] = hf_enabled()
+    out["hf_auto_active"] = hf_auto_enabled()
     # Hjälp för att förstå sökvägsproblem: arbetsytan måste finnas på SERVERNS filsystem.
     out["server_os"] = ("Windows" if os.name == "nt"
                         else ("macOS" if sys.platform == "darwin" else "Linux/Unix"))
@@ -256,6 +262,21 @@ def settings_set(values):
 # --- Bekväma getters (dynamiska: läser aktuella inställningar) ---
 def websearch_enabled():
     return setting_bool("websearch")
+
+
+def hf_enabled():
+    """Hugging Face-stödet (sök + reserv vid okänt modellnamn) är påslaget."""
+    return HF is not None and setting_bool("hf_enabled")
+
+
+def hf_auto_enabled():
+    """Ladda ner bästa HF-träffen automatiskt när Ollama saknar modellen."""
+    return hf_enabled() and setting_bool("hf_auto")
+
+
+def hf_token():
+    """Valfri HF-token – bara för sökningen (högre kvot, egna/gated repon)."""
+    return setting_str("hf_token")
 
 
 def mem0_enabled():
@@ -1382,6 +1403,43 @@ except Exception:
 
 
 # --------------------------------------------------------------------------
+# Hugging Face – valfritt tillägg (huggingface.py bredvid appen). Ollama kan
+# hämta GGUF-modeller direkt därifrån med namnet "hf.co/ägare/repo:kvant", så
+# när ett modellnamn inte finns i Ollamas bibliotek söker vi vidare där. Saknas
+# modulen fungerar allt som förut – bara utan Hugging Face.
+# --------------------------------------------------------------------------
+try:
+    import huggingface as HF
+except Exception:
+    HF = None
+
+# Hur många sökträffar som skickas till UI:t respektive vägs mot varandra när
+# vi väljer automatiskt.
+HF_SEARCH_LIMIT = 12
+HF_FALLBACK_LIMIT = 8
+
+
+def _pull_error_text(http_error):
+    """Läsbart felmeddelande ur ett HTTP-fel från Ollamas /api/pull.
+
+    Ollama svarar ibland med 404/500 och `{"error": "..."}` i kroppen istället
+    för en felrad i strömmen – texten avgör om vi ska leta på Hugging Face.
+    """
+    try:
+        body = http_error.read().decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    try:
+        data = json.loads(body or "null")
+        if isinstance(data, dict) and data.get("error"):
+            return str(data["error"])
+    except Exception:
+        pass
+    body = (body or "").strip()
+    return "HTTP %d%s" % (http_error.code, (": " + body[:200]) if body else "")
+
+
+# --------------------------------------------------------------------------
 # HTML/CSS/JS – hela webb-UI:t i en sträng (inga externa filer eller CDN)
 # --------------------------------------------------------------------------
 PAGE = r"""<!doctype html>
@@ -1635,6 +1693,23 @@ PAGE = r"""<!doctype html>
   .install-row input:focus{outline:none;border-color:var(--accent)}
   .section-title{color:var(--subtle);font-weight:700;font-size:14px;margin:16px 2px 2px}
 
+  /* Hugging Face-sök */
+  .hf-hint{color:var(--faint);font-size:12px;margin:6px 2px 0}
+  .hf-card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:13px 16px;margin:6px 2px}
+  .hf-card .hf-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .hf-card h3{margin:0;font-size:15px;font-weight:700}
+  .hf-card h3 a{color:var(--text);text-decoration:none}
+  .hf-card h3 a:hover{color:var(--accent-hov)}
+  .hf-meta{color:var(--faint);font-size:12px;margin-top:3px}
+  .hf-card .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .hf-quants{margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+  .hf-quant{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px}
+  .hf-quant .q{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hov);min-width:92px}
+  .hf-quant .sz{color:var(--faint)}
+  .hf-quant .btn{margin-left:auto}
+  .hf-gated{color:var(--amber);font-size:12px}
+
   /* Nedladdningspanel */
   .dl{position:sticky;bottom:0;background:var(--card);border-top:2px solid var(--accent);
     padding:12px 28px;margin:8px -24px -24px;display:none}
@@ -1695,12 +1770,26 @@ PAGE = r"""<!doctype html>
     <div id="view-discover" class="view hidden">
       <div class="install-box">
         <h2>Installera valfri modell</h2>
-        <p>Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".</p>
+        <p id="customHint">Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".</p>
         <div class="install-row">
           <input id="customName" placeholder="modellnamn…" onkeydown="if(event.key==='Enter')pullCustom()">
           <button class="btn accent" onclick="pullCustom()">↓ Ladda ner</button>
         </div>
       </div>
+
+      <div class="install-box" id="hfBox" style="display:none">
+        <h2>🤗 Sök på Hugging Face</h2>
+        <p>Tusentals GGUF-modeller utöver Ollamas bibliotek. Sök, välj kvantisering
+          (mindre = snabbare och mindre minne) och installera.</p>
+        <div class="install-row">
+          <input id="hfQuery" placeholder="t.ex. qwen3, llama-3.1-8b, viking-7b…"
+                 onkeydown="if(event.key==='Enter')hfSearch()">
+          <button class="btn accent" onclick="hfSearch()">Sök</button>
+        </div>
+        <div class="hf-hint" id="hfHint"></div>
+        <div id="hfResults"></div>
+      </div>
+
       <div class="section-title">Populära modeller</div>
       <div id="catalogList"></div>
       <div class="dl" id="dlPanel">
@@ -1711,6 +1800,7 @@ PAGE = r"""<!doctype html>
         </div>
         <div class="bar"><div id="dlBar"></div></div>
         <div class="st" id="dlStatus"></div>
+        <div class="st" id="dlExtra"></div>
       </div>
     </div>
 
@@ -1863,6 +1953,28 @@ PAGE = r"""<!doctype html>
           <label class="set-check"><input id="stWebsearch" type="checkbox">
             <span>🌐 Webbsök när modellen är osäker
               <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
+        </div>
+
+        <div class="set-card">
+          <h2>🤗 Hugging Face</h2>
+          <p class="hint">Ollama kan hämta GGUF-modeller direkt från Hugging Face
+            (<code>hf.co/ägare/repo:kvantisering</code>). Med det här påslaget söker Ollama Studio
+            där när ett modellnamn inte finns i Ollamas eget bibliotek – och du får ett sökfält
+            under "Upptäck / Installera". Kräver internet på servern.</p>
+          <label class="set-check"><input id="stHfEnabled" type="checkbox">
+            <span>🤗 Slå på Hugging Face-stöd (sök + reserv)</span></label>
+          <label class="set-check"><input id="stHfAuto" type="checkbox">
+            <span>Ladda ner bästa träffen automatiskt
+              <span class="hint">(av: träffarna visas men du väljer själv)</span></span></label>
+          <div class="set-row">
+            <label>HF-token <span class="hint">(valfri – bara för sökningen, t.ex. egna repon)</span></label>
+            <input id="stHfToken" type="password" autocomplete="off" placeholder="hf_…">
+            <div class="set-keyrow">
+              <span id="stHfTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearHfToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div id="stHfState" class="hint"></div>
         </div>
 
         <div class="set-card">
@@ -2271,6 +2383,74 @@ function renderCatalog(){
   }).join('');
 }
 
+/* ---- Hugging Face-sök (GGUF-modeller utanför Ollamas bibliotek) ---- */
+let hfModels = [];          // senaste sökträffar
+let hfQuants = {};          // repo -> kvantiseringar (hämtas vid utfällning)
+async function hfSearch(){
+  const q = (document.getElementById('hfQuery').value||'').trim();
+  const hint = document.getElementById('hfHint');
+  const list = document.getElementById('hfResults');
+  if(!q){ hint.textContent = 'Skriv något att söka efter.'; list.innerHTML=''; return; }
+  hint.textContent = 'Söker på Hugging Face…'; list.innerHTML='';
+  try{
+    const r = await api('/api/hf/search?q='+encodeURIComponent(q), {headers: headers(false)});
+    const d = await r.json();
+    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+    hfModels = d.models || [];
+    hint.textContent = hfModels.length
+      ? (hfModels.length+' träffar · endast GGUF-modeller (det Ollama kan läsa)')
+      : 'Inga GGUF-modeller matchade sökningen.';
+    renderHfResults();
+  }catch(e){ hint.textContent = 'Sökningen misslyckades: '+e.message; }
+}
+function renderHfResults(){
+  document.getElementById('hfResults').innerHTML = hfModels.map((m,i)=>{
+    const dl = m.downloads ? (m.downloads.toLocaleString('sv-SE')+' nedladdningar') : '';
+    const likes = m.likes ? ('♥ '+m.likes) : '';
+    const meta = [dl, likes].filter(Boolean).join('  ·  ');
+    const gated = m.gated
+      ? '<div class="hf-gated">⚠ Kräver godkännande på Hugging Face (gated) – Ollama kan inte hämta den utan det.</div>'
+      : '';
+    return '<div class="hf-card"><div class="hf-top">'
+      + '<h3><a href="'+esc(m.url)+'" target="_blank" rel="noopener">'+esc(m.id)+'</a></h3>'
+      + '<div class="right">'
+      + '<button class="btn ghost small" onclick="hfToggleQuants('+i+')">Varianter</button>'
+      + '<button class="btn accent small" onclick="startPull(\''+esc(m.pull)+'\')">↓ Installera</button>'
+      + '</div></div>'
+      + (meta ? '<div class="hf-meta">'+esc(meta)+'</div>' : '')
+      + gated
+      + '<div class="hf-quants" id="hfq'+i+'" style="display:none"></div></div>';
+  }).join('');
+}
+async function hfToggleQuants(i){
+  const m = hfModels[i]; if(!m) return;
+  const box = document.getElementById('hfq'+i);
+  if(box.style.display !== 'none'){ box.style.display='none'; return; }
+  box.style.display='block';
+  if(!hfQuants[m.id]){
+    box.innerHTML = '<div class="hf-meta">Hämtar filer…</div>';
+    try{
+      const r = await api('/api/hf/files?repo='+encodeURIComponent(m.id), {headers: headers(false)});
+      const d = await r.json();
+      if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+      hfQuants[m.id] = d;
+    }catch(e){
+      box.innerHTML = '<div class="hf-meta">Kunde inte läsa filerna: '+esc(e.message)+'</div>';
+      return;
+    }
+  }
+  const d = hfQuants[m.id];
+  const rows = (d.quants||[]).map(q=>{
+    const size = q.size ? humanSize(q.size) : 'okänd storlek';
+    const parts = q.parts > 1 ? ('  ·  '+q.parts+' delar') : '';
+    const dflt = (q.quant === d.default) ? ' <span class="chip">standard</span>' : '';
+    return '<div class="hf-quant"><span class="q">'+esc(q.quant)+'</span>'
+      + '<span class="sz">'+esc(size)+esc(parts)+'</span>'+dflt
+      + '<button class="btn ghost small" onclick="startPull(\''+esc(q.pull)+'\')">↓ Installera</button></div>';
+  }).join('');
+  box.innerHTML = rows || '<div class="hf-meta">Inga GGUF-filer i det här repot.</div>';
+}
+
 /* ---- Installera / ladda ner (strömmar status från servern) ---- */
 function pullCustom(){
   const n = document.getElementById('customName').value.trim();
@@ -2285,6 +2465,8 @@ async function startPull(name){
   document.getElementById('dlTitle').textContent = 'Laddar ner  '+name;
   document.getElementById('dlPct').textContent = '';
   document.getElementById('dlStatus').textContent = 'Förbereder…';
+  document.getElementById('dlExtra').innerHTML = '';
+  pullHf = null; pullError = null;
   const bar = document.getElementById('dlBar'); bar.style.width='0'; bar.style.background='var(--accent)';
   document.getElementById('dlCancel').textContent = 'Avbryt';
 
@@ -2303,7 +2485,8 @@ async function startPull(name){
         if(line){ try{ onProgress(JSON.parse(line)); }catch(e){} }
       }
     }
-    pullDone(name, 'success');
+    if(pullError) pullDone(name, 'error', pullError);
+    else pullDone(name, 'success');
   }catch(e){
     if(e.name === 'AbortError') pullDone(name, 'cancelled');
     else pullDone(name, 'error', e.message);
@@ -2312,6 +2495,7 @@ async function startPull(name){
   }
 }
 function onProgress(m){
+  if(m.hf){ showHfSwitch(m.hf); return; }        // servern bytte källa till Hugging Face
   const status = m.status || '';
   if(m.total && m.completed != null){
     const f = m.completed/m.total;
@@ -2322,18 +2506,41 @@ function onProgress(m){
     document.getElementById('dlStatus').textContent = status;
     if(status.includes('success')) document.getElementById('dlBar').style.width='100%';
   }
-  if(m.error){ document.getElementById('dlStatus').textContent = 'Fel: '+m.error; }
+  if(m.error){
+    pullError = m.error;                       // avgör utfallet när strömmen tar slut
+    document.getElementById('dlStatus').textContent = 'Fel: '+m.error;
+  }
+}
+let pullHf = null;      // Hugging Face-träffen servern valde (om den bytte källa)
+let pullError = null;   // sista felraden i strömmen (en ström kan sluta med fel)
+function showHfSwitch(hf){
+  pullHf = hf;
+  const size = hf.size ? ('  ·  ' + humanSize(hf.size)) : '';
+  const quant = hf.quant ? ('  ·  ' + hf.quant) : '';
+  let html = '🤗 Hugging Face: <a href="'+esc(hf.url||'')+'" target="_blank" rel="noopener" '
+    + 'style="color:var(--accent-hov)">'+esc(hf.repo)+'</a>'+esc(quant)+esc(size);
+  if(hf.gated) html += '<br><span style="color:var(--amber)">⚠ Repot är gated – du måste '
+    + 'godkänna villkoren på Hugging Face först.</span>';
+  const alts = hf.alternatives || [];
+  if(alts.length){
+    html += '<br>Andra träffar: ' + alts.map(a =>
+      '<a href="#" onclick="startPull(\''+esc(a.pull)+'\');return false" '
+      + 'style="color:var(--subtle)">'+esc(a.id)+'</a>').join('  ·  ');
+  }
+  if(hf.auto) document.getElementById('dlTitle').textContent = 'Laddar ner  ' + (hf.pull || hf.repo);
+  document.getElementById('dlExtra').innerHTML = html;
 }
 function pullDone(name, outcome, detail){
   const bar = document.getElementById('dlBar');
   const cancel = document.getElementById('dlCancel');
+  const shown = (pullHf && pullHf.auto && pullHf.pull) ? pullHf.pull : name;
   if(outcome==='success'){
     bar.style.width='100%'; bar.style.background='var(--green)';
     document.getElementById('dlPct').textContent='100%';
-    document.getElementById('dlTitle').textContent='✓  '+name+' installerad';
+    document.getElementById('dlTitle').textContent='✓  '+shown+' installerad';
     document.getElementById('dlStatus').textContent='Klar! Modellen finns nu under "Mina modeller".';
     document.getElementById('customName').value='';
-    toast('"'+name+'" installerad');
+    toast('"'+shown+'" installerad');
   }else if(outcome==='cancelled'){
     document.getElementById('dlTitle').textContent='Avbruten';
     document.getElementById('dlStatus').textContent='Nedladdningen avbröts.';
@@ -2836,6 +3043,19 @@ async function loadConfig(){
   const memTools = document.getElementById('csMemoryTools');
   if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
   updateCodeView();   // Codex-fliken syns alltid; visa av-läge om den inte är påslagen
+  updateHfView();     // Hugging Face-sök syns bara om stödet är påslaget
+}
+function updateHfView(){
+  const box = document.getElementById('hfBox');
+  if(box) box.style.display = cfg.hf ? 'block' : 'none';
+  const hint = document.getElementById('customHint');
+  if(hint){
+    hint.textContent = cfg.hf
+      ? 'Skriv modellnamn från ollama.com/library (t.ex. "llama3.1:8b"). Finns det inte där '
+        + (cfg.hf_auto ? 'söker vi automatiskt vidare på Hugging Face. ' : 'visar vi träffar från Hugging Face. ')
+        + 'Du kan också klistra in en Hugging Face-länk eller skriva "hf.co/ägare/repo:Q4_K_M".'
+      : 'Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".';
+  }
 }
 function updateCodeView(){
   const off = document.getElementById('codeOff');
@@ -2870,6 +3090,7 @@ function updateCodeView(){
 let mem0KeyIsSet = false;      // om en nyckel redan finns sparad
 let mem0KeyClear = false;      // användaren har valt att ta bort nyckeln
 let ghTokenIsSet = false, ghTokenClear = false;
+let hfTokenIsSet = false, hfTokenClear = false;
 async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
@@ -2889,6 +3110,22 @@ async function loadSettingsForm(){
   document.getElementById('stMem0KeyState').textContent =
     mem0KeyIsSet ? '● En nyckel är sparad (lämna tomt för att behålla den)' : 'Ingen nyckel sparad';
   document.getElementById('stMem0Test').textContent = '';
+  chk('stHfEnabled', s.hf_enabled);
+  chk('stHfAuto', s.hf_auto);
+  hfTokenIsSet = !!s.hf_token_set; hfTokenClear = false;
+  const hfEl = document.getElementById('stHfToken'); if(hfEl) hfEl.value='';
+  const hfState = document.getElementById('stHfTokenState');
+  if(hfState) hfState.textContent = hfTokenIsSet
+    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+  const hfInfo = document.getElementById('stHfState');
+  if(hfInfo){
+    if(!s.hf_module) hfInfo.textContent = 'Status: modulen huggingface.py saknas bredvid appen – '
+      + 'stödet är inaktivt. Hämta senaste versionen med ↻ Uppdatera.';
+    else if(!s.hf_active) hfInfo.textContent = 'Status: avstängt.';
+    else hfInfo.textContent = 'Status: ✓ på · ' + (s.hf_auto_active
+      ? 'okända modellnamn hämtas automatiskt från Hugging Face'
+      : 'okända modellnamn visar träffar från Hugging Face att välja bland');
+  }
   chk('stCodeEnabled', s.code_enabled);
   set('stCodeWs', s.code_workspace);
   const cws = document.getElementById('stCodeWsState');
@@ -2941,6 +3178,11 @@ function clearMem0Key(){
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
   document.getElementById('stMem0KeyState').textContent = '✕ Nyckeln tas bort när du sparar';
 }
+function clearHfToken(){
+  hfTokenClear = true; hfTokenIsSet = false;
+  const el = document.getElementById('stHfToken'); if(el) el.value='';
+  document.getElementById('stHfTokenState').textContent = '✕ Token tas bort när du sparar';
+}
 function clearGhToken(){
   ghTokenClear = true; ghTokenIsSet = false;
   const el = document.getElementById('stGhToken'); if(el) el.value='';
@@ -2957,6 +3199,8 @@ function collectSettings(){
     mem0_auth_scheme: val('stMem0Auth'),
     mem0_org_id: val('stMem0Org'),
     mem0_project_id: val('stMem0Proj'),
+    hf_enabled: document.getElementById('stHfEnabled').checked,
+    hf_auto: document.getElementById('stHfAuto').checked,
     code_enabled: document.getElementById('stCodeEnabled').checked,
     code_workspace: val('stCodeWs'),
     github_base: val('stGhBase'),
@@ -2970,6 +3214,9 @@ function collectSettings(){
   const gh = val('stGhToken');
   if(ghTokenClear && !gh) body.github_token = null;    // rensa
   else if(gh) body.github_token = gh;                  // ny token (annars orörd)
+  const hft = val('stHfToken');
+  if(hfTokenClear && !hft) body.hf_token = null;       // rensa
+  else if(hft) body.hf_token = hft;                    // ny token (annars orörd)
   return body;
 }
 async function saveSettings(){
@@ -2985,6 +3232,7 @@ async function saveSettings(){
     const memRow=document.getElementById('csMemoryRow'); if(memRow) memRow.style.display = cfg.memory?'flex':'none';
     const memTools=document.getElementById('csMemoryTools'); if(memTools) memTools.style.display = cfg.memory?'block':'none';
     updateCodeView();
+    updateHfView();
     loadSettingsForm();
   }catch(e){ toast('Kunde inte spara: '+e.message, true); }
 }
@@ -3785,6 +4033,8 @@ class Handler(BaseHTTPRequestHandler):
                     "code_ready": code_toggle_on(),   # vyn funkar (skisslage utan arbetsyta)
                     "code_ws": code_enabled(),        # arbetsyta finns → läsa/spara/git/köra
                     "code_run": code_run_enabled(),
+                    "hf": hf_enabled(),
+                    "hf_auto": hf_auto_enabled(),
                 })
             if path == "/api/settings":
                 return self._send_json(settings_public())
@@ -3807,6 +4057,45 @@ class Handler(BaseHTTPRequestHandler):
                 if not code_enabled():
                     return self._send_json({"repo": False})
                 return self._send_json(git_status_info())
+            if path == "/api/hf/search":
+                if not hf_enabled():
+                    return self._send_json({"error": "Hugging Face är avstängt"}, 400)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                query = (q.get("q", [""])[0]).strip()
+                if not query:
+                    return self._send_json({"query": "", "models": []})
+                try:
+                    term, _owner = HF.search_terms(query)
+                    found = HF.search_models(term or query, limit=HF_SEARCH_LIMIT,
+                                             token=hf_token())
+                except Exception as e:
+                    return self._send_json({"error": "Hugging Face svarade inte: %s" % e}, 502)
+                # Rangordna mot det som skrevs, men visa även svagare träffar
+                # (användaren letar själv här – till skillnad från autoreserven).
+                ranked = HF.rank_candidates(query, found, min_similarity=0.0)
+                for m in ranked:
+                    m["pull"] = HF.pull_ref(m["id"])
+                return self._send_json({"query": query, "models": ranked})
+
+            if path == "/api/hf/files":
+                if not hf_enabled():
+                    return self._send_json({"error": "Hugging Face är avstängt"}, 400)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                repo = (q.get("repo", [""])[0]).strip()
+                if not HF.valid_repo_id(repo):
+                    return self._send_json({"error": "ogiltigt repo (väntar ägare/namn)"}, 400)
+                try:
+                    quants = HF.group_quants(HF.list_gguf_files(repo, token=hf_token()))
+                except Exception as e:
+                    return self._send_json({"error": "Hugging Face svarade inte: %s" % e}, 502)
+                best = HF.pick_quant(quants)
+                for item in quants:
+                    item["pull"] = HF.pull_ref(repo, item["quant"])
+                return self._send_json({
+                    "repo": repo, "url": HF.repo_url(repo), "quants": quants,
+                    "default": best["quant"] if best else None,
+                })
+
             if path == "/api/system":
                 try:
                     return self._send_json(gather_system())
@@ -4139,7 +4428,122 @@ class Handler(BaseHTTPRequestHandler):
         self._emit(done2 or {"done": True})
 
     def _stream_pull(self, name):
-        return self._proxy_stream("/api/pull", {"name": name, "stream": True})
+        """Installera en modell och strömma förloppet som NDJSON.
+
+        Först provas Ollamas eget bibliotek. Saknas modellen där (och Hugging
+        Face-reserven är påslagen) söker vi efter en GGUF-version på Hugging
+        Face och fortsätter nedladdningen därifrån – i samma ström, så UI:t
+        bara ser en enda nedladdning som byter källa.
+        """
+        if HF is not None:
+            name = HF.normalize_name(name) or name
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        ok, err = self._pull_once(name)
+        if ok or err is None:
+            return                     # klart, eller så avbröt webbläsaren
+        # Redan ett Hugging Face-namn, HF av, eller ett fel som inte betyder
+        # "finns inte" (nätverk, disk fullt, …) → visa Ollamas fel som det är.
+        if not hf_enabled() or HF.is_hf_ref(name) or not HF.is_missing_model_error(err):
+            return self._emit({"error": err})
+
+        self._emit({"status": 'Hittades inte i Ollamas bibliotek – söker efter "%s" '
+                              'på Hugging Face…' % name})
+        try:
+            term, _owner = HF.search_terms(name)
+            found = HF.search_models(term or name, limit=HF_FALLBACK_LIMIT, token=hf_token())
+        except Exception as e:
+            return self._emit({"error": "%s\nSökningen på Hugging Face misslyckades: %s"
+                                        % (err, e)})
+        ranked = HF.rank_candidates(name, found)
+        if not ranked:
+            return self._emit({"error": '"%s" finns varken i Ollamas bibliotek eller som '
+                                        'GGUF-modell på Hugging Face.' % name})
+
+        best = ranked[0]
+        try:
+            ref, quant, quants = HF.resolve(best["id"], token=hf_token())
+        except Exception as e:
+            return self._emit({"error": "Kunde inte läsa filerna i %s på Hugging Face: %s"
+                                        % (best["id"], e)})
+        if not quants:
+            return self._emit({"error": "%s på Hugging Face innehåller inga GGUF-filer "
+                                        "(Ollama kan bara läsa GGUF)." % best["id"]})
+
+        alternatives = [{"id": m["id"], "pull": HF.pull_ref(m["id"]),
+                         "downloads": m.get("downloads", 0), "gated": m.get("gated", False),
+                         "url": m.get("url", "")} for m in ranked[1:5]]
+        self._emit({"hf": {
+            "repo": best["id"], "pull": ref, "url": best.get("url", ""),
+            "quant": quant["quant"] if quant else None,
+            "size": quant["size"] if quant else 0,
+            "downloads": best.get("downloads", 0), "gated": best.get("gated", False),
+            "auto": hf_auto_enabled(), "alternatives": alternatives,
+        }})
+        if not hf_auto_enabled():
+            return self._emit({"status": "Automatisk nedladdning från Hugging Face är "
+                                         "avstängd – välj själv i listan ovan."})
+        if best.get("gated"):
+            return self._emit({"error": "%s kräver godkännande på Hugging Face (gated) och "
+                                        "kan inte hämtas automatiskt. Se länken ovan."
+                                        % best["id"]})
+
+        self._emit({"status": "Hittade %s på Hugging Face – hämtar %s"
+                              % (best["id"], quant["quant"] if quant else "GGUF")})
+        ok2, err2 = self._pull_once(ref)
+        if not ok2 and err2 is not None:
+            self._emit({"error": "Hugging Face-nedladdningen misslyckades: %s" % err2})
+
+    def _pull_once(self, name):
+        """Kör ETT pull-försök mot Ollama och vidarebefordra raderna.
+
+        Returnerar (lyckades, felmeddelande). Felraden skickas medvetet INTE
+        vidare till webbläsaren – anroparen kan vilja försöka igen mot en annan
+        källa först. `None` som fel betyder "webbläsaren avbröt".
+        """
+        try:
+            body = json.dumps({"name": name, "stream": True}).encode()
+            req = urllib.request.Request(PRIMARY["url"] + "/api/pull", data=body,
+                                         method="POST",
+                                         headers={"Content-Type": "application/json"})
+            upstream = urllib.request.urlopen(req, timeout=120)
+        except urllib.error.HTTPError as e:
+            return False, _pull_error_text(e)
+        except Exception as e:
+            return False, str(e)
+
+        success, error = False, None
+        try:
+            for raw in upstream:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", errors="replace"))
+                except Exception:
+                    msg = None
+                if isinstance(msg, dict):
+                    if msg.get("error"):
+                        error = str(msg["error"])
+                        continue                     # hålls tillbaka – kan bli HF-reserv
+                    if msg.get("status") == "success":
+                        success = True
+                self.wfile.write(line + b"\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return False, None                       # webbläsaren avbröt
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+        if not success and not error:
+            error = "Nedladdningen slutfördes inte."
+        return success, error
 
     # ---- Kodassistent: agent-loop (läs-verktyg + föreslå diffar) ----------
     def _run_agent(self, model, messages, base):
