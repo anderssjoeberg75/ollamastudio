@@ -472,6 +472,88 @@ class TestPullFallback(_DBTest):
         self.assertEqual(data["quants"][1]["pull"], "hf.co/bartowski/Viking-7B-GGUF:Q8_0")
 
 
+class TestModelSearch(_DBTest):
+    """Ett sökfält som täcker både Ollamas bibliotek och Hugging Face."""
+
+    LIBRARY_HTML = """
+    <ul>
+      <li><a href="/library/qwen3"><h2>qwen3</h2>
+        <p>Qwen3 is the latest generation of large language models.</p>
+        <div><span>0.6b</span><span>1.7b</span><span>8b</span></div>
+        <p><span>10.2M</span> Pulls <span>72</span> Tags Updated 3 weeks ago</p></a></li>
+      <li><a href="/library/qwen2.5-coder"><h2>qwen2.5-coder</h2>
+        <p>The latest series of Code-Specific Qwen models.</p>
+        <div><span>0.5b</span><span>7b</span></div></a></li>
+    </ul>"""
+
+    def test_parse_library_page(self):
+        found = w.parse_ollama_library(self.LIBRARY_HTML)
+        self.assertEqual([m["pull"] for m in found], ["qwen3", "qwen2.5-coder"])
+        self.assertEqual(found[0]["sizes"], ["0.6b", "1.7b", "8b"])   # inte "10.2m" (Pulls)
+        self.assertIn("Qwen3 is the latest", found[0]["desc"])
+        self.assertEqual(found[0]["url"], "https://ollama.com/library/qwen3")
+        self.assertEqual(found[0]["source"], "ollama")
+
+    def test_parse_library_is_tolerant(self):
+        for html in ("", None, "<html><body>ingen modell här</body></html>"):
+            self.assertEqual(w.parse_ollama_library(html), [])
+        # Bara länkar, ingen annan markup → namnen ska ändå komma med
+        bare = w.parse_ollama_library('<a href="/library/mistral">x</a>')
+        self.assertEqual(bare[0]["pull"], "mistral")
+
+    def test_parse_library_dedups_and_limits(self):
+        html = '<a href="/library/a"></a>' * 3 + "".join(
+            '<a href="/library/m%d"></a>' % i for i in range(30))
+        found = w.parse_ollama_library(html, limit=5)
+        self.assertEqual(len(found), 5)
+        self.assertEqual(found[0]["pull"], "a")
+
+    def test_catalog_matches(self):
+        self.assertEqual([m["pull"] for m in w.catalog_matches("qwen")],
+                         ["qwen2.5:3b", "qwen2.5"])
+        self.assertTrue(all(m["source"] == "ollama" for m in w.catalog_matches("qwen")))
+        self.assertEqual(w.catalog_matches(""), [])
+        self.assertEqual(w.catalog_matches("finns-inte-alls"), [])
+        # matchar även beskrivning och tagg, inte bara namnet
+        self.assertTrue(w.catalog_matches("embeddings"))
+
+    def test_model_search_merges_sources_without_duplicates(self):
+        old_lib, old_hf = w.ollama_library_search, w.HF.search_models
+        w.ollama_library_search = lambda q, limit=20, timeout=8: (
+            w.parse_ollama_library(self.LIBRARY_HTML, limit)
+            + [{"pull": "qwen2.5", "name": "qwen2.5", "desc": "", "sizes": [],
+                "source": "ollama", "url": ""}])          # dubblett mot katalogen
+        w.HF.search_models = lambda q, limit=8, token=None, timeout=12: w.HF.parse_search(
+            [{"id": "bartowski/Qwen3-8B-GGUF", "downloads": 5000, "likes": 20}])
+        try:
+            result = w.model_search("qwen")
+            names = [m["pull"] for m in result["library"]]
+            self.assertEqual(names.count("qwen2.5"), 1)    # katalogposten vinner
+            self.assertEqual(names[:2], ["qwen2.5:3b", "qwen2.5"])   # katalogen först
+            self.assertIn("qwen3", names)
+            self.assertEqual(result["hf"][0]["pull"], "hf.co/bartowski/Qwen3-8B-GGUF")
+            self.assertEqual(result["hf"][0]["source"], "hf")
+        finally:
+            w.ollama_library_search, w.HF.search_models = old_lib, old_hf
+
+    def test_model_search_survives_dead_network(self):
+        old_lib, old_hf = w.ollama_library_search, w.HF.search_models
+        w.ollama_library_search = lambda *a, **k: []        # som vid nätverksfel
+        def boom(*a, **k):
+            raise OSError("nätet nere")
+        w.HF.search_models = boom
+        try:
+            result = w.model_search("qwen")                 # ska inte kasta
+            self.assertEqual([m["pull"] for m in result["library"]],
+                             ["qwen2.5:3b", "qwen2.5"])     # inbyggda katalogen räcker
+            self.assertEqual(result["hf"], [])
+        finally:
+            w.ollama_library_search, w.HF.search_models = old_lib, old_hf
+
+    def test_empty_query(self):
+        self.assertEqual(w.model_search("  "), {"query": "", "library": [], "hf": []})
+
+
 class TestTraining(_DBTest):
     """AI-träningen: inställningar, path-jail, jobbkörning och endpoints.
 

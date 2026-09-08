@@ -47,18 +47,20 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 
 - **Mina modeller** – se alla installerade modeller (storlek, parametrar, kvantisering,
   datum) och avinstallera dem med en knapp.
-- **Upptäck / Installera** – en kurerad lista över populära modeller som du installerar
-  direkt, samt ett fält där du kan skriva vilket modellnamn som helst från
-  [ollama.com/library](https://ollama.com/library).
+- **Upptäck / Installera** – **ett sökfält som täcker allt**: skriv t.ex. `qwen` så visas
+  träffar från både [Ollamas bibliotek](https://ollama.com/library) och
+  [Hugging Face](https://huggingface.co) i samma lista, med källa, storlekar och en
+  installationsknapp per modell. Tomt fält visar den kurerade listan över populära modeller.
+  Skriver du ett exakt namn laddar **↓ Ladda ner** hem det direkt.
 - **🎓 AI-träning** – en egen flik (bredvid Chatta och Codex) där du finjusterar en modell på
   dina egna exempel: skriv frågor och svar i en tabell, välj basmodell och hårdvaruprofil,
   följ förloppet med progressbar och loss-kurva – och lägg in den färdiga modellen i Ollama
   med ett klick. Instruktioner finns inbyggda i fliken. Se
   [AI-träning](#-ai-träning--finjustera-en-egen-modell).
-- **🤗 Hugging Face** – finns inte modellnamnet i Ollamas bibliotek söker appen automatiskt
-  vidare efter en GGUF-version på [Hugging Face](https://huggingface.co) och laddar ner den
-  istället. Det finns också ett eget sökfält där du bläddrar bland GGUF-modeller och väljer
-  kvantisering själv (Q4_K_M, Q8_0 …). Se [Hugging Face-modeller](#-hugging-face-modeller).
+- **🤗 Hugging Face** – GGUF-modeller därifrån visas i samma sökträfflista, med
+  **Varianter** för att välja kvantisering själv (Q4_K_M, Q8_0 …). Skriver du ett namn som
+  inte finns i Ollamas bibliotek söks det dessutom upp automatiskt och laddas ner därifrån.
+  Se [Hugging Face-modeller](#-hugging-face-modeller).
 - **Nedladdning i realtid** – progressbar med procent, storlek och status medan modellen
   laddas ner. Går att avbryta.
 - **Aktiv modell** – se vilken modell som just nu är inläst i minnet ("körs nu"), inklusive
@@ -88,7 +90,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   en **kod-chatt** (skriver kod du kopierar, ingen GitHub eller mapp krävs). Du kan också öppna en
   **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser/skriver Codex filerna
   på **din egen dator**, även om servern kör på en annan maskin. Med en arbetsyta på servern blir
-  det en **💻 Codex**-vy där en lokal modell
+  det en **Codex**-vy där en lokal modell
   (t.ex. `qwen2.5-coder`) läser en projektmapp och **föreslår filändringar som diffar** – du
   **godkänner varje ändring** innan något skrivs. Kan även arbeta mot **git/GitHub**: skapa
   gren, committa, pusha och **öppna pull request** (kräver en GitHub-token), och **köra
@@ -184,7 +186,7 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
-| `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: sökfältet i "Upptäck / Installera" och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
+| `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: träffar i sökningen och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
 | `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
 | `HF_TOKEN` | *(tomt)* | Valfri Hugging Face-token. Används **bara för sökningen** (högre kvot, egna privata repon) – nedladdningen gör Ollama själv. Kan också sättas i ⚙ Inställningar. |
 | `OLLAMA_STUDIO_TRAIN` | `1` (på) | AI-träningsfliken (kräver att `soup_train.py` finns bredvid appen). Sätt `0` för att stänga av. |
@@ -328,10 +330,10 @@ vänster.
 
 1. Klicka på **Upptäck / Installera**.
 2. Antingen:
-   - klicka **↓ Installera** på en modell i listan, **eller**
-   - skriv ett exakt modellnamn (t.ex. `llama3.2` eller `qwen2.5:7b`) i fältet högst upp
-     och klicka **↓ Ladda ner**, **eller**
-   - sök efter modellen på **🤗 Hugging Face** och välj variant där.
+   - **sök** i fältet högst upp (t.ex. `qwen`, `llama`, `kod`) och klicka **↓ Installera**
+     på en träff – listan blandar Ollamas bibliotek och Hugging Face, **eller**
+   - skriv ett **exakt** modellnamn (t.ex. `llama3.2`, `qwen2.5:7b`, `hf.co/ägare/repo:Q4_K_M`
+     eller en Hugging Face-länk) och klicka **↓ Ladda ner**.
 3. En panel längst ner visar nedladdningen i realtid. Du kan **Avbryta** när som helst.
 4. När den är klar hittar du modellen under **Mina modeller**.
 
@@ -460,8 +462,9 @@ Vill du hellre välja själv varje gång: stäng av automatiken med `OLLAMA_STUD
 
 ### 2. Sök och välj variant
 
-Rutan **🤗 Sök på Hugging Face** listar GGUF-repon med antal nedladdningar. Klicka
-**Varianter** för att se alla kvantiseringar med storlek, och installera den du vill ha:
+Sök i fältet under **Upptäck / Installera**. Träffarna från Hugging Face visas i samma lista
+som Ollamas egna, märkta med **Hugging Face** och antal nedladdningar. Klicka **Varianter**
+för att se alla kvantiseringar med storlek, och installera den du vill ha:
 
 | Kvantisering | Ungefärlig storlek (7–8B) | När |
 | --- | --- | --- |
@@ -497,7 +500,7 @@ hf.co/bartowski/Qwen3-8B-GGUF:Q8_0                    →  används som det är
 
 ## 🎓 AI-träning – finjustera en egen modell
 
-Fliken **🎓 AI-träning** låter dig ta en färdig modell och lära den *dina* exempel – en
+Fliken **AI-träning** låter dig ta en färdig modell och lära den *dina* exempel – en
 kundtjänstbot som kan era rutiner, en assistent som skriver i din ton, en modell som svarar
 i ett visst format. Allt sker i webbläsaren: du skriver exempel i en tabell, väljer modell och
 hårdvara med knappar, ser förloppet live och lägger in resultatet i Ollama med ett klick.
@@ -517,7 +520,7 @@ formuläret, konfigurationen, förloppet och installationen i Ollama.
    ```
 
    Paketet drar in PyTorch och kringpaket (flera GB), så första installationen tar några minuter.
-3. **Öppna 🎓 AI-träning** och följ de fyra stegen i vyn.
+3. **Öppna AI-träning** och följ de fyra stegen i vyn.
 
 ### De fyra stegen
 
@@ -619,10 +622,14 @@ Båda varianterna pratar med Ollamas HTTP-API:
 | Lista "Mina modeller" | `GET /api/tags` |
 | Aktiv modell ("körs nu") | `GET /api/ps` |
 | Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
-| Hugging Face-sök | `GET https://huggingface.co/api/models` (utanför Ollama) |
+| Modellsök | `GET https://ollama.com/search` + `GET https://huggingface.co/api/models` (utanför Ollamas API) |
 | AI-träning | `soup train` / `soup export --deploy ollama` som underprocess (utanför Ollama) |
 | Avinstallera | `DELETE /api/delete` |
 | Chatta (webbversionen) | `POST /api/chat` (strömmar svaret) |
+
+Sökfältet frågar två källor parallellt: Ollamas biblioteksida (`ollama.com/search`, vars
+HTML tolkas – det finns inget publikt API) och Hugging Faces API. Går någon av dem inte att
+nå visas resten av träffarna ändå, med den inbyggda katalogen i `catalog.py` som botten.
 
 AI-träningen startar `soup` som en vanlig process på servern och läser dess utdata tecken
 för tecken (progressbarer skriver `\r` utan radbrytning). Raderna tolkas till procent, steg,
