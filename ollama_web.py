@@ -1456,6 +1456,148 @@ except Exception:
 
 
 # --------------------------------------------------------------------------
+# Sök i Ollamas modellbibliotek (ollama.com). Det finns inget publikt API, så
+# vi hämtar sökträffsidan och plockar ut /library/<namn>-länkarna. Går det inte
+# (ingen internet, ändrad sida) faller sökningen tillbaka på den inbyggda
+# katalogen i catalog.py – UI:t fungerar likadant, med färre träffar.
+# --------------------------------------------------------------------------
+OLLAMA_LIBRARY_URL = "https://ollama.com/search"
+LIBRARY_CACHE_TTL = 300          # sekunder – sökningen körs medan man skriver
+_library_cache = {}              # query -> (tidpunkt, träffar)
+_library_lock = threading.Lock()
+
+_LIB_LINK_RE = re.compile(r'href="/library/([A-Za-z0-9][\w.\-]*)"')
+_LIB_DESC_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.DOTALL)
+_LIB_SIZE_RE = re.compile(r">\s*(\d+(?:\.\d+)?[bm])\s*<", re.IGNORECASE)
+# "10.2M Pulls", "72 Tags", "Updated 3 weeks ago" – statistik, inte storlekar
+_LIB_STATS_RE = re.compile(r"[\d.]+\s*[KMB]?\s*(?:Pulls?|Tags?|Downloads?)|Updated[^<]*",
+                           re.IGNORECASE)
+_LIB_TAG_STRIP_RE = re.compile(r"<[^>]+>")
+
+
+def parse_ollama_library(html, limit=20):
+    """Plocka ut modeller ur sökträffsidan på ollama.com.
+
+    Vi letar efter länkar till /library/<namn> och läser blocket som följer:
+    beskrivningen ur första <p> och storlekstaggarna (t.ex. "8b"). Medvetet
+    tolerant – ändras sidans markup får vi i värsta fall bara namnen.
+    """
+    out, seen = [], set()
+    html = html or ""
+    for match in _LIB_LINK_RE.finditer(html):
+        name = match.group(1)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        block = html[match.end():match.end() + 1500]
+        block = block.split('href="/library/')[0]        # stanna vid nästa modell
+        # Nedladdningssiffror ("10.2M Pulls") ser ut som storlekar – hitta dem i
+        # den taggfria texten och håll dem utanför storlekslistan.
+        plain = " ".join(_LIB_TAG_STRIP_RE.sub(" ", block).split())
+        stats = {m.lower() for m in re.findall(r"([\d.]+\s*[KMB]?)\s*(?:Pulls?|Tags?|Downloads?)",
+                                               plain, re.IGNORECASE)}
+        block = _LIB_STATS_RE.sub(" ", block)            # bort med pulls/tags/datum
+        sizes = []
+        for size in _LIB_SIZE_RE.findall(block):
+            size = size.lower()
+            if size in stats or size.rstrip("bm") in {t.rstrip("kmb ") for t in stats}:
+                continue
+            if size not in sizes and len(sizes) < 8:
+                sizes.append(size)
+        desc = ""
+        for raw in _LIB_DESC_RE.findall(block):
+            text = " ".join(_strip_html(_LIB_TAG_STRIP_RE.sub(" ", raw)).split())
+            if len(text) > len(desc):
+                desc = text
+        out.append({"pull": name, "name": name, "desc": desc[:200], "sizes": sizes,
+                    "source": "ollama",
+                    "url": "https://ollama.com/library/" + name})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def ollama_library_search(query, limit=20, timeout=8):
+    """Sök i Ollamas bibliotek. Returnerar [] vid nätverksfel (aldrig undantag)."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    now = time.time()
+    with _library_lock:
+        hit = _library_cache.get(query.lower())
+        if hit and now - hit[0] < LIBRARY_CACHE_TTL:
+            return hit[1]
+    url = OLLAMA_LIBRARY_URL + "?" + urllib.parse.urlencode({"q": query})
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "OllamaStudio/1.0", "Accept": "text/html"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read(600000).decode("utf-8", errors="replace")
+        found = parse_ollama_library(html, limit)
+    except Exception:
+        found = []
+    with _library_lock:
+        _library_cache[query.lower()] = (now, found)
+        if len(_library_cache) > 100:                     # håll cachen liten
+            _library_cache.clear()
+    return found
+
+
+def catalog_matches(query, limit=20):
+    """Träffar ur den inbyggda katalogen (fungerar utan internet)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    out = []
+    for item in CATALOG:
+        haystack = " ".join([item.get("pull", ""), item.get("name", ""),
+                             item.get("tag", ""), item.get("desc", "")]).lower()
+        if q in haystack:
+            entry = dict(item)
+            entry["source"] = "ollama"
+            out.append(entry)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def model_search(query, limit=20):
+    """Sök i både Ollamas bibliotek och på Hugging Face – parallellt.
+
+    Katalogträffar läggs först (de har beskrivning och storlek), sedan övriga
+    biblioteksträffar och till sist GGUF-modeller från Hugging Face.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"query": "", "library": [], "hf": []}
+
+    def _hf():
+        if not hf_enabled():
+            return []
+        try:
+            term, _owner = HF.search_terms(query)
+            found = HF.search_models(term or query, limit=limit, token=hf_token())
+            ranked = HF.rank_candidates(query, found, min_similarity=0.0)
+            for m in ranked:
+                m["pull"] = HF.pull_ref(m["id"])
+                m["source"] = "hf"
+            return ranked
+        except Exception:
+            return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        lib_future = pool.submit(ollama_library_search, query, limit)
+        hf_future = pool.submit(_hf)
+        library = lib_future.result()
+        hf_hits = hf_future.result()
+
+    curated = catalog_matches(query, limit)
+    known = {c["pull"] for c in curated}
+    merged = curated + [m for m in library if m["pull"] not in known]
+    return {"query": query, "library": merged[:limit], "hf": hf_hits[:limit]}
+
+
+# --------------------------------------------------------------------------
 # AI-träning – valfritt tillägg (soup_train.py bredvid appen). Modulen bygger
 # konfig och tolkar loggar; själva träningen görs av Soup (soup-cli) som körs
 # som en vanlig process här nedanför. Saknas modulen döljs fliken.
@@ -2195,8 +2337,8 @@ PAGE = r"""<!doctype html>
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
-      <a id="nav-code" onclick="showView('code')"><span class="dot">●</span><span class="label">💻 Codex</span></a>
-      <a id="nav-train" onclick="showView('train')"><span class="dot">●</span><span class="label">🎓 AI-träning</span></a>
+      <a id="nav-code" onclick="showView('code')"><span class="dot">●</span><span class="label">Codex</span></a>
+      <a id="nav-train" onclick="showView('train')"><span class="dot">●</span><span class="label">AI-träning</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
       <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
     </div>
@@ -2217,27 +2359,16 @@ PAGE = r"""<!doctype html>
     <div id="view-discover" class="view hidden">
       <div class="install-box">
         <h2>Installera valfri modell</h2>
-        <p id="customHint">Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".</p>
+        <p id="customHint">Sök på modellnamn – träffar visas nedan. Skriver du ett exakt
+          namn kan du ladda ner direkt med knappen.</p>
         <div class="install-row">
-          <input id="customName" placeholder="modellnamn…" onkeydown="if(event.key==='Enter')pullCustom()">
+          <input id="customName" placeholder="sök modell, t.ex. qwen, llama, mistral…"
+                 oninput="onSearchInput()" onkeydown="if(event.key==='Enter')pullCustom()">
           <button class="btn accent" onclick="pullCustom()">↓ Ladda ner</button>
         </div>
+        <div class="hf-hint" id="searchHint"></div>
       </div>
 
-      <div class="install-box" id="hfBox" style="display:none">
-        <h2>🤗 Sök på Hugging Face</h2>
-        <p>Tusentals GGUF-modeller utöver Ollamas bibliotek. Sök, välj kvantisering
-          (mindre = snabbare och mindre minne) och installera.</p>
-        <div class="install-row">
-          <input id="hfQuery" placeholder="t.ex. qwen3, llama-3.1-8b, viking-7b…"
-                 onkeydown="if(event.key==='Enter')hfSearch()">
-          <button class="btn accent" onclick="hfSearch()">Sök</button>
-        </div>
-        <div class="hf-hint" id="hfHint"></div>
-        <div id="hfResults"></div>
-      </div>
-
-      <div class="section-title">Populära modeller</div>
       <div id="catalogList"></div>
       <div class="dl" id="dlPanel">
         <div class="top">
@@ -3078,26 +3209,119 @@ function maxGpuVramBytes(){
   for(const g of gpus){ if(g.mem_total_mb) max = Math.max(max, g.mem_total_mb*1024*1024); }
   return max;
 }
-function renderCatalog(){
+function fitLabel(sizeStr){
+  // "≈ passar din GPU" om den ungefärliga storleken ryms i största GPU:n
   const maxV = maxGpuVramBytes();
-  document.getElementById('catalogList').innerHTML = CATALOG.map(it=>{
-    const done = installed.has(it.pull) || installed.has(it.pull.split(':')[0]+':latest');
-    const right = done ? '<span class="installed">✓ Installerad</span>'
-      : '<button class="btn accent" onclick="startPull(\''+it.pull+'\')">↓ Installera</button>';
-    let fit = '';
-    const need = estBytesFromSizeStr(it.size) * 1.15;
-    if(maxV > 0 && need > 0){
-      fit = need <= maxV
-        ? '  ·  <span style="color:var(--green)">≈ passar din GPU</span>'
-        : '  ·  <span style="color:var(--amber)">≈ kan vara för stor för din GPU</span>';
-    }
-    return '<div class="card"><div class="top"><div>'
-      + '<h3>'+esc(it.name)+'<span class="chip">'+esc(it.tag)+'</span>'
-      + '<span class="pull-name">'+esc(it.pull)+'</span></h3>'
-      + '<div class="desc">'+esc(it.desc)+'</div>'
-      + '<div class="meta">Storlek: '+esc(it.size)+fit+'</div></div>'
-      + '<div>'+right+'</div></div></div>';
-  }).join('');
+  const need = estBytesFromSizeStr(sizeStr) * 1.15;
+  if(!(maxV > 0 && need > 0)) return '';
+  return need <= maxV
+    ? '  ·  <span style="color:var(--green)">≈ passar din GPU</span>'
+    : '  ·  <span style="color:var(--amber)">≈ kan vara för stor för din GPU</span>';
+}
+function isInstalled(pull){
+  return installed.has(pull) || installed.has(pull.split(':')[0]+':latest');
+}
+function sourceChip(source){
+  return source === 'hf'
+    ? '<span class="chip" style="background:#2a2338;color:var(--accent-hov)">Hugging Face</span>'
+    : '<span class="chip">Ollama</span>';
+}
+
+/* Ett kort per träff – samma utseende oavsett källa (katalog, bibliotek, HF). */
+function modelCard(it, index){
+  const done = isInstalled(it.pull);
+  const buttons = [];
+  if(it.source === 'hf')
+    buttons.push('<button class="btn ghost small" onclick="hfToggleQuants('+index+')">Varianter</button>');
+  buttons.push(done
+    ? '<span class="installed">✓ Installerad</span>'
+    : '<button class="btn accent" onclick="startPull(\''+esc(it.pull)+'\')">↓ Installera</button>');
+
+  const bits = [];
+  if(it.size) bits.push('Storlek: '+esc(it.size)+fitLabel(it.size));
+  if(it.sizes && it.sizes.length) bits.push('Varianter: '+esc(it.sizes.join(', ')));
+  if(it.downloads) bits.push(it.downloads.toLocaleString('sv-SE')+' nedladdningar');
+  if(it.likes) bits.push('♥ '+it.likes);
+
+  const title = it.url
+    ? '<a href="'+esc(it.url)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">'
+      + esc(it.name || it.pull) + '</a>'
+    : esc(it.name || it.pull);
+
+  return '<div class="card"><div class="top"><div>'
+    // Källchippet behövs bara när listan blandar källor, dvs. vid sökning
+    + '<h3>'+title+(searchResults ? sourceChip(it.source) : '')
+    + (it.tag ? '<span class="chip">'+esc(it.tag)+'</span>' : '')
+    + '<span class="pull-name">'+esc(it.pull)+'</span></h3>'
+    + (it.desc ? '<div class="desc">'+esc(it.desc)+'</div>' : '')
+    + (it.gated ? '<div class="hf-gated">⚠ Kräver godkännande på Hugging Face (gated) – '
+        + 'Ollama kan inte hämta den utan det.</div>' : '')
+    + (bits.length ? '<div class="meta">'+bits.join('  ·  ')+'</div>' : '')
+    + '</div><div style="display:flex;gap:8px;align-items:center">'+buttons.join('')+'</div></div>'
+    + (it.source === 'hf' ? '<div class="hf-quants" id="hfq'+index+'" style="display:none"></div>' : '')
+    + '</div>';
+}
+
+/* Utan sökord visas den kurerade listan; med sökord visas träffarna. */
+let searchResults = null;      // {library:[], hf:[]} – null = visa katalogen
+let hfModels = [];             // HF-träffarna i listan just nu (för "Varianter")
+function renderCatalog(){
+  const list = document.getElementById('catalogList');
+  if(!searchResults){
+    hfModels = [];
+    list.innerHTML = CATALOG.map(it=>modelCard(Object.assign({source:'ollama'}, it), -1)).join('');
+    return;
+  }
+  const lib = searchResults.library || [];
+  hfModels = searchResults.hf || [];
+  if(!lib.length && !hfModels.length){
+    list.innerHTML = '<div class="empty">Inga modeller matchade sökningen. Prova ett kortare '
+      + 'ord, eller skriv ett exakt namn och klicka "↓ Ladda ner".</div>';
+    return;
+  }
+  list.innerHTML = lib.map(it=>modelCard(it, -1)).join('')
+                 + hfModels.map((it,i)=>modelCard(it, i)).join('');
+}
+
+/* ---- Sökning: ett fält, båda källorna ---- */
+let searchTimer = null, searchSeq = 0;
+function onSearchInput(){
+  clearTimeout(searchTimer);
+  const q = document.getElementById('customName').value.trim();
+  if(!q){                                    // tomt fält → tillbaka till listan
+    searchResults = null;
+    document.getElementById('searchHint').textContent = '';
+    renderCatalog();
+    return;
+  }
+  searchTimer = setTimeout(()=>runSearch(q), 350);    // vänta ut skrivandet
+}
+async function runSearch(q){
+  const hint = document.getElementById('searchHint');
+  const seq = ++searchSeq;
+  // Katalogträffarna finns redan i webbläsaren – visa dem direkt, fyll på sedan.
+  const needle = q.toLowerCase();
+  searchResults = {library: CATALOG.filter(it=>
+      (it.pull+' '+it.name+' '+it.tag+' '+it.desc).toLowerCase().includes(needle))
+      .map(it=>Object.assign({source:'ollama'}, it)), hf: []};
+  renderCatalog();
+  hint.textContent = 'Söker i Ollamas bibliotek och på Hugging Face…';
+  try{
+    const r = await api('/api/search?q='+encodeURIComponent(q), {headers: headers(false)});
+    const d = await r.json();
+    if(seq !== searchSeq) return;                     // ett nyare sök hann före
+    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+    searchResults = d;
+    const lib = (d.library||[]).length, hf = (d.hf||[]).length;
+    hint.textContent = (lib+hf)
+      ? ((lib+hf)+' träffar · '+lib+' i Ollamas bibliotek, '+hf+' på Hugging Face')
+      : 'Inga träffar.';
+    renderCatalog();
+  }catch(e){
+    if(seq !== searchSeq) return;
+    hint.textContent = 'Kunde inte söka på nätet ('+e.message
+      + ') – visar träffar ur den inbyggda listan.';
+  }
 }
 
 /* ======================= AI-träning (Soup) ======================= */
@@ -3554,45 +3778,8 @@ function chatWithModel(name){
   if(match){ sel.value = match.value; saveChatModel(); }
 }
 
-/* ---- Hugging Face-sök (GGUF-modeller utanför Ollamas bibliotek) ---- */
-let hfModels = [];          // senaste sökträffar
-let hfQuants = {};          // repo -> kvantiseringar (hämtas vid utfällning)
-async function hfSearch(){
-  const q = (document.getElementById('hfQuery').value||'').trim();
-  const hint = document.getElementById('hfHint');
-  const list = document.getElementById('hfResults');
-  if(!q){ hint.textContent = 'Skriv något att söka efter.'; list.innerHTML=''; return; }
-  hint.textContent = 'Söker på Hugging Face…'; list.innerHTML='';
-  try{
-    const r = await api('/api/hf/search?q='+encodeURIComponent(q), {headers: headers(false)});
-    const d = await r.json();
-    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
-    hfModels = d.models || [];
-    hint.textContent = hfModels.length
-      ? (hfModels.length+' träffar · endast GGUF-modeller (det Ollama kan läsa)')
-      : 'Inga GGUF-modeller matchade sökningen.';
-    renderHfResults();
-  }catch(e){ hint.textContent = 'Sökningen misslyckades: '+e.message; }
-}
-function renderHfResults(){
-  document.getElementById('hfResults').innerHTML = hfModels.map((m,i)=>{
-    const dl = m.downloads ? (m.downloads.toLocaleString('sv-SE')+' nedladdningar') : '';
-    const likes = m.likes ? ('♥ '+m.likes) : '';
-    const meta = [dl, likes].filter(Boolean).join('  ·  ');
-    const gated = m.gated
-      ? '<div class="hf-gated">⚠ Kräver godkännande på Hugging Face (gated) – Ollama kan inte hämta den utan det.</div>'
-      : '';
-    return '<div class="hf-card"><div class="hf-top">'
-      + '<h3><a href="'+esc(m.url)+'" target="_blank" rel="noopener">'+esc(m.id)+'</a></h3>'
-      + '<div class="right">'
-      + '<button class="btn ghost small" onclick="hfToggleQuants('+i+')">Varianter</button>'
-      + '<button class="btn accent small" onclick="startPull(\''+esc(m.pull)+'\')">↓ Installera</button>'
-      + '</div></div>'
-      + (meta ? '<div class="hf-meta">'+esc(meta)+'</div>' : '')
-      + gated
-      + '<div class="hf-quants" id="hfq'+i+'" style="display:none"></div></div>';
-  }).join('');
-}
+/* ---- Hugging Face: kvantiseringar för ett repo (fälls ut i träfflistan) ---- */
+let hfQuants = {};             // repo -> kvantiseringar (hämtas vid utfällning)
 async function hfToggleQuants(i){
   const m = hfModels[i]; if(!m) return;
   const box = document.getElementById('hfq'+i);
@@ -4224,16 +4411,15 @@ function updateTrainNav(){
   if(nav) nav.style.display = cfg.train_module ? '' : 'none';
 }
 function updateHfView(){
-  const box = document.getElementById('hfBox');
-  if(box) box.style.display = cfg.hf ? 'block' : 'none';
+  // Ett sökfält för allt – texten säger bara vilka källor som är påslagna.
   const hint = document.getElementById('customHint');
-  if(hint){
-    hint.textContent = cfg.hf
-      ? 'Skriv modellnamn från ollama.com/library (t.ex. "llama3.1:8b"). Finns det inte där '
-        + (cfg.hf_auto ? 'söker vi automatiskt vidare på Hugging Face. ' : 'visar vi träffar från Hugging Face. ')
-        + 'Du kan också klistra in en Hugging Face-länk eller skriva "hf.co/ägare/repo:Q4_K_M".'
-      : 'Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".';
-  }
+  if(!hint) return;
+  hint.textContent = cfg.hf
+    ? 'Sök bland modeller i Ollamas bibliotek och på Hugging Face – träffarna visas nedan. '
+      + 'Skriver du ett exakt namn (även "hf.co/ägare/repo:Q4_K_M" eller en Hugging Face-länk) '
+      + 'laddar knappen ner det direkt.'
+    : 'Sök bland modeller i Ollamas bibliotek – träffarna visas nedan. Skriver du ett exakt '
+      + 'namn laddar knappen ner det direkt.';
 }
 function updateCodeView(){
   const off = document.getElementById('codeOff');
@@ -5297,6 +5483,17 @@ class Handler(BaseHTTPRequestHandler):
                 info = TRAIN.inspect_jsonl(text)
                 info["path"] = rel
                 return self._send_json(info)
+
+            if path == "/api/search":
+                # Ett sökfält för allt: Ollamas bibliotek + Hugging Face.
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                query = (q.get("q", [""])[0]).strip()
+                try:
+                    result = model_search(query)
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 502)
+                result["hf_enabled"] = hf_enabled()
+                return self._send_json(result)
 
             if path == "/api/hf/search":
                 if not hf_enabled():
