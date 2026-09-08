@@ -35,6 +35,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - [Installera Ollama (behövs för båda)](#installera-ollama-behövs-för-båda)
 - [Använda appen](#använda-appen)
 - [🤗 Hugging Face-modeller](#-hugging-face-modeller)
+- [🎓 AI-träning – finjustera en egen modell](#-ai-träning--finjustera-en-egen-modell)
 - [Rekommenderade modeller](#rekommenderade-modeller)
 - [Felsökning](#felsökning)
 - [Så fungerar det (teknik)](#så-fungerar-det-teknik)
@@ -49,6 +50,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Upptäck / Installera** – en kurerad lista över populära modeller som du installerar
   direkt, samt ett fält där du kan skriva vilket modellnamn som helst från
   [ollama.com/library](https://ollama.com/library).
+- **🎓 AI-träning** – en egen flik (bredvid Chatta och Codex) där du finjusterar en modell på
+  dina egna exempel: skriv frågor och svar i en tabell, välj basmodell och hårdvaruprofil,
+  följ förloppet med progressbar och loss-kurva – och lägg in den färdiga modellen i Ollama
+  med ett klick. Instruktioner finns inbyggda i fliken. Se
+  [AI-träning](#-ai-träning--finjustera-en-egen-modell).
 - **🤗 Hugging Face** – finns inte modellnamnet i Ollamas bibliotek söker appen automatiskt
   vidare efter en GGUF-version på [Hugging Face](https://huggingface.co) och laddar ner den
   istället. Det finns också ett eget sökfält där du bläddrar bland GGUF-modeller och väljer
@@ -181,6 +187,9 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: sökfältet i "Upptäck / Installera" och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
 | `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
 | `HF_TOKEN` | *(tomt)* | Valfri Hugging Face-token. Används **bara för sökningen** (högre kvot, egna privata repon) – nedladdningen gör Ollama själv. Kan också sättas i ⚙ Inställningar. |
+| `OLLAMA_STUDIO_TRAIN` | `1` (på) | AI-träningsfliken (kräver att `soup_train.py` finns bredvid appen). Sätt `0` för att stänga av. |
+| `OLLAMA_STUDIO_TRAIN_DIR` | `~/ollama-studio-training` | Mappen där träningskonfig, dataset (`data/`) och tränade modeller (`runs/`) hamnar. |
+| `OLLAMA_STUDIO_SOUP_BIN` | *(tomt)* | Sökväg till `soup`-kommandot om det inte ligger i `PATH` (t.ex. i en egen venv). |
 | `OLLAMA_STUDIO_MEM0` | `0` (av) | Sätt `1` för att slå på delat långtidsminne via Mem0. Kräver också `MEM0_API_KEY` (Mem0 Cloud) eller en egen `MEM0_BASE_URL` (självhostad). |
 | `OLLAMA_STUDIO_CODE` | `1` (på) | Codex (💻-vyn). Fliken syns alltid; Codex blir funktionell först när en giltig `OLLAMA_STUDIO_WORKSPACE` är vald. Sätt `0` för att dölja/stänga av. |
 | `OLLAMA_STUDIO_WORKSPACE` | *(tomt)* | Absolut sökväg till projektmappen kodassistenten får läsa/skriva i (allt utanför blockeras). |
@@ -486,6 +495,85 @@ hf.co/bartowski/Qwen3-8B-GGUF:Q8_0                    →  används som det är
 
 ---
 
+## 🎓 AI-träning – finjustera en egen modell
+
+Fliken **🎓 AI-träning** låter dig ta en färdig modell och lära den *dina* exempel – en
+kundtjänstbot som kan era rutiner, en assistent som skriver i din ton, en modell som svarar
+i ett visst format. Allt sker i webbläsaren: du skriver exempel i en tabell, väljer modell och
+hårdvara med knappar, ser förloppet live och lägger in resultatet i Ollama med ett klick.
+
+Själva träningen görs av **[Soup](https://github.com/MakazhanAlpamys/Soup)** (`soup-cli`), ett
+fristående open source-verktyg som installeras separat på servern. Ollama Studio sköter
+formuläret, konfigurationen, förloppet och installationen i Ollama.
+
+### Kom igång
+
+1. **Slå på fliken** under ⚙ Inställningar → AI-träning (den är på som standard).
+2. **Installera Soup.** Fliken visar ett steg 0 med knappen **⬇ Installera Soup** när det
+   saknas – eller kör det själv på servern:
+
+   ```bash
+   pip install "soup-cli[train]"     # kräver Python 3.10–3.12
+   ```
+
+   Paketet drar in PyTorch och kringpaket (flera GB), så första installationen tar några minuter.
+3. **Öppna 🎓 AI-träning** och följ de fyra stegen i vyn.
+
+### De fyra stegen
+
+| Steg | Vad du gör |
+| --- | --- |
+| **1. Träningsdata** | Skriv fråga/svar i tabellen, peka ut en `.jsonl`-fil i träningsmappen, eller klistra in JSONL. Knappen **✨ Skapa exempeldata** lägger in ett litet färdigt dataset så du kan prova hela flödet direkt. Appen visar antal rader, upptäckt format, uppskattat antal tokens och en förhandsvisning – och varnar för trasiga rader. |
+| **2. Modell &amp; metod** | Välj basmodell (öppna modeller utan godkännandekrav är omarkerade, gated är märkta ⚠), vad modellen ska lära sig (SFT / DPO / ORPO) och en **hårdvaruprofil**. Profilen sätter kvantisering, LoRA-storlek och kontextlängd åt dig – från "Bara CPU" till "24 GB+". Reglagen för epoker, kontextlängd, inlärningstakt och LoRA-storlek går att finjustera, och du kan när som helst fälla ut den `soup.yaml` som byggs. |
+| **3. Träna** | **▶ Starta träningen** kör `soup train` på servern. Du får progressbar med procent, steg, loss, epok, förbrukad tid och ETA, en **loss-kurva** som ritas medan det pågår, och hela loggen bakom en knapp. Körningen fortsätter även om du stänger fliken – förloppet finns kvar när du kommer tillbaka. **■ Avbryt** stoppar den. |
+| **4. Använd modellen** | **📦 Lägg in i Ollama** kör `soup export --format gguf --deploy ollama`. Modellen dyker upp under **Mina modeller** som `soup-<ditt-namn>` och kan chattas med direkt. |
+
+### Vad hamnar var?
+
+Allt ligger i träningsmappen (standard `~/ollama-studio-training`, byt med
+`OLLAMA_STUDIO_TRAIN_DIR`):
+
+```
+ollama-studio-training/
+├── soup.yaml            # konfigurationen som byggs av formuläret
+├── data/                # dina dataset (.jsonl) – lägg gärna egna filer här
+└── runs/<ditt-namn>/    # den tränade modellen (adapter, och GGUF efter export)
+```
+
+Du kan alltid köra samma sak från terminalen: `soup train --config soup.yaml`.
+
+### Dataformat
+
+Tabellen sparar formatet `alpaca`. Har du redan data känns dessa igen automatiskt:
+
+```json
+alpaca:   {"instruction": "Vad heter Sveriges huvudstad?", "input": "", "output": "Stockholm."}
+chatml:   {"messages": [{"role": "user", "content": "Hej"}, {"role": "assistant", "content": "Hej!"}]}
+sharegpt: {"conversations": [{"from": "human", "value": "Hej"}, {"from": "gpt", "value": "Hej!"}]}
+dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected": "Vet inte"}
+```
+
+### Hur lång tid tar det?
+
+- 50–200 exempel + en 0.5–1.5B-modell på ett vanligt grafikkort: **några minuter**.
+- Samma data på en 7–8B-modell: **en halvtimme till några timmar**.
+- Bara CPU: **timmar** – välj minsta basmodellen och 1 epok.
+
+### Om något går fel
+
+- **Slut på GPU-minne** – välj en mindre basmodell, kortare kontextlängd eller profilen för
+  mindre GPU (4bit + lagerströmning, där basmodellen matas till GPU:n ett lager i taget).
+- **"Gated repo" / 401** – basmodellen kräver godkännande på Hugging Face. Godkänn där och
+  lägg in en HF-token i ⚙ Inställningar, eller välj en öppen modell.
+- **Soup saknas efter installation** – ligger `soup` i en egen venv? Peka ut den med
+  `OLLAMA_STUDIO_SOUP_BIN` eller fältet i ⚙ Inställningar.
+
+> **Säkerhet:** träning skriver till disk och startar processer på servern. Sätt
+> `OLLAMA_STUDIO_TOKEN` om servern nås av andra än du, eller stäng av fliken med
+> `OLLAMA_STUDIO_TRAIN=0`.
+
+---
+
 ## Rekommenderade modeller
 
 Osäker på var du ska börja? (Storlekar är ungefärliga.)
@@ -532,8 +620,14 @@ Båda varianterna pratar med Ollamas HTTP-API:
 | Aktiv modell ("körs nu") | `GET /api/ps` |
 | Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
 | Hugging Face-sök | `GET https://huggingface.co/api/models` (utanför Ollama) |
+| AI-träning | `soup train` / `soup export --deploy ollama` som underprocess (utanför Ollama) |
 | Avinstallera | `DELETE /api/delete` |
 | Chatta (webbversionen) | `POST /api/chat` (strömmar svaret) |
+
+AI-träningen startar `soup` som en vanlig process på servern och läser dess utdata tecken
+för tecken (progressbarer skriver `\r` utan radbrytning). Raderna tolkas till procent, steg,
+loss och ETA, och webbläsaren hämtar dem med korta anrop till `/api/train/log` – så förloppet
+överlever att du stänger fliken. Modulen `soup_train.py` är valfri: saknas den döljs fliken.
 
 Hugging Face-stödet är ett lager ovanpå `POST /api/pull`: misslyckas en nedladdning med
 "modellen finns inte" söker servern på Hugging Faces öppna API, väljer repo och kvantisering
@@ -558,6 +652,7 @@ Allt bygger enbart på Pythons standardbibliotek – inga `pip install` behövs.
 | `ollama_studio.py` | Skrivbordsappen (tkinter) |
 | `catalog.py` | Delad lista över populära modeller (används av båda) |
 | `huggingface.py` | Delad Hugging Face-hjälp: sök, GGUF-filer, kvantiseringsval |
+| `soup_train.py` | AI-träningen: bygger `soup.yaml`, granskar data, tolkar träningsloggen |
 | `ollama-studio-web.service` | systemd-tjänst för webbversionen |
 | `run.sh` / `run.bat` | Startskript för skrivbordsappen (Linux-mac / Windows) |
 | `install-linux.sh` / `icon.svg` | Menygenväg + ikon (skrivbordsappen på Linux) |

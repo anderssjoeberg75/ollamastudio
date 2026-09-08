@@ -36,6 +36,12 @@ Environment=OLLAMA_URL=http://localhost:11434
 # Environment=OLLAMA_STUDIO_HF_AUTO=0
 # Environment=HF_TOKEN=hf_...
 
+# AI-träning (fliken som finjusterar egna modeller med Soup). Mapp för konfig,
+# dataset och tränade modeller, samt sökväg till soup om det ligger i en venv:
+# Environment=OLLAMA_STUDIO_TRAIN=0
+# Environment=OLLAMA_STUDIO_TRAIN_DIR=/opt/ollama-studio-training
+# Environment=OLLAMA_STUDIO_SOUP_BIN=/opt/venv/bin/soup
+
 # Kör gärna som en egen användare i stället för root om du vill:
 # User=ollama
 
