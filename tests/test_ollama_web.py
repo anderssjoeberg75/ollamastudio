@@ -283,6 +283,13 @@ class TestSettings(_DBTest):
         self.assertEqual(w.prefs_all().get("chat_model"), "qwen2.5")
         self.assertNotIn("okänd", w.prefs_all())
 
+    def test_ui_prefs_include_discover_filter(self):
+        # Kryssrutan "dölj modeller som inte får plats" sparas som UI-val.
+        w.prefs_set({"hide_too_big": "1"})
+        self.assertEqual(w.prefs_all().get("hide_too_big"), "1")
+        w.prefs_set({"hide_too_big": "0"})
+        self.assertEqual(w.prefs_all().get("hide_too_big"), "0")
+
 
 class TestCodeAssistant(_DBTest):
     def setUp(self):

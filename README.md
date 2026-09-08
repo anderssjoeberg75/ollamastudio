@@ -52,6 +52,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   [Hugging Face](https://huggingface.co) i samma lista, med källa, storlekar och en
   installationsknapp per modell. Tomt fält visar den kurerade listan över populära modeller.
   Skriver du ett exakt namn laddar **↓ Ladda ner** hem det direkt.
+- **Hårdvarufilter** – varje modell märks med om den passar din GPU, körs delvis på CPU eller
+  är för stor. Kryssrutan **"Dölj modeller som inte får plats på den här datorn"** filtrerar
+  bort dem som inte kan köras alls. Se [Hårdvarufiltret](#hårdvarufiltret).
 - **🎓 AI-träning** – en egen flik (bredvid Chatta och Codex) där du finjusterar en modell på
   dina egna exempel: skriv frågor och svar i en tabell, välj basmodell och hårdvaruprofil,
   följ förloppet med progressbar och loss-kurva – och lägg in den färdiga modellen i Ollama
@@ -336,6 +339,27 @@ vänster.
      eller en Hugging Face-länk) och klicka **↓ Ladda ner**.
 3. En panel längst ner visar nedladdningen i realtid. Du kan **Avbryta** när som helst.
 4. När den är klar hittar du modellen under **Mina modeller**.
+
+### Hårdvarufiltret
+
+Under sökfältet finns kryssrutan **"Dölj modeller som inte får plats på den här datorn"**.
+Med den påslagen döljs modeller som inte kan köras på din hårdvara – valet sparas till nästa
+gång. Bredvid kryssrutan står vad appen hittat, t.ex. *8 GB VRAM + 32 GB RAM*.
+
+Varje modell får också en märkning i listan:
+
+| Märkning | Betyder |
+| --- | --- |
+| ≈ passar din GPU | Ryms i grafikkortets minne – snabbast. |
+| ≈ körs delvis på CPU | Får inte plats i VRAM; Ollama lägger resten i RAM. Fungerar, men långsammare. |
+| ⚠ för stor för din hårdvara | Ryms varken i VRAM eller RAM. Det är dessa som döljs. |
+
+Så räknas det: taket är **VRAM + 85 % av RAM** (Ollama delar upp modellen mellan GPU och CPU).
+Storleken kommer från katalogens angivna storlek, från bibliotekets parametertaggar (`8b`)
+eller ur modellnamnet (`Qwen3-8B-GGUF`) – och när ett bibliotek har flera varianter räknas
+den **minsta**, så en modell göms aldrig bara för att den *också* finns i en jättestorlek.
+Vet appen inte storleken visas modellen alltid. Siffrorna är uppskattningar (utgår från
+`Q4_K_M`, Ollamas standard), så en modell på gränsen kan behöva provas.
 
 > Hittas inte namnet i Ollamas bibliotek söker appen automatiskt vidare på Hugging Face och
 > fortsätter nedladdningen därifrån – i samma panel. Se nästa avsnitt.

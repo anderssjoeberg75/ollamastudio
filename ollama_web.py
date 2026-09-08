@@ -136,7 +136,8 @@ def db_init():
 # UI-val (chatt + Codex) sparas i prefs-tabellen så de överlever omladdning/webbläsare.
 _PREFS_KEYS = {"chat_model", "chat_backend", "chat_system", "chat_temp", "chat_ctx",
                "chat_websearch", "chat_memory", "code_model",
-               "train_form"}   # AI-träningens formulär (JSON) så valen överlever omladdning
+               "train_form",       # AI-träningens formulär (JSON)
+               "hide_too_big"}     # dölj modeller som inte får plats på hårdvaran
 
 
 def prefs_all():
@@ -2189,6 +2190,14 @@ PAGE = r"""<!doctype html>
   .install-row input:focus{outline:none;border-color:var(--accent)}
   .section-title{color:var(--subtle);font-weight:700;font-size:14px;margin:16px 2px 2px}
 
+  /* Filterrad under sökfältet */
+  .filter-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:10px}
+  .fit-check{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--subtle);cursor:pointer}
+  .fit-check input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+  .fit-check:hover{color:var(--text)}
+  .hidden-note{color:var(--faint);font-size:12.5px;margin:10px 2px 0}
+  .hidden-note a{color:var(--accent-hov);cursor:pointer}
+
   /* Hugging Face-sök */
   .hf-hint{color:var(--faint);font-size:12px;margin:6px 2px 0}
   .hf-card{background:var(--card);border:1px solid var(--border);border-radius:10px;
@@ -2365,6 +2374,11 @@ PAGE = r"""<!doctype html>
           <input id="customName" placeholder="sök modell, t.ex. qwen, llama, mistral…"
                  oninput="onSearchInput()" onkeydown="if(event.key==='Enter')pullCustom()">
           <button class="btn accent" onclick="pullCustom()">↓ Ladda ner</button>
+        </div>
+        <div class="filter-row">
+          <label class="fit-check"><input id="fitOnly" type="checkbox" onchange="toggleFitFilter()">
+            <span>Dölj modeller som inte får plats på den här datorn</span></label>
+          <span class="hf-hint" id="fitHint"></span>
         </div>
         <div class="hf-hint" id="searchHint"></div>
       </div>
@@ -2950,6 +2964,9 @@ function applyPrefs(){
   const ctx = document.getElementById('csCtx'); if(ctx && P.chat_ctx!=null) ctx.value = P.chat_ctx;
   const ws = document.getElementById('csWebsearch'); if(ws && P.chat_websearch!=null) ws.checked = (P.chat_websearch===true || P.chat_websearch==='true' || P.chat_websearch==='1');
   const mem = document.getElementById('csMemory'); if(mem && P.chat_memory!=null) mem.checked = (P.chat_memory===true || P.chat_memory==='true' || P.chat_memory==='1');
+  // Dölj-filtret i "Upptäck / Installera"
+  hideTooBig = (P.hide_too_big === '1' || P.hide_too_big === true);
+  renderCatalog();
   // Modeller/GPU sätts av populate-funktionerna som läser uiPrefs
   populateChatModels(); populateBackends(); populateCodeModels();
   if(typeof updateChatWarning==='function') updateChatWarning();
@@ -3209,14 +3226,61 @@ function maxGpuVramBytes(){
   for(const g of gpus){ if(g.mem_total_mb) max = Math.max(max, g.mem_total_mb*1024*1024); }
   return max;
 }
-function fitLabel(sizeStr){
-  // "≈ passar din GPU" om den ungefärliga storleken ryms i största GPU:n
-  const maxV = maxGpuVramBytes();
-  const need = estBytesFromSizeStr(sizeStr) * 1.15;
-  if(!(maxV > 0 && need > 0)) return '';
-  return need <= maxV
-    ? '  ·  <span style="color:var(--green)">≈ passar din GPU</span>'
-    : '  ·  <span style="color:var(--amber)">≈ kan vara för stor för din GPU</span>';
+/* ---- Hur stor är modellen, och ryms den i den här datorn? ----
+   Ollama laddar det som får plats på GPU:n och kör resten på CPU/RAM, så
+   "kan köras" = ryms i VRAM + RAM. Allt är uppskattningar: katalogen har
+   storlek i text, Ollamas bibliotek har parametertaggar (t.ex. "8b") och
+   Hugging Face-namn innehåller oftast storleken. Vet vi inget gissar vi
+   inte – då visas modellen alltid. */
+const BYTES_PER_B_PARAM = 0.62 * 1024*1024*1024;   // ≈ Q4_K_M, Ollamas standard
+function paramsFromText(text){
+  const m = String(text||'').match(/(\d+(?:[.,]\d+)?)\s*b\b/i);
+  return m ? parseFloat(m[1].replace(',', '.')) : 0;
+}
+function estModelBytes(it){
+  if(it.size){                                   // "~4.9 GB" ur katalogen
+    const b = estBytesFromSizeStr(it.size);
+    if(b) return b;
+  }
+  if(it.sizes && it.sizes.length){               // "0.6b, 1.7b, 8b" ur biblioteket
+    const params = it.sizes.map(paramsFromText).filter(Boolean);
+    if(params.length) return Math.min(...params) * BYTES_PER_B_PARAM;   // minsta varianten
+  }
+  const fromName = paramsFromText((it.pull||'') + ' ' + (it.name||''));
+  return fromName ? fromName * BYTES_PER_B_PARAM : 0;
+}
+function systemRamBytes(){
+  return (lastSystem && lastSystem.mem && lastSystem.mem.total) || 0;
+}
+function hardwareCapacityBytes(){
+  const ram = systemRamBytes();
+  // Lämna lite RAM åt operativsystemet – annars swappar den ihjäl sig.
+  return maxGpuVramBytes() + Math.floor(ram * 0.85);
+}
+function fitsHardware(it){
+  const cap = hardwareCapacityBytes(), need = estModelBytes(it) * 1.15;
+  if(!(cap > 0 && need > 0)) return true;        // vet vi inget → göm aldrig
+  return need <= cap;
+}
+function fitLabel(it){
+  const need = estModelBytes(it) * 1.15;
+  if(!need) return '';
+  const vram = maxGpuVramBytes(), cap = hardwareCapacityBytes();
+  if(!cap) return '';
+  if(vram > 0 && need <= vram)
+    return '  ·  <span style="color:var(--green)">≈ passar din GPU</span>';
+  if(need <= cap)
+    return vram
+      ? '  ·  <span style="color:var(--amber)">≈ körs delvis på CPU (långsammare)</span>'
+      : '  ·  <span style="color:var(--amber)">≈ körs på CPU (långsammare)</span>';
+  return '  ·  <span style="color:var(--danger)">⚠ för stor för din hårdvara</span>';
+}
+function hardwareSummary(){
+  const vram = maxGpuVramBytes(), ram = systemRamBytes();
+  const parts = [];
+  if(vram) parts.push(humanSize(vram)+' VRAM');
+  if(ram) parts.push(humanSize(ram)+' RAM');
+  return parts.join(' + ');
 }
 function isInstalled(pull){
   return installed.has(pull) || installed.has(pull.split(':')[0]+':latest');
@@ -3238,7 +3302,8 @@ function modelCard(it, index){
     : '<button class="btn accent" onclick="startPull(\''+esc(it.pull)+'\')">↓ Installera</button>');
 
   const bits = [];
-  if(it.size) bits.push('Storlek: '+esc(it.size)+fitLabel(it.size));
+  if(it.size) bits.push('Storlek: '+esc(it.size)+fitLabel(it));
+  else if(estModelBytes(it)) bits.push('Uppskattad storlek: ~'+humanSize(estModelBytes(it))+fitLabel(it));
   if(it.sizes && it.sizes.length) bits.push('Varianter: '+esc(it.sizes.join(', ')));
   if(it.downloads) bits.push(it.downloads.toLocaleString('sv-SE')+' nedladdningar');
   if(it.likes) bits.push('♥ '+it.likes);
@@ -3265,22 +3330,67 @@ function modelCard(it, index){
 /* Utan sökord visas den kurerade listan; med sökord visas träffarna. */
 let searchResults = null;      // {library:[], hf:[]} – null = visa katalogen
 let hfModels = [];             // HF-träffarna i listan just nu (för "Varianter")
+let hideTooBig = false;        // kryssrutan "dölj det som inte får plats"
+
+function toggleFitFilter(){
+  hideTooBig = document.getElementById('fitOnly').checked;
+  savePref('hide_too_big', hideTooBig ? '1' : '0');
+  renderCatalog();
+}
+function showTooBig(){        // "visa ändå"-länken under listan
+  const box = document.getElementById('fitOnly');
+  if(box){ box.checked = false; }
+  hideTooBig = false;
+  savePref('hide_too_big', '0');
+  renderCatalog();
+}
+function updateFitHint(){
+  const box = document.getElementById('fitOnly');
+  const hint = document.getElementById('fitHint');
+  if(!box || !hint) return;
+  const hw = hardwareSummary();
+  box.checked = hideTooBig;
+  if(!hardwareCapacityBytes()){
+    box.disabled = true;
+    box.checked = false;
+    hint.textContent = 'Hårdvaran kunde inte läsas av – filtret är avstängt.';
+    return;
+  }
+  box.disabled = false;
+  hint.textContent = 'Din hårdvara: ' + hw + (maxGpuVramBytes()
+    ? ' – Ollama lägger det som får plats på GPU:n och kör resten på CPU.'
+    : ' – ingen GPU hittad, så allt körs på CPU (långsammare).');
+}
+
 function renderCatalog(){
   const list = document.getElementById('catalogList');
-  if(!searchResults){
-    hfModels = [];
-    list.innerHTML = CATALOG.map(it=>modelCard(Object.assign({source:'ollama'}, it), -1)).join('');
-    return;
+  updateFitHint();
+  const searching = !!searchResults;
+  const lib = searching ? (searchResults.library || [])
+                        : CATALOG.map(it=>Object.assign({source:'ollama'}, it));
+  const hf = searching ? (searchResults.hf || []) : [];
+  // Filtrera bort det som inte kan köras – men bara när vi vet storleken.
+  const keptLib = hideTooBig ? lib.filter(fitsHardware) : lib;
+  const keptHf  = hideTooBig ? hf.filter(fitsHardware)  : hf;
+  hfModels = keptHf;
+  const hidden = (lib.length - keptLib.length) + (hf.length - keptHf.length);
+
+  let html = keptLib.map(it=>modelCard(it, -1)).join('')
+           + keptHf.map((it,i)=>modelCard(it, i)).join('');
+  if(!keptLib.length && !keptHf.length){
+    html = hidden
+      ? '<div class="empty">Alla träffar är för stora för den här datorn. '
+        + '<a onclick="showTooBig()" style="color:var(--accent-hov);cursor:pointer">Visa dem ändå</a></div>'
+      : (searching
+          ? '<div class="empty">Inga modeller matchade sökningen. Prova ett kortare ord, '
+            + 'eller skriv ett exakt namn och klicka "↓ Ladda ner".</div>'
+          : '<div class="empty">Inga modeller att visa.</div>');
+  }else if(hidden){
+    html += '<div class="hidden-note">' + hidden + (hidden === 1 ? ' modell dold' : ' modeller dolda')
+          + ' som inte får plats på din hårdvara · '
+          + '<a onclick="showTooBig()">visa ändå</a></div>';
   }
-  const lib = searchResults.library || [];
-  hfModels = searchResults.hf || [];
-  if(!lib.length && !hfModels.length){
-    list.innerHTML = '<div class="empty">Inga modeller matchade sökningen. Prova ett kortare '
-      + 'ord, eller skriv ett exakt namn och klicka "↓ Ladda ner".</div>';
-    return;
-  }
-  list.innerHTML = lib.map(it=>modelCard(it, -1)).join('')
-                 + hfModels.map((it,i)=>modelCard(it, i)).join('');
+  list.innerHTML = html;
 }
 
 /* ---- Sökning: ett fält, båda källorna ---- */
