@@ -30,6 +30,18 @@ Environment=OLLAMA_URL=http://localhost:11434
 # OBS: citattecken runt HELA raden krävs eftersom värdet innehåller mellanslag.
 # Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1"
 
+# Hugging Face: appen söker efter GGUF-modeller där när ett modellnamn inte finns i
+# Ollamas bibliotek. Avstängning / bara-förslag / valfri token för sökningen:
+# Environment=OLLAMA_STUDIO_HF=0
+# Environment=OLLAMA_STUDIO_HF_AUTO=0
+# Environment=HF_TOKEN=hf_...
+
+# AI-träning (fliken som finjusterar egna modeller med Soup). Mapp för konfig,
+# dataset och tränade modeller, samt sökväg till soup om det ligger i en venv:
+# Environment=OLLAMA_STUDIO_TRAIN=0
+# Environment=OLLAMA_STUDIO_TRAIN_DIR=/opt/ollama-studio-training
+# Environment=OLLAMA_STUDIO_SOUP_BIN=/opt/venv/bin/soup
+
 # Kör gärna som en egen användare i stället för root om du vill:
 # User=ollama
 

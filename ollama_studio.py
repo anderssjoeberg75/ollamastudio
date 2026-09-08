@@ -72,10 +72,57 @@ except Exception:
          "desc": "Populär och snabb modell för allmän användning."},
     ]
 
+# --------------------------------------------------------------------------
+# Hugging Face – valfritt tillägg (huggingface.py bredvid appen, delas med
+# webbversionen). Ollama kan hämta GGUF-modeller direkt därifrån, så när ett
+# modellnamn saknas i Ollamas bibliotek söker vi vidare på Hugging Face.
+# Stäng av med OLLAMA_STUDIO_HF=0 (eller OLLAMA_STUDIO_HF_AUTO=0 för att bara
+# få förslag utan automatisk nedladdning). HF_TOKEN används om den är satt.
+# --------------------------------------------------------------------------
+try:
+    import huggingface as HF
+except Exception:
+    HF = None
+
+
+def _env_on(name, default="1"):
+    return os.environ.get(name, default).strip().lower() not in ("0", "false", "off", "no", "")
+
+
+def hf_enabled():
+    """Hugging Face-stödet (sök + reserv vid okänt modellnamn) är påslaget."""
+    return HF is not None and _env_on("OLLAMA_STUDIO_HF")
+
+
+def hf_auto_enabled():
+    """Ladda ner bästa träffen automatiskt när Ollama saknar modellen."""
+    return hf_enabled() and _env_on("OLLAMA_STUDIO_HF_AUTO")
+
+
+def hf_token():
+    """Valfri HF-token – används bara för sökningen mot Hugging Faces API."""
+    return os.environ.get("HF_TOKEN", "").strip()
+
 
 # --------------------------------------------------------------------------
 # Hjälpfunktioner
 # --------------------------------------------------------------------------
+def pull_error_text(http_error):
+    """Läsbart felmeddelande ur ett HTTP-fel från Ollamas /api/pull."""
+    try:
+        body = http_error.read().decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    try:
+        data = json.loads(body or "null")
+        if isinstance(data, dict) and data.get("error"):
+            return str(data["error"])
+    except Exception:
+        pass
+    body = (body or "").strip()
+    return "HTTP %d%s" % (http_error.code, (": " + body[:200]) if body else "")
+
+
 def human_size(num_bytes):
     """Formatera bytes till läsbar sträng."""
     try:
@@ -166,16 +213,21 @@ class OllamaClient:
         Ladda ner/installera en modell och strömma statusmeddelanden.
         on_message(msg_dict) anropas för varje NDJSON-rad.
         cancel_event: threading.Event – sätt den för att avbryta.
-        Returnerar True om nedladdningen lyckades.
+
+        Returnerar (lyckades, felmeddelande). Felraden skickas inte vidare till
+        on_message – anroparen kan vilja försöka igen mot Hugging Face först.
         """
         body = json.dumps({"name": name, "stream": True}).encode()
         req = urllib.request.Request(
             self._url("/api/pull"), data=body, method="POST",
             headers={"Content-Type": "application/json"},
         )
-        resp = urllib.request.urlopen(req, timeout=120)   # samma som webbversionen
+        try:
+            resp = urllib.request.urlopen(req, timeout=120)   # samma som webbversionen
+        except urllib.error.HTTPError as e:
+            return False, pull_error_text(e)
         self._active_response = resp
-        success = False
+        success, error = False, None
         try:
             for raw in resp:
                 if cancel_event.is_set():
@@ -187,6 +239,9 @@ class OllamaClient:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if msg.get("error"):
+                    error = str(msg["error"])
+                    continue
                 on_message(msg)
                 if msg.get("status") == "success":
                     success = True
@@ -196,7 +251,22 @@ class OllamaClient:
             except Exception:
                 pass
             self._active_response = None
-        return success
+        return success, error
+
+    def hf_resolve(self, query):
+        """Sök upp en GGUF-modell på Hugging Face som matchar `query`.
+
+        Returnerar (pull-namn, träff, kvantisering) eller (None, None, None)
+        om inget rimligt hittades. Kastar vid nätverksfel.
+        """
+        matches = HF.find_best(query, token=hf_token())
+        if not matches:
+            return None, None, None
+        best = matches[0]
+        ref, quant, quants = HF.resolve(best["id"], token=hf_token())
+        if not quants:
+            return None, best, None
+        return ref, best, quant
 
 
 # --------------------------------------------------------------------------
@@ -408,8 +478,12 @@ class OllamaManagerApp:
         inner.pack(fill="x", padx=16, pady=14)
         tk.Label(inner, text="Installera valfri modell", font=self.f_h2,
                  bg=C["card"], fg=C["text"]).pack(anchor="w")
-        tk.Label(inner, text="Skriv exakt modellnamn från ollama.com/library, t.ex. \"llama3.1:8b\" eller \"mistral-nemo\".",
-                 font=self.f_small, bg=C["card"], fg=C["subtle"]).pack(anchor="w", pady=(2, 10))
+        hint = ("Skriv exakt modellnamn från ollama.com/library, t.ex. \"llama3.1:8b\". "
+                "Finns det inte där söker vi vidare på Hugging Face."
+                if hf_enabled() else
+                "Skriv exakt modellnamn från ollama.com/library, t.ex. \"llama3.1:8b\" eller \"mistral-nemo\".")
+        tk.Label(inner, text=hint, font=self.f_small, bg=C["card"], fg=C["subtle"],
+                 wraplength=620, justify="left").pack(anchor="w", pady=(2, 10))
         row = tk.Frame(inner, bg=C["card"])
         row.pack(fill="x")
         self.custom_entry = tk.Entry(row, font=self.f_body, bg=C["bg"], fg=C["text"],
@@ -419,9 +493,32 @@ class OllamaManagerApp:
         self.custom_entry.bind("<Return>", lambda e: self._pull_custom())
         self._button(row, "↓  Ladda ner", self._pull_custom, kind="accent").pack(side="left")
 
-        # Populära modeller
-        tk.Label(view, text="Populära modeller", font=self.f_h2,
-                 bg=C["bg"], fg=C["subtle"]).pack(anchor="w", padx=28, pady=(14, 2))
+        # Hugging Face-sök (bara om modulen finns och stödet är påslaget)
+        if hf_enabled():
+            hfbox = tk.Frame(view, bg=C["card"], highlightbackground=C["border"],
+                             highlightthickness=1)
+            hfbox.pack(fill="x", padx=28, pady=(8, 4))
+            hfinner = tk.Frame(hfbox, bg=C["card"])
+            hfinner.pack(fill="x", padx=16, pady=14)
+            tk.Label(hfinner, text="🤗  Sök på Hugging Face", font=self.f_h2,
+                     bg=C["card"], fg=C["text"]).pack(anchor="w")
+            tk.Label(hfinner, text="Tusentals GGUF-modeller utöver Ollamas bibliotek. "
+                                   "Välj kvantisering själv – mindre = snabbare och mindre minne.",
+                     font=self.f_small, bg=C["card"], fg=C["subtle"],
+                     wraplength=620, justify="left").pack(anchor="w", pady=(2, 10))
+            hfrow = tk.Frame(hfinner, bg=C["card"])
+            hfrow.pack(fill="x")
+            self.hf_entry = tk.Entry(hfrow, font=self.f_body, bg=C["bg"], fg=C["text"],
+                                     insertbackground=C["text"], relief="flat",
+                                     highlightbackground=C["border"], highlightthickness=1)
+            self.hf_entry.pack(side="left", fill="x", expand=True, ipady=7, padx=(0, 10))
+            self.hf_entry.bind("<Return>", lambda e: self._hf_search())
+            self._button(hfrow, "Sök", self._hf_search, kind="accent").pack(side="left")
+
+        # Lista: populära modeller, eller sökträffar från Hugging Face
+        self.discover_heading = tk.Label(view, text="Populära modeller", font=self.f_h2,
+                                         bg=C["bg"], fg=C["subtle"])
+        self.discover_heading.pack(anchor="w", padx=28, pady=(14, 2))
 
         self.discover_scroll, self.discover_list = self._scrollable(view)
         self._render_catalog()
@@ -456,8 +553,154 @@ class OllamaManagerApp:
     def _render_catalog(self):
         for w in self.discover_list.winfo_children():
             w.destroy()
+        if getattr(self, "discover_heading", None):
+            self.discover_heading.configure(text="Populära modeller")
         for item in CATALOG:
             self._catalog_card(item)
+
+    # ---- Hugging Face: sök, visa varianter, installera ---------------------
+    def _hf_search(self):
+        query = self.hf_entry.get().strip()
+        if not query:
+            self._toast("Skriv något att söka efter", error=True)
+            return
+        self.discover_heading.configure(text=f"Söker efter \"{query}\" på Hugging Face…")
+        for w in self.discover_list.winfo_children():
+            w.destroy()
+
+        def worker():
+            try:
+                models = HF.find_best(query, limit=15, token=hf_token(), min_similarity=0.0)
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._hf_failed(err))
+                return
+            self.root.after(0, lambda m=models: self._render_hf_results(query, m))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _hf_failed(self, detail):
+        self.discover_heading.configure(text="Populära modeller")
+        self._render_catalog()
+        self._toast(f"Hugging Face-sökningen misslyckades: {detail}", error=True)
+
+    def _render_hf_results(self, query, models):
+        for w in self.discover_list.winfo_children():
+            w.destroy()
+        self.discover_heading.configure(
+            text=f"Hugging Face · {len(models)} träffar för \"{query}\"")
+        back = tk.Frame(self.discover_list, bg=C["bg"])
+        back.pack(fill="x", pady=(0, 4))
+        self._button(back, "←  Tillbaka till populära modeller", self._render_catalog,
+                     kind="ghost", small=True).pack(anchor="w")
+        if not models:
+            self._empty_state(self.discover_list, "Inga GGUF-modeller matchade",
+                              "Prova ett kortare sökord – bara modeller med GGUF-filer "
+                              "visas, eftersom det är formatet Ollama kan läsa.")
+            return
+        for m in models:
+            self._hf_card(m)
+
+    def _hf_card(self, model):
+        card = tk.Frame(self.discover_list, bg=C["card"], highlightbackground=C["border"],
+                        highlightthickness=1)
+        card.pack(fill="x", pady=5, padx=2)
+        inner = tk.Frame(card, bg=C["card"])
+        inner.pack(fill="x", padx=16, pady=13)
+
+        left = tk.Frame(inner, bg=C["card"])
+        left.pack(side="left", fill="x", expand=True)
+        tk.Label(left, text=model["id"], font=self.f_h2, bg=C["card"],
+                 fg=C["text"], anchor="w").pack(anchor="w")
+        meta = []
+        if model.get("downloads"):
+            meta.append(f"{model['downloads']:,}".replace(",", " ") + " nedladdningar")
+        if model.get("likes"):
+            meta.append(f"♥ {model['likes']}")
+        if meta:
+            tk.Label(left, text="  ·  ".join(meta), font=self.f_small,
+                     bg=C["card"], fg=C["faint"]).pack(anchor="w", pady=(3, 0))
+        if model.get("gated"):
+            tk.Label(left, text="⚠ Gated – kräver godkännande på huggingface.co",
+                     font=self.f_small, bg=C["card"], fg=C["amber"]).pack(anchor="w", pady=(3, 0))
+
+        right = tk.Frame(inner, bg=C["card"])
+        right.pack(side="right", padx=(12, 0))
+        quants_box = tk.Frame(card, bg=C["card"])
+        self._button(right, "Varianter",
+                     lambda m=model, b=quants_box: self._hf_show_quants(m, b),
+                     kind="ghost", small=True).pack(side="left", padx=(0, 8))
+        self._button(right, "↓  Installera",
+                     lambda m=model: self._hf_install_default(m), kind="accent").pack(side="left")
+
+    def _hf_install_default(self, model):
+        """Installera bästa kvantiseringen i repot (hämtas i bakgrunden)."""
+        self._toast(f"Läser filerna i {model['id']}…")
+
+        def worker():
+            try:
+                ref, quant, quants = HF.resolve(model["id"], token=hf_token())
+            except Exception as e:
+                self.root.after(0, lambda err=str(e):
+                                self._toast(f"Kunde inte läsa repot: {err}", error=True))
+                return
+            if not quants:
+                self.root.after(0, lambda: self._toast(
+                    f"{model['id']} innehåller inga GGUF-filer", error=True))
+                return
+            self.root.after(0, lambda r=ref: self._start_pull(r))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _hf_show_quants(self, model, box):
+        """Fäll ut/ihop listan med kvantiseringar för ett repo."""
+        if box.winfo_ismapped():
+            box.pack_forget()
+            return
+        box.pack(fill="x", padx=16, pady=(0, 12))
+        for w in box.winfo_children():
+            w.destroy()
+        tk.Label(box, text="Hämtar filer…", font=self.f_small,
+                 bg=C["card"], fg=C["subtle"]).pack(anchor="w")
+
+        def worker():
+            try:
+                quants = HF.group_quants(HF.list_gguf_files(model["id"], token=hf_token()))
+            except Exception as e:
+                self.root.after(0, lambda err=str(e): self._hf_quants_ready(box, model, None, err))
+                return
+            self.root.after(0, lambda q=quants: self._hf_quants_ready(box, model, q, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _hf_quants_ready(self, box, model, quants, error):
+        if not box.winfo_exists():
+            return
+        for w in box.winfo_children():
+            w.destroy()
+        if error is not None:
+            tk.Label(box, text=f"Kunde inte läsa filerna: {error}", font=self.f_small,
+                     bg=C["card"], fg=C["danger"], wraplength=560, justify="left").pack(anchor="w")
+            return
+        if not quants:
+            tk.Label(box, text="Inga GGUF-filer i det här repot.", font=self.f_small,
+                     bg=C["card"], fg=C["subtle"]).pack(anchor="w")
+            return
+        best = HF.pick_quant(quants)
+        for q in quants:
+            row = tk.Frame(box, bg=C["card"])
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=q["quant"], font=self.f_small, bg=C["card"],
+                     fg=C["accent_hov"], width=12, anchor="w").pack(side="left")
+            info = human_size(q["size"]) if q.get("size") else "okänd storlek"
+            if q.get("parts", 1) > 1:
+                info += f"  ·  {q['parts']} delar"
+            if best and q["quant"] == best["quant"]:
+                info += "  ·  standard"
+            tk.Label(row, text=info, font=self.f_small, bg=C["card"],
+                     fg=C["faint"]).pack(side="left")
+            self._button(row, "↓  Installera",
+                         lambda m=model, qq=q: self._start_pull(HF.pull_ref(m["id"], qq["quant"])),
+                         kind="ghost", small=True).pack(side="right")
 
     def _catalog_card(self, item):
         card = tk.Frame(self.discover_list, bg=C["card"], highlightbackground=C["border"],
@@ -788,6 +1031,9 @@ class OllamaManagerApp:
         if not name:
             self._toast("Skriv ett modellnamn först", error=True)
             return
+        if HF is not None:
+            # "https://huggingface.co/ägare/repo" → "hf.co/ägare/repo" (det Ollama vill ha)
+            name = HF.normalize_name(name) or name
         self._start_pull(name)
 
     def _start_pull(self, name):
@@ -814,16 +1060,66 @@ class OllamaManagerApp:
         self.pull_thread.start()
 
     def _pull_worker(self, name):
+        """Ladda ner modellen. Saknas den i Ollamas bibliotek söker vi vidare
+        på Hugging Face och fortsätter därifrån (samma nedladdningspanel)."""
         def on_message(msg):
             self.root.after(0, lambda m=msg: self._on_pull_progress(m))
+
+        def status(text):
+            self.root.after(0, lambda t=text: self.dl_status.configure(text=t))
+
         try:
-            ok = self.client.pull(name, on_message, self.cancel_event)
+            ok, err = self.client.pull(name, on_message, self.cancel_event)
             if self.cancel_event.is_set():
                 self.root.after(0, lambda: self._on_pull_done(name, "cancelled"))
-            elif ok:
+                return
+            if ok:
                 self.root.after(0, lambda: self._on_pull_done(name, "success"))
+                return
+
+            # Inte i Ollamas bibliotek → leta efter en GGUF-version på Hugging Face.
+            if not (hf_enabled() and err and HF.is_missing_model_error(err)
+                    and not HF.is_hf_ref(name)):
+                self.root.after(0, lambda d=err or "Nedladdningen slutfördes inte.":
+                                self._on_pull_done(name, "error", d))
+                return
+
+            status(f"Hittades inte i Ollamas bibliotek – söker efter \"{name}\" på Hugging Face…")
+            try:
+                ref, best, quant = self.client.hf_resolve(name)
+            except Exception as e:
+                self.root.after(0, lambda d=f"{err}\nSökningen på Hugging Face misslyckades: {e}":
+                                self._on_pull_done(name, "error", d))
+                return
+            if not ref:
+                detail = (f"\"{name}\" finns varken i Ollamas bibliotek eller som "
+                          "GGUF-modell på Hugging Face.")
+                if best:
+                    detail = f"{best['id']} på Hugging Face innehåller inga GGUF-filer."
+                self.root.after(0, lambda d=detail: self._on_pull_done(name, "error", d))
+                return
+            if best.get("gated"):
+                detail = (f"{best['id']} kräver godkännande på Hugging Face (gated) "
+                          "och kan inte hämtas automatiskt.")
+                self.root.after(0, lambda d=detail: self._on_pull_done(name, "error", d))
+                return
+            if not hf_auto_enabled():
+                detail = (f"Hittade {ref} på Hugging Face. Automatisk nedladdning är "
+                          "avstängd – sök upp modellen i Hugging Face-rutan och välj variant.")
+                self.root.after(0, lambda d=detail: self._on_pull_done(name, "error", d))
+                return
+
+            size = f"  ·  {human_size(quant['size'])}" if quant and quant.get("size") else ""
+            status(f"Hittade {best['id']} på Hugging Face – hämtar "
+                   f"{quant['quant'] if quant else 'GGUF'}{size}")
+            self.root.after(0, lambda r=ref: self.dl_title.configure(text=f"Laddar ner  {r}"))
+            ok2, err2 = self.client.pull(ref, on_message, self.cancel_event)
+            if self.cancel_event.is_set():
+                self.root.after(0, lambda: self._on_pull_done(ref, "cancelled"))
+            elif ok2:
+                self.root.after(0, lambda: self._on_pull_done(ref, "success"))
             else:
-                self.root.after(0, lambda: self._on_pull_done(name, "incomplete"))
+                self.root.after(0, lambda d=err2 or "": self._on_pull_done(ref, "error", d))
         except urllib.error.HTTPError as e:
             detail = "Modellen hittades inte" if e.code == 404 else f"HTTP {e.code}"
             self.root.after(0, lambda: self._on_pull_done(name, "error", detail))

@@ -73,6 +73,9 @@ DB_PATH = os.environ.get(
 # Kända inställningar: nyckel -> (env-namn, standard, typ, hemlig?)
 SETTINGS_SPEC = {
     "websearch":        ("OLLAMA_STUDIO_WEBSEARCH", "1", "bool", False),
+    "hf_enabled":       ("OLLAMA_STUDIO_HF", "1", "bool", False),
+    "hf_auto":          ("OLLAMA_STUDIO_HF_AUTO", "1", "bool", False),
+    "hf_token":         ("HF_TOKEN", "", "str", True),
     "mem0_enabled":     ("OLLAMA_STUDIO_MEM0", "0", "bool", False),
     "mem0_api_key":     ("MEM0_API_KEY", "", "str", True),
     "mem0_user_id":     ("MEM0_USER_ID", "default_user", "str", False),
@@ -81,6 +84,9 @@ SETTINGS_SPEC = {
     "mem0_auth_scheme": ("MEM0_AUTH_SCHEME", "Token", "str", False),
     "mem0_org_id":      ("MEM0_ORG_ID", "", "str", False),
     "mem0_project_id":  ("MEM0_PROJECT_ID", "", "str", False),
+    "train_enabled":    ("OLLAMA_STUDIO_TRAIN", "1", "bool", False),
+    "train_workspace":  ("OLLAMA_STUDIO_TRAIN_DIR", "", "str", False),
+    "train_soup_bin":   ("OLLAMA_STUDIO_SOUP_BIN", "", "str", False),
     "code_enabled":     ("OLLAMA_STUDIO_CODE", "1", "bool", False),
     "code_workspace":   ("OLLAMA_STUDIO_WORKSPACE", "", "str", False),
     "github_token":     ("GITHUB_TOKEN", "", "str", True),
@@ -129,7 +135,8 @@ def db_init():
 
 # UI-val (chatt + Codex) sparas i prefs-tabellen så de överlever omladdning/webbläsare.
 _PREFS_KEYS = {"chat_model", "chat_backend", "chat_system", "chat_temp", "chat_ctx",
-               "chat_websearch", "chat_memory", "code_model"}
+               "chat_websearch", "chat_memory", "code_model",
+               "train_form"}   # AI-träningens formulär (JSON) så valen överlever omladdning
 
 
 def prefs_all():
@@ -198,6 +205,12 @@ def settings_public():
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
     out["code_run_active"] = code_run_enabled()
+    out["train_module"] = TRAIN is not None    # ligger soup_train.py bredvid appen?
+    out["train_active"] = train_toggle_on()
+    out["train_workspace_path"] = train_workspace_root() or ""
+    out["hf_module"] = HF is not None          # ligger huggingface.py bredvid appen?
+    out["hf_active"] = hf_enabled()
+    out["hf_auto_active"] = hf_auto_enabled()
     # Hjälp för att förstå sökvägsproblem: arbetsytan måste finnas på SERVERNS filsystem.
     out["server_os"] = ("Windows" if os.name == "nt"
                         else ("macOS" if sys.platform == "darwin" else "Linux/Unix"))
@@ -256,6 +269,67 @@ def settings_set(values):
 # --- Bekväma getters (dynamiska: läser aktuella inställningar) ---
 def websearch_enabled():
     return setting_bool("websearch")
+
+
+def hf_enabled():
+    """Hugging Face-stödet (sök + reserv vid okänt modellnamn) är påslaget."""
+    return HF is not None and setting_bool("hf_enabled")
+
+
+def hf_auto_enabled():
+    """Ladda ner bästa HF-träffen automatiskt när Ollama saknar modellen."""
+    return hf_enabled() and setting_bool("hf_auto")
+
+
+def hf_token():
+    """Valfri HF-token – bara för sökningen (högre kvot, egna/gated repon)."""
+    return setting_str("hf_token")
+
+
+def train_toggle_on():
+    """AI-träningsfliken är påslagen (och modulen soup_train.py finns)."""
+    return TRAIN is not None and setting_bool("train_enabled")
+
+
+def train_workspace_root(create=False):
+    """Mappen där konfig, dataset och tränade modeller hamnar.
+
+    Standard är ~/ollama-studio-training. Den skapas först när något faktiskt
+    ska skrivas dit (create=True), så en tom installation inte lämnar spår.
+    """
+    raw = setting_str("train_workspace")
+    path = os.path.expanduser(raw) if raw else os.path.join(
+        os.path.expanduser("~"), "ollama-studio-training")
+    try:
+        path = os.path.realpath(path)
+    except Exception:
+        return None
+    if create:
+        try:
+            os.makedirs(os.path.join(path, "data"), exist_ok=True)
+            os.makedirs(os.path.join(path, "runs"), exist_ok=True)
+        except OSError:
+            return None
+    return path
+
+
+def train_resolve(rel, create=False):
+    """Absolut sökväg inom träningsmappen (path-jail, som Codex arbetsyta)."""
+    root = train_workspace_root(create=create)
+    if not root:
+        raise ValueError("Ingen träningsmapp kunde skapas")
+    rel = (rel or "").strip().lstrip("/")
+    full = os.path.realpath(os.path.join(root, rel))
+    if full != root and not full.startswith(root + os.sep):
+        raise ValueError("Sökvägen ligger utanför träningsmappen")
+    return full
+
+
+def soup_binary():
+    """Sökvägen till Soups `soup`-kommando, eller None om det inte är installerat."""
+    if TRAIN is None:
+        return None
+    return TRAIN.find_soup(setting_str("train_soup_bin"))
 
 
 def mem0_enabled():
@@ -1382,6 +1456,344 @@ except Exception:
 
 
 # --------------------------------------------------------------------------
+# AI-träning – valfritt tillägg (soup_train.py bredvid appen). Modulen bygger
+# konfig och tolkar loggar; själva träningen görs av Soup (soup-cli) som körs
+# som en vanlig process här nedanför. Saknas modulen döljs fliken.
+# --------------------------------------------------------------------------
+try:
+    import soup_train as TRAIN
+except Exception:
+    TRAIN = None
+
+
+class TrainJob:
+    """En bakgrundskörning: träning, export till Ollama eller installation.
+
+    Processens utdata läses tecken för tecken (progressbarer skriver \r utan
+    radbrytning) och sparas i en ringbuffert som UI:t hämtar med /api/train/log.
+    Rader som ser ut som förlopp tolkas till procent, steg, loss och ETA.
+    """
+
+    def __init__(self, kind, cmd, cwd, label="", env=None):
+        self.kind = kind                  # "train" | "export" | "install"
+        self.cmd = list(cmd)
+        self.cwd = cwd
+        self.label = label or kind
+        self.env = env or {}
+        self.lines = []                   # ringbuffert (senaste MAX_LOG_LINES)
+        self.dropped = 0                  # hur många rader som rullat ut
+        self.metrics = {}                 # senaste förloppet (procent/steg/loss)
+        self.history = []                 # [{"step": n, "loss": x}] för kurvan
+        self.state = "kör"                # kör | klar | fel | stoppad
+        self.error = None
+        self.started = time.time()
+        self.ended = None
+        self.returncode = None
+        self.proc = None
+        self.lock = threading.Lock()
+
+    # ---- livscykel ----
+    def start(self):
+        env = dict(os.environ)
+        env.update({"PYTHONUNBUFFERED": "1", "NO_COLOR": "1", "TERM": "dumb",
+                    "COLUMNS": "120"})
+        env.update({k: v for k, v in self.env.items() if v})
+        try:
+            self.proc = subprocess.Popen(
+                self.cmd, cwd=self.cwd, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, env=env, bufsize=0)
+        except FileNotFoundError:
+            self.state, self.error = "fel", "Programmet hittades inte: %s" % self.cmd[0]
+            self.ended = time.time()
+            return self
+        except Exception as e:
+            self.state, self.error = "fel", str(e)
+            self.ended = time.time()
+            return self
+        self._append("$ " + " ".join(self.cmd))
+        threading.Thread(target=self._reader, daemon=True).start()
+        return self
+
+    def stop(self):
+        """Be processen avsluta snällt, döda den om den inte lyssnar."""
+        proc = self.proc
+        if not proc or proc.poll() is not None:
+            return False
+        self.state = "stoppad"
+        try:
+            proc.terminate()
+        except Exception:
+            return False
+        threading.Thread(target=self._kill_later, args=(proc,), daemon=True).start()
+        return True
+
+    def _kill_later(self, proc, grace=8):
+        try:
+            proc.wait(timeout=grace)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    # ---- läsning av utdata ----
+    def _reader(self):
+        buf = b""
+        try:
+            while True:
+                chunk = self.proc.stdout.read(1024)
+                if not chunk:
+                    break
+                buf += chunk
+                # Progressbarer skriver \r; behandla både \r och \n som radslut.
+                buf = buf.replace(b"\r\n", b"\n")
+                while True:
+                    idx = min([i for i in (buf.find(b"\n"), buf.find(b"\r")) if i >= 0]
+                              or [-1])
+                    if idx < 0:
+                        break
+                    self._append(buf[:idx].decode("utf-8", errors="replace"))
+                    buf = buf[idx + 1:]
+                if len(buf) > 8192:            # rad utan radslut – spola ändå ut den
+                    self._append(buf.decode("utf-8", errors="replace"))
+                    buf = b""
+        except Exception as e:
+            self._append("[läsfel: %s]" % e)
+        if buf:
+            self._append(buf.decode("utf-8", errors="replace"))
+        try:
+            self.proc.stdout.close()
+        except Exception:
+            pass
+        self.returncode = self.proc.wait()
+        self.ended = time.time()
+        with self.lock:
+            if self.state == "stoppad":
+                pass                            # användaren avbröt – behåll läget
+            elif self.returncode == 0:
+                self.state = "klar"
+            else:
+                self.state = "fel"
+                self.error = (TRAIN.summarize_failure(self.lines) if TRAIN else None) \
+                    or ("Avslutades med felkod %s." % self.returncode)
+
+    def _append(self, text):
+        line = TRAIN.strip_ansi(text).rstrip() if TRAIN else text.rstrip()
+        progress = TRAIN.parse_progress(line) if TRAIN else None
+        with self.lock:
+            if progress:
+                # Loss loggas på en egen rad utan stegnummer – ta det senaste
+                # kända steget från progressbaren så kurvans x-axel stämmer.
+                last_step = self.metrics.get("step")
+                self.metrics.update(progress)
+                self.metrics["updated"] = time.time()
+                if "loss" in progress:
+                    point = {"step": progress.get("step") or last_step
+                                     or len(self.history) + 1,
+                             "loss": progress["loss"]}
+                    self.history.append(point)
+                    if len(self.history) > 400:
+                        self.history = self.history[::2]     # gles ut gamla punkter
+            # Rena progressbar-rader ska inte fylla loggen – de syns i mätaren.
+            if TRAIN and TRAIN.is_noise(line) and self.lines:
+                return
+            if not line.strip():
+                return
+            self.lines.append(line)
+            cap = TRAIN.MAX_LOG_LINES if TRAIN else 4000
+            if len(self.lines) > cap:
+                extra = len(self.lines) - cap
+                del self.lines[:extra]
+                self.dropped += extra
+
+    # ---- läsvyer för API:t ----
+    def snapshot(self, since=0):
+        with self.lock:
+            start = max(0, int(since or 0) - self.dropped)
+            lines = self.lines[start:]
+            return {
+                "kind": self.kind, "label": self.label, "state": self.state,
+                "cmd": " ".join(self.cmd), "error": self.error,
+                "returncode": self.returncode,
+                "elapsed": int((self.ended or time.time()) - self.started),
+                "metrics": dict(self.metrics), "history": list(self.history),
+                "lines": lines, "next": self.dropped + len(self.lines),
+            }
+
+    def running(self):
+        return self.state == "kör"
+
+
+_train_job = None                 # den enda körningen i taget
+_train_job_lock = threading.Lock()
+
+
+def train_job_current():
+    return _train_job
+
+
+def train_job_start(kind, cmd, cwd, label="", env=None):
+    """Starta en körning om ingen redan pågår. Returnerar (job, felmeddelande)."""
+    global _train_job
+    with _train_job_lock:
+        if _train_job is not None and _train_job.running():
+            return None, "En körning pågår redan (%s)." % _train_job.label
+        job = TrainJob(kind, cmd, cwd, label=label, env=env).start()
+        _train_job = job
+    return job, None
+
+
+def train_gpu_hint():
+    """Största GPU:ns VRAM (MB) och namn – används för att föreslå profil."""
+    best_mb, name = 0, ""
+    try:
+        gpus, _err = nvidia_gpus()          # returnerar (lista, felmeddelande)
+        for gpu in gpus or []:
+            mb = gpu.get("mem_total_mb") or 0
+            if mb > best_mb:
+                best_mb, name = mb, gpu.get("name") or ""
+    except Exception:
+        pass
+    return best_mb, name
+
+
+def train_list_datasets():
+    """Datafiler som ligger i träningsmappens data/-mapp."""
+    root = train_workspace_root()
+    out = []
+    if not root:
+        return out
+    folder = os.path.join(root, "data")
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return out
+    for name in names:
+        if not name.lower().endswith((".jsonl", ".json", ".txt", ".csv")):
+            continue
+        full = os.path.join(folder, name)
+        try:
+            size = os.path.getsize(full)
+        except OSError:
+            continue
+        out.append({"name": name, "path": "data/" + name, "size": size})
+    return out
+
+
+def train_list_runs():
+    """Tidigare träningskörningar (mappar under runs/) och om de gav en modell."""
+    root = train_workspace_root()
+    out = []
+    if not root:
+        return out
+    folder = os.path.join(root, "runs")
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return out
+    for name in names:
+        full = os.path.join(folder, name)
+        if not os.path.isdir(full):
+            continue
+        try:
+            files = os.listdir(full)
+        except OSError:
+            files = []
+        has_model = any(f.startswith("adapter_") or f.endswith(".safetensors")
+                        or f == "config.json" for f in files)
+        gguf = [f for f in files if f.endswith(".gguf")]
+        try:
+            modified = os.path.getmtime(full)
+        except OSError:
+            modified = 0
+        out.append({"name": name, "path": "runs/" + name, "has_model": has_model,
+                    "gguf": bool(gguf), "modified": modified,
+                    "ollama_name": TRAIN.ollama_model_name(name) if TRAIN else name})
+    out.sort(key=lambda r: r["modified"], reverse=True)
+    return out
+
+
+def train_status(since=0):
+    """Allt UI:t behöver för AI-träningsvyn i ett svar."""
+    binary = soup_binary()
+    vram_mb, gpu_name = train_gpu_hint()
+    root = train_workspace_root()
+    job = train_job_current()
+    return {
+        "enabled": train_toggle_on(),
+        "module": TRAIN is not None,
+        "soup": {
+            "found": bool(binary),
+            "path": binary or "",
+            "version": _soup_version_cached(binary),
+            "package": TRAIN.SOUP_PACKAGE if TRAIN else "",
+            "url": TRAIN.SOUP_URL if TRAIN else "",
+            "python_needed": TRAIN.SOUP_PYTHON if TRAIN else "",
+        },
+        "python": "%d.%d.%d" % sys.version_info[:3],
+        "python_ok": (3, 10) <= sys.version_info[:2] <= (3, 12),
+        "workspace": root or "",
+        "gpu": {"vram_mb": vram_mb, "name": gpu_name},
+        "suggest_profile": TRAIN.suggest_profile(vram_mb) if TRAIN else "4gb",
+        "datasets": train_list_datasets(),
+        "runs": train_list_runs(),
+        "job": job.snapshot(since) if job else None,
+    }
+
+
+_soup_version_cache = {"path": None, "version": None, "at": 0}
+
+
+def _soup_version_cached(binary, ttl=60):
+    """`soup --version` är ett processanrop – cacha svaret en stund."""
+    if not binary or TRAIN is None:
+        return ""
+    now = time.time()
+    if _soup_version_cache["path"] == binary and now - _soup_version_cache["at"] < ttl:
+        return _soup_version_cache["version"] or ""
+    version = TRAIN.soup_version(binary) or ""
+    _soup_version_cache.update({"path": binary, "version": version, "at": now})
+    return version
+
+
+# --------------------------------------------------------------------------
+# Hugging Face – valfritt tillägg (huggingface.py bredvid appen). Ollama kan
+# hämta GGUF-modeller direkt därifrån med namnet "hf.co/ägare/repo:kvant", så
+# när ett modellnamn inte finns i Ollamas bibliotek söker vi vidare där. Saknas
+# modulen fungerar allt som förut – bara utan Hugging Face.
+# --------------------------------------------------------------------------
+try:
+    import huggingface as HF
+except Exception:
+    HF = None
+
+# Hur många sökträffar som skickas till UI:t respektive vägs mot varandra när
+# vi väljer automatiskt.
+HF_SEARCH_LIMIT = 12
+HF_FALLBACK_LIMIT = 8
+
+
+def _pull_error_text(http_error):
+    """Läsbart felmeddelande ur ett HTTP-fel från Ollamas /api/pull.
+
+    Ollama svarar ibland med 404/500 och `{"error": "..."}` i kroppen istället
+    för en felrad i strömmen – texten avgör om vi ska leta på Hugging Face.
+    """
+    try:
+        body = http_error.read().decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    try:
+        data = json.loads(body or "null")
+        if isinstance(data, dict) and data.get("error"):
+            return str(data["error"])
+    except Exception:
+        pass
+    body = (body or "").strip()
+    return "HTTP %d%s" % (http_error.code, (": " + body[:200]) if body else "")
+
+
+# --------------------------------------------------------------------------
 # HTML/CSS/JS – hela webb-UI:t i en sträng (inga externa filer eller CDN)
 # --------------------------------------------------------------------------
 PAGE = r"""<!doctype html>
@@ -1635,6 +2047,115 @@ PAGE = r"""<!doctype html>
   .install-row input:focus{outline:none;border-color:var(--accent)}
   .section-title{color:var(--subtle);font-weight:700;font-size:14px;margin:16px 2px 2px}
 
+  /* Hugging Face-sök */
+  .hf-hint{color:var(--faint);font-size:12px;margin:6px 2px 0}
+  .hf-card{background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:13px 16px;margin:6px 2px}
+  .hf-card .hf-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .hf-card h3{margin:0;font-size:15px;font-weight:700}
+  .hf-card h3 a{color:var(--text);text-decoration:none}
+  .hf-card h3 a:hover{color:var(--accent-hov)}
+  .hf-meta{color:var(--faint);font-size:12px;margin-top:3px}
+  .hf-card .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .hf-quants{margin-top:10px;border-top:1px solid var(--border);padding-top:10px}
+  .hf-quant{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px}
+  .hf-quant .q{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hov);min-width:92px}
+  .hf-quant .sz{color:var(--faint)}
+  .hf-quant .btn{margin-left:auto}
+  .hf-gated{color:var(--amber);font-size:12px}
+
+  /* AI-träning */
+  .tr-wrap{max-width:1000px;padding-bottom:40px}
+  .tr-off{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:26px;
+    color:var(--subtle);max-width:640px;margin:20px auto;text-align:center}
+  .tr-bar-top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:2px 2px 14px}
+  .tr-pill{display:inline-flex;align-items:center;gap:6px;background:var(--chip);
+    border:1px solid var(--border);border-radius:999px;padding:5px 12px;font-size:12px;color:var(--subtle)}
+  .tr-pill b{color:var(--text);font-weight:600}
+  .tr-pill.ok{border-color:#2c5c43;color:var(--green)}
+  .tr-pill.warn{border-color:#5c4a2c;color:var(--amber)}
+  .tr-help{background:var(--card);border:1px solid var(--accent-dim);border-radius:12px;
+    padding:18px 22px;margin:0 2px 16px;font-size:13px;color:var(--subtle);line-height:1.65}
+  .tr-help h3{margin:0 0 10px;color:var(--text);font-size:15px}
+  .tr-help h4{margin:16px 0 6px;color:var(--text);font-size:13px}
+  .tr-help ol,.tr-help ul{margin:6px 0;padding-left:20px}
+  .tr-help li{margin:3px 0}
+  .tr-help code{background:var(--bg);border:1px solid var(--border);border-radius:5px;
+    padding:1px 5px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--accent-hov)}
+  .tr-help pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:10px 12px;overflow-x:auto;font-size:12px;margin:6px 0}
+  .tr-step{display:flex;gap:14px;margin:0 2px 14px}
+  .tr-num{flex:0 0 32px;height:32px;border-radius:50%;background:var(--accent-dim);
+    color:var(--accent-hov);display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:14px;border:1px solid var(--accent)}
+  .tr-num.done{background:#173a29;border-color:var(--green);color:var(--green)}
+  .tr-body{flex:1;min-width:0;background:var(--card);border:1px solid var(--border);
+    border-radius:12px;padding:18px 20px}
+  .tr-body h2{margin:0 0 4px;font-size:16px}
+  .tr-body .sub{color:var(--subtle);font-size:12.5px;margin:0 0 14px}
+  .tr-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
+  .tr-pick{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;
+    cursor:pointer;transition:border-color .12s,background .12s}
+  .tr-pick:hover{border-color:var(--accent);background:var(--card-hover)}
+  .tr-pick.sel{border-color:var(--accent);background:var(--accent-dim)}
+  .tr-pick .t{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .tr-pick .d{color:var(--subtle);font-size:12px;margin-top:4px;line-height:1.5}
+  .tr-pick .s{color:var(--faint);font-size:11.5px;margin-top:5px}
+  .tr-tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+  .tr-tab{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:7px 13px;
+    font-size:12.5px;color:var(--subtle);cursor:pointer}
+  .tr-tab.sel{border-color:var(--accent);color:var(--text);background:var(--accent-dim)}
+  .tr-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .tr-table th{text-align:left;color:var(--faint);font-weight:600;padding:4px 6px;font-size:11.5px}
+  .tr-table td{padding:3px 4px;vertical-align:top}
+  .tr-table textarea{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:7px;
+    color:var(--text);padding:7px 9px;font-size:12.5px;font-family:inherit;resize:vertical;min-height:44px}
+  .tr-table .del{background:none;border:none;color:var(--faint);cursor:pointer;font-size:15px;padding:6px}
+  .tr-table .del:hover{color:var(--danger)}
+  .tr-field{margin:12px 0}
+  .tr-field > label{display:block;font-size:12.5px;color:var(--subtle);margin-bottom:5px}
+  .tr-field input[type=text],.tr-field input[type=number],.tr-field select,.tr-field textarea{
+    width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);
+    padding:9px 11px;font-size:13px;font-family:inherit}
+  .tr-field input:focus,.tr-field select:focus,.tr-field textarea:focus{outline:none;border-color:var(--accent)}
+  .tr-range{display:flex;align-items:center;gap:12px}
+  .tr-range input[type=range]{flex:1;accent-color:var(--accent)}
+  .tr-range b{min-width:64px;text-align:right;color:var(--accent-hov);font-size:13px}
+  .tr-two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){ .tr-two{grid-template-columns:1fr} }
+  .tr-note{background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--accent);
+    border-radius:8px;padding:10px 12px;color:var(--subtle);font-size:12.5px;margin:12px 0}
+  .tr-note.warn{border-left-color:var(--amber)}
+  .tr-note.bad{border-left-color:var(--danger);color:var(--danger)}
+  .tr-note.good{border-left-color:var(--green)}
+  .tr-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
+  .tr-prev{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;
+    font-size:12px;color:var(--subtle);margin-top:8px}
+  .tr-prev .row{padding:5px 0;border-bottom:1px solid var(--border)}
+  .tr-prev .row:last-child{border-bottom:none}
+  .tr-prev .q{color:var(--text)} .tr-prev .a{color:var(--subtle)}
+  .tr-yaml{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--subtle);
+    white-space:pre;overflow-x:auto;max-height:320px;overflow-y:auto}
+  .tr-run{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .tr-progress{height:10px;background:var(--border);border-radius:5px;overflow:hidden;margin:10px 0 6px}
+  .tr-progress > div{height:100%;width:0;background:var(--accent);transition:width .3s}
+  .tr-progress.done > div{background:var(--green)}
+  .tr-progress.bad > div{background:var(--danger)}
+  .tr-stats{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--subtle)}
+  .tr-stats b{color:var(--text)}
+  .tr-chart{width:100%;height:110px;background:var(--bg);border:1px solid var(--border);
+    border-radius:8px;margin-top:12px}
+  .tr-log{background:#0b0d12;border:1px solid var(--border);border-radius:8px;padding:10px 12px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#9fb3c8;
+    max-height:280px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin-top:10px}
+  .tr-runs{display:flex;flex-direction:column;gap:8px}
+  .tr-runitem{display:flex;align-items:center;gap:12px;background:var(--bg);border:1px solid var(--border);
+    border-radius:9px;padding:10px 13px;font-size:13px}
+  .tr-runitem .name{font-weight:600}
+  .tr-runitem .meta{color:var(--faint);font-size:11.5px}
+  .tr-runitem .right{margin-left:auto;display:flex;gap:8px}
+
   /* Nedladdningspanel */
   .dl{position:sticky;bottom:0;background:var(--card);border-top:2px solid var(--accent);
     padding:12px 28px;margin:8px -24px -24px;display:none}
@@ -1675,6 +2196,7 @@ PAGE = r"""<!doctype html>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
       <a id="nav-code" onclick="showView('code')"><span class="dot">●</span><span class="label">💻 Codex</span></a>
+      <a id="nav-train" onclick="showView('train')"><span class="dot">●</span><span class="label">🎓 AI-träning</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
       <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
     </div>
@@ -1695,12 +2217,26 @@ PAGE = r"""<!doctype html>
     <div id="view-discover" class="view hidden">
       <div class="install-box">
         <h2>Installera valfri modell</h2>
-        <p>Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".</p>
+        <p id="customHint">Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".</p>
         <div class="install-row">
           <input id="customName" placeholder="modellnamn…" onkeydown="if(event.key==='Enter')pullCustom()">
           <button class="btn accent" onclick="pullCustom()">↓ Ladda ner</button>
         </div>
       </div>
+
+      <div class="install-box" id="hfBox" style="display:none">
+        <h2>🤗 Sök på Hugging Face</h2>
+        <p>Tusentals GGUF-modeller utöver Ollamas bibliotek. Sök, välj kvantisering
+          (mindre = snabbare och mindre minne) och installera.</p>
+        <div class="install-row">
+          <input id="hfQuery" placeholder="t.ex. qwen3, llama-3.1-8b, viking-7b…"
+                 onkeydown="if(event.key==='Enter')hfSearch()">
+          <button class="btn accent" onclick="hfSearch()">Sök</button>
+        </div>
+        <div class="hf-hint" id="hfHint"></div>
+        <div id="hfResults"></div>
+      </div>
+
       <div class="section-title">Populära modeller</div>
       <div id="catalogList"></div>
       <div class="dl" id="dlPanel">
@@ -1711,6 +2247,7 @@ PAGE = r"""<!doctype html>
         </div>
         <div class="bar"><div id="dlBar"></div></div>
         <div class="st" id="dlStatus"></div>
+        <div class="st" id="dlExtra"></div>
       </div>
     </div>
 
@@ -1856,6 +2393,252 @@ PAGE = r"""<!doctype html>
       </div>
     </div>
 
+    <div id="view-train" class="view hidden">
+      <div id="trainOff" class="tr-off" style="display:none">
+        <h2 style="margin:0 0 8px">🎓 AI-träning är avstängd</h2>
+        <p>Slå på den under <b>⚙ Inställningar → AI-träning</b>. Då kan du finjustera en
+          egen modell på dina egna exempel och lägga in den i Ollama – utan att skriva
+          en enda rad kod.</p>
+      </div>
+
+      <div id="trainWrap" class="tr-wrap" style="display:none">
+        <div class="tr-bar-top">
+          <span class="tr-pill" id="trPillSoup">Kontrollerar…</span>
+          <span class="tr-pill" id="trPillGpu"></span>
+          <span class="tr-pill" id="trPillDir"></span>
+          <button class="btn ghost small" onclick="toggleTrainHelp()" id="trHelpBtn"
+                  style="margin-left:auto">📖 Instruktioner</button>
+        </div>
+
+        <div class="tr-help" id="trainHelp" style="display:none">
+          <h3>Så tränar du en egen modell – på fem minuter</h3>
+          <p>Att "träna" betyder här att du tar en färdig modell och visar den <b>dina egna
+            exempel</b>, så den svarar mer som du vill. Du behöver inte kunna programmera –
+            följ stegen nedan uppifrån och ner.</p>
+          <ol>
+            <li><b>Data.</b> Skriv 20–200 exempel på frågor och svar i tabellen (eller peka
+              ut en färdig <code>.jsonl</code>-fil). Klicka <b>Skapa exempeldata</b> om du
+              bara vill testa flödet först.</li>
+            <li><b>Modell &amp; metod.</b> Välj en basmodell (börja litet – 0.5B eller 1.5B)
+              och en hårdvaruprofil som matchar ditt grafikkort. Resten fylls i åt dig.</li>
+            <li><b>Träna.</b> Klicka <b>Starta träningen</b> och följ förloppet. Första
+              gången laddas basmodellen ner, vilket kan ta en stund.</li>
+            <li><b>Använd modellen.</b> Klicka <b>Lägg in i Ollama</b> när träningen är klar.
+              Modellen dyker då upp under <b>Mina modeller</b> och i chatten.</li>
+          </ol>
+
+          <h4>Vad kostar det i tid?</h4>
+          <ul>
+            <li>50–200 exempel + en 0.5–1.5B-modell på ett vanligt grafikkort: några minuter.</li>
+            <li>Samma data på en 7–8B-modell: en halvtimme till några timmar.</li>
+            <li>Bara CPU: räkna med timmar – välj då den minsta basmodellen och 1 epok.</li>
+          </ul>
+
+          <h4>Hur ska data se ut?</h4>
+          <p>Enklast är tabellen i steg 1: en rad per exempel med <b>fråga</b> och
+            <b>svar</b>. Den sparas som JSONL i formatet <code>alpaca</code>:</p>
+          <pre>{"instruction": "Vad heter Sveriges huvudstad?", "input": "", "output": "Stockholm."}</pre>
+          <p>Har du redan data går även dessa format bra (de känns igen automatiskt):</p>
+          <pre>chatml:   {"messages": [{"role": "user", "content": "Hej"}, {"role": "assistant", "content": "Hej!"}]}
+sharegpt: {"conversations": [{"from": "human", "value": "Hej"}, {"from": "gpt", "value": "Hej!"}]}
+dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected": "Vet inte"}</pre>
+
+          <h4>Tips för bra resultat</h4>
+          <ul>
+            <li><b>Kvalitet slår mängd.</b> 100 genomtänkta exempel är bättre än 1 000 slarviga.</li>
+            <li><b>Var konsekvent.</b> Skriv svaren i den stil och längd du faktiskt vill ha.</li>
+            <li><b>Börja litet.</b> Kör en liten modell först och se att flödet fungerar hela
+              vägen till Ollama, innan du drar igång en stor körning.</li>
+            <li><b>Fakta lärs bäst med många omskrivningar</b> – ställ samma fråga på flera sätt.</li>
+          </ul>
+
+          <h4>Om något går fel</h4>
+          <ul>
+            <li><b>Slut på GPU-minne:</b> välj en mindre basmodell, lägre kontextlängd eller
+              profilen för mindre GPU (4bit + lagerströmning).</li>
+            <li><b>"Gated repo" / 401:</b> basmodellen kräver godkännande på Hugging Face.
+              Godkänn där och lägg in en HF-token i ⚙ Inställningar – eller välj en öppen modell
+              (de utan ⚠ i listan).</li>
+            <li><b>Soup saknas:</b> klicka <b>Installera Soup</b> i statusraden, eller kör
+              <code>pip install "soup-cli[train]"</code> på servern.</li>
+          </ul>
+          <p style="margin-top:14px;color:var(--faint)">Träningen görs av
+            <a href="https://github.com/MakazhanAlpamys/Soup" target="_blank" rel="noopener"
+               style="color:var(--accent-hov)">Soup</a> (soup-cli), ett fristående open
+            source-verktyg. Ollama Studio sköter formulär, förlopp och installationen i Ollama.</p>
+        </div>
+
+        <div id="trainSetup"></div>
+
+        <!-- Steg 1: träningsdata -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum1">1</div>
+          <div class="tr-body">
+            <h2>Träningsdata</h2>
+            <p class="sub">Exemplen du vill att modellen ska lära sig av. Börja med 20–200 rader.</p>
+            <div class="tr-tabs">
+              <div class="tr-tab sel" id="trTabTable" onclick="trainDataTab('table')">✏️ Skriv i tabell</div>
+              <div class="tr-tab" id="trTabFile" onclick="trainDataTab('file')">📂 Välj fil på servern</div>
+              <div class="tr-tab" id="trTabPaste" onclick="trainDataTab('paste')">📋 Klistra in JSONL</div>
+            </div>
+
+            <div id="trDataTable">
+              <table class="tr-table">
+                <thead><tr><th style="width:38%">Fråga / instruktion</th>
+                  <th style="width:24%">Extra indata (valfritt)</th>
+                  <th style="width:38%">Så ska modellen svara</th><th></th></tr></thead>
+                <tbody id="trRows"></tbody>
+              </table>
+              <div class="tr-actions">
+                <button class="btn ghost small" onclick="trainAddRow()">＋ Lägg till rad</button>
+                <button class="btn ghost small" onclick="trainDemoData()">✨ Skapa exempeldata</button>
+                <span style="flex:1"></span>
+                <input id="trDataName" class="tr-name" placeholder="filnamn.jsonl"
+                       style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                              color:var(--text);padding:8px 10px;font-size:12.5px;width:180px">
+                <button class="btn accent small" onclick="trainSaveRows()">💾 Spara dataset</button>
+              </div>
+            </div>
+
+            <div id="trDataFile" style="display:none">
+              <div class="tr-field">
+                <label>Datafiler i träningsmappen</label>
+                <select id="trFileSelect" onchange="trainPickFile()"></select>
+              </div>
+              <p class="sub" id="trFileHint"></p>
+            </div>
+
+            <div id="trDataPaste" style="display:none">
+              <div class="tr-field">
+                <label>En JSON-rad per exempel (alpaca, chatml, sharegpt eller dpo)</label>
+                <textarea id="trPaste" rows="8" placeholder='{"instruction": "…", "input": "", "output": "…"}'></textarea>
+              </div>
+              <div class="tr-actions">
+                <input id="trPasteName" placeholder="filnamn.jsonl"
+                       style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                              color:var(--text);padding:8px 10px;font-size:12.5px;width:180px">
+                <button class="btn accent small" onclick="trainSavePaste()">💾 Spara dataset</button>
+              </div>
+            </div>
+
+            <div id="trDataInfo"></div>
+          </div>
+        </div>
+
+        <!-- Steg 2: modell och metod -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum2">2</div>
+          <div class="tr-body">
+            <h2>Modell &amp; metod</h2>
+            <p class="sub">Vilken modell du bygger vidare på, och hur mycket din dator klarar.</p>
+
+            <div class="tr-field">
+              <label>Namn på din modell <span style="color:var(--faint)">(används som mappnamn och i Ollama)</span></label>
+              <input id="trName" type="text" placeholder="min-modell" oninput="trainFormChanged()">
+            </div>
+
+            <label style="display:block;font-size:12.5px;color:var(--subtle);margin:14px 0 6px">Basmodell att träna vidare på</label>
+            <div class="tr-grid" id="trBases"></div>
+            <div class="tr-field" style="margin-top:10px">
+              <label>…eller skriv ett eget Hugging Face-namn</label>
+              <input id="trBaseCustom" type="text" placeholder="t.ex. Qwen/Qwen2.5-1.5B-Instruct"
+                     oninput="trainCustomBase()">
+            </div>
+
+            <label style="display:block;font-size:12.5px;color:var(--subtle);margin:16px 0 6px">Vad ska modellen lära sig?</label>
+            <div class="tr-grid" id="trTasks"></div>
+
+            <label style="display:block;font-size:12.5px;color:var(--subtle);margin:16px 0 6px">Hårdvara <span style="color:var(--faint)">(styr kvantisering, LoRA-storlek och kontextlängd)</span></label>
+            <div class="tr-grid" id="trProfiles"></div>
+
+            <div class="tr-two" style="margin-top:16px">
+              <div class="tr-field">
+                <label>Epoker <span style="color:var(--faint)">(hur många varv genom datan)</span></label>
+                <div class="tr-range"><input id="trEpochs" type="range" min="1" max="10" step="1" value="3"
+                  oninput="trainFormChanged()"><b id="trEpochsVal">3</b></div>
+              </div>
+              <div class="tr-field">
+                <label>Kontextlängd <span style="color:var(--faint)">(max tokens per exempel)</span></label>
+                <div class="tr-range"><input id="trMaxLen" type="range" min="256" max="8192" step="256" value="1024"
+                  oninput="trainFormChanged()"><b id="trMaxLenVal">1024</b></div>
+              </div>
+              <div class="tr-field">
+                <label>Inlärningstakt <span style="color:var(--faint)">(lägre = försiktigare)</span></label>
+                <select id="trLr" onchange="trainFormChanged()">
+                  <option value="1e-5">1e-5 – försiktig</option>
+                  <option value="2e-5" selected>2e-5 – standard</option>
+                  <option value="5e-5">5e-5 – snabbare</option>
+                  <option value="1e-4">1e-4 – aggressiv (små modeller)</option>
+                </select>
+              </div>
+              <div class="tr-field">
+                <label>LoRA-storlek (r) <span style="color:var(--faint)">(större = mer kapacitet, mer minne)</span></label>
+                <div class="tr-range"><input id="trLoraR" type="range" min="4" max="128" step="4" value="16"
+                  oninput="trainFormChanged()"><b id="trLoraRVal">16</b></div>
+              </div>
+            </div>
+
+            <div class="tr-actions">
+              <button class="btn ghost small" onclick="toggleYaml()" id="trYamlBtn">⚙ Visa konfigurationen (soup.yaml)</button>
+            </div>
+            <div id="trYamlBox" style="display:none">
+              <div class="tr-yaml" id="trYaml"></div>
+              <p class="sub" style="margin-top:8px">Det här är filen Soup får. Den sparas i
+                träningsmappen när du startar – du kan även köra den själv med
+                <code style="color:var(--accent-hov)">soup train --config soup.yaml</code>.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Steg 3: träna -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum3">3</div>
+          <div class="tr-body">
+            <h2>Träna</h2>
+            <p class="sub">Körningen sker på servern. Du kan lämna sidan – förloppet finns kvar när du kommer tillbaka.</p>
+            <div id="trStartBox" class="tr-actions">
+              <button class="btn accent" id="trStartBtn" onclick="trainStart()">▶ Starta träningen</button>
+              <button class="btn ghost small" id="trStopBtn" onclick="trainStop()" style="display:none">■ Avbryt</button>
+              <span id="trStartHint" class="sub" style="margin:0"></span>
+            </div>
+            <div id="trRunBox" style="display:none">
+              <div class="tr-run">
+                <div class="tr-stats" style="margin-bottom:2px">
+                  <span id="trJobLabel"><b>–</b></span>
+                  <span style="margin-left:auto" id="trJobPct"></span>
+                </div>
+                <div class="tr-progress" id="trProgress"><div id="trProgressBar"></div></div>
+                <div class="tr-stats" id="trStatsRow">
+                  <span>Steg: <b id="trStep">–</b></span>
+                  <span>Loss: <b id="trLoss">–</b></span>
+                  <span>Epok: <b id="trEpoch">–</b></span>
+                  <span>Tid: <b id="trElapsed">–</b></span>
+                  <span>Kvar: <b id="trEta">–</b></span>
+                </div>
+                <svg class="tr-chart" id="trChart" viewBox="0 0 600 110" preserveAspectRatio="none"></svg>
+                <div class="tr-actions">
+                  <button class="btn ghost small" onclick="toggleTrainLog()" id="trLogBtn">📜 Visa logg</button>
+                  <span id="trJobState" class="sub" style="margin:0"></span>
+                </div>
+                <div class="tr-log" id="trLog" style="display:none"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Steg 4: använd modellen -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum4">4</div>
+          <div class="tr-body">
+            <h2>Använd modellen</h2>
+            <p class="sub">Exportera den färdiga modellen till GGUF och lägg in den i Ollama –
+              sedan finns den under "Mina modeller" och i chatten.</p>
+            <div class="tr-runs" id="trRuns"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="view-settings" class="view hidden">
       <div class="settings-wrap">
         <div class="set-card">
@@ -1863,6 +2646,28 @@ PAGE = r"""<!doctype html>
           <label class="set-check"><input id="stWebsearch" type="checkbox">
             <span>🌐 Webbsök när modellen är osäker
               <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
+        </div>
+
+        <div class="set-card">
+          <h2>🤗 Hugging Face</h2>
+          <p class="hint">Ollama kan hämta GGUF-modeller direkt från Hugging Face
+            (<code>hf.co/ägare/repo:kvantisering</code>). Med det här påslaget söker Ollama Studio
+            där när ett modellnamn inte finns i Ollamas eget bibliotek – och du får ett sökfält
+            under "Upptäck / Installera". Kräver internet på servern.</p>
+          <label class="set-check"><input id="stHfEnabled" type="checkbox">
+            <span>🤗 Slå på Hugging Face-stöd (sök + reserv)</span></label>
+          <label class="set-check"><input id="stHfAuto" type="checkbox">
+            <span>Ladda ner bästa träffen automatiskt
+              <span class="hint">(av: träffarna visas men du väljer själv)</span></span></label>
+          <div class="set-row">
+            <label>HF-token <span class="hint">(valfri – bara för sökningen, t.ex. egna repon)</span></label>
+            <input id="stHfToken" type="password" autocomplete="off" placeholder="hf_…">
+            <div class="set-keyrow">
+              <span id="stHfTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearHfToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div id="stHfState" class="hint"></div>
         </div>
 
         <div class="set-card">
@@ -1897,6 +2702,29 @@ PAGE = r"""<!doctype html>
             <button class="btn ghost small" type="button" onclick="testMem0()">Testa anslutning</button>
             <span id="stMem0Test" class="hint"></span>
           </div>
+        </div>
+
+        <div class="set-card">
+          <h2>🎓 AI-träning <span class="hint">(finjustera egna modeller)</span></h2>
+          <p class="hint">Fliken <b>AI-träning</b> låter dig träna en egen modell på dina egna
+            exempel och lägga in den i Ollama. Själva träningen görs av
+            <a href="https://github.com/MakazhanAlpamys/Soup" target="_blank" rel="noopener"
+               style="color:var(--accent-hov)">Soup</a> (<code>pip install "soup-cli[train]"</code>),
+            som installeras separat på servern – knappen finns i fliken.
+            <b>Kräver en åtkomsttoken om servern nås av andra</b> – träning skriver till disk
+            och startar processer.</p>
+          <label class="set-check"><input id="stTrainEnabled" type="checkbox">
+            <span>🎓 Slå på AI-träning</span></label>
+          <div class="set-row">
+            <label>Träningsmapp <span class="hint">(konfig, dataset och tränade modeller)</span></label>
+            <input id="stTrainWs" placeholder="lämna tomt för ~/ollama-studio-training">
+            <span id="stTrainWsState" class="hint"></span>
+          </div>
+          <div class="set-row">
+            <label>Sökväg till <code>soup</code> <span class="hint">(valfritt – hittas normalt automatiskt)</span></label>
+            <input id="stTrainBin" placeholder="/usr/local/bin/soup">
+          </div>
+          <div id="stTrainState" class="hint"></div>
         </div>
 
         <div class="set-card">
@@ -2048,9 +2876,9 @@ function humanDate(s){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Codex'};
+const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Codex', train:'AI-träning'};
 function showView(v){
-  for(const k of ['models','discover','chat','system','settings','code']){
+  for(const k of ['models','discover','chat','system','settings','code','train']){
     document.getElementById('nav-'+k).classList.toggle('active', v===k);
     document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
   }
@@ -2067,6 +2895,7 @@ function showView(v){
       setTimeout(()=>{ const ci=document.getElementById('codeInput'); if(ci) ci.focus(); }, 0);
     }
   }
+  if(v==='train'){ loadTrain(); }
   // System-vyn pollas bara medan den visas
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
@@ -2271,6 +3100,528 @@ function renderCatalog(){
   }).join('');
 }
 
+/* ======================= AI-träning (Soup) ======================= */
+const TRAIN_META = __TRAIN_JSON__;      // basmodeller, uppgifter, hårdvaruprofiler
+let trainStatus = null;                 // senaste /api/train/status
+let trainForm = {task:'sft', profile:'4gb', epochs:3, max_length:1024, lr:'2e-5', lora_r:16};
+let trainRows = [];                     // tabellen i steg 1
+let trainTimer = null;                  // pollning under körning
+let trainLogNext = 0;
+let trainYamlTimer = null;
+
+function toggleTrainHelp(){
+  const box = document.getElementById('trainHelp');
+  const open = box.style.display === 'none';
+  box.style.display = open ? 'block' : 'none';
+  document.getElementById('trHelpBtn').textContent = open ? '✕ Dölj instruktioner' : '📖 Instruktioner';
+}
+function toggleYaml(){
+  const box = document.getElementById('trYamlBox');
+  const open = box.style.display === 'none';
+  box.style.display = open ? 'block' : 'none';
+  document.getElementById('trYamlBtn').textContent = open
+    ? '⚙ Dölj konfigurationen' : '⚙ Visa konfigurationen (soup.yaml)';
+  if(open) refreshYaml();
+}
+function toggleTrainLog(){
+  const box = document.getElementById('trLog');
+  const open = box.style.display === 'none';
+  box.style.display = open ? 'block' : 'none';
+  document.getElementById('trLogBtn').textContent = open ? '📜 Dölj logg' : '📜 Visa logg';
+  if(open) box.scrollTop = box.scrollHeight;
+}
+
+async function loadTrain(){
+  document.getElementById('trainOff').style.display = cfg.train ? 'none' : 'block';
+  document.getElementById('trainWrap').style.display = cfg.train ? 'block' : 'none';
+  if(!cfg.train) return;
+  if(!trainRows.length) trainRows = [{instruction:'',input:'',output:''},
+                                     {instruction:'',input:'',output:''},
+                                     {instruction:'',input:'',output:''}];
+  renderTrainRows(); renderTrainPickers();
+  try{
+    const saved = uiPrefs.train_form ? JSON.parse(uiPrefs.train_form) : null;
+    if(saved) trainForm = Object.assign(trainForm, saved);
+  }catch(e){}
+  applyTrainForm();
+  await refreshTrainStatus();
+}
+
+async function refreshTrainStatus(){
+  try{
+    const r = await api('/api/train/status', {headers: headers(false)});
+    trainStatus = await r.json();
+  }catch(e){ return; }
+  if(!trainStatus || trainStatus.enabled === false) return;
+  renderTrainTop(); renderTrainSetup(); renderTrainFiles(); renderTrainRuns();
+  const job = trainStatus.job;
+  if(job){ renderTrainJob(job); if(job.state === 'kör') startTrainPolling(); }
+  updateTrainSteps();
+}
+
+function renderTrainTop(){
+  const s = trainStatus, soup = s.soup || {};
+  const pill = document.getElementById('trPillSoup');
+  if(soup.found){
+    pill.className = 'tr-pill ok';
+    pill.innerHTML = '✓ Soup <b>' + esc(soup.version || 'installerat') + '</b>';
+  }else{
+    pill.className = 'tr-pill warn';
+    pill.innerHTML = '⚠ Soup är inte installerat';
+  }
+  const gpu = document.getElementById('trPillGpu');
+  if(s.gpu && s.gpu.vram_mb){
+    gpu.className = 'tr-pill';
+    gpu.innerHTML = '🖥 <b>' + esc(s.gpu.name || 'GPU') + '</b> · '
+      + (s.gpu.vram_mb/1024).toFixed(0) + ' GB VRAM';
+  }else{
+    gpu.className = 'tr-pill warn';
+    gpu.innerHTML = '🖥 Ingen GPU hittad – träning på CPU är långsam';
+  }
+  const dir = document.getElementById('trPillDir');
+  dir.innerHTML = '📁 <b>' + esc(s.workspace || '') + '</b>';
+  dir.title = 'Konfig, dataset och tränade modeller hamnar här';
+}
+
+function renderTrainSetup(){
+  const s = trainStatus, soup = s.soup || {}, box = document.getElementById('trainSetup');
+  if(soup.found){ box.innerHTML = ''; return; }
+  const job = s.job && s.job.kind === 'install' ? s.job : null;
+  box.innerHTML =
+    '<div class="tr-step"><div class="tr-num">0</div><div class="tr-body">'
+    + '<h2>Installera träningsmotorn</h2>'
+    + '<p class="sub">Själva träningen görs av <a href="' + esc(soup.url||'#') + '" target="_blank" '
+    + 'rel="noopener" style="color:var(--accent-hov)">Soup</a> – ett fristående open source-verktyg '
+    + 'som inte följer med Ollama Studio. Installera det en gång, sedan är det klart.</p>'
+    + '<div class="tr-note">Kommandot som körs: <code style="color:var(--accent-hov)">pip install "'
+    + esc(soup.package||'soup-cli[train]') + '"</code><br>Det laddar ner PyTorch och kringpaket '
+    + '(flera GB) och tar några minuter. Serverns Python är <b>' + esc(s.python||'?') + '</b>'
+    + (s.python_ok ? '' : ' – Soup kräver ' + esc(soup.python_needed||'3.10–3.12')
+        + ', så installationen kan misslyckas här') + '.</div>'
+    + '<div class="tr-actions">'
+    + '<button class="btn accent" onclick="trainInstall()"' + (job && job.state==='kör' ? ' disabled' : '')
+    + '>⬇ Installera Soup</button>'
+    + '<span class="sub" style="margin:0">…eller kör kommandot själv på servern och klicka '
+    + '<a href="#" onclick="refreshTrainStatus();return false" style="color:var(--accent-hov)">uppdatera</a>.</span>'
+    + '</div></div></div>';
+}
+
+/* ---- Steg 1: data ---- */
+function trainDataTab(which){
+  for(const [tab, box] of [['trTabTable','trDataTable'],['trTabFile','trDataFile'],['trTabPaste','trDataPaste']]){
+    const on = tab.toLowerCase().includes(which);
+    document.getElementById(tab).classList.toggle('sel', on);
+    document.getElementById(box).style.display = on ? 'block' : 'none';
+  }
+}
+function renderTrainRows(){
+  document.getElementById('trRows').innerHTML = trainRows.map((r,i)=>
+    '<tr>'
+    + '<td><textarea placeholder="T.ex. Vad är vår returpolicy?" oninput="trainRowEdit('+i+',\'instruction\',this.value)">'+esc(r.instruction||'')+'</textarea></td>'
+    + '<td><textarea placeholder="(lämna tomt oftast)" oninput="trainRowEdit('+i+',\'input\',this.value)">'+esc(r.input||'')+'</textarea></td>'
+    + '<td><textarea placeholder="Svaret du vill få" oninput="trainRowEdit('+i+',\'output\',this.value)">'+esc(r.output||'')+'</textarea></td>'
+    + '<td><button class="del" title="Ta bort raden" onclick="trainDelRow('+i+')">✕</button></td></tr>').join('');
+}
+function trainRowEdit(i, field, value){ if(trainRows[i]) trainRows[i][field] = value; }
+function trainAddRow(){ trainRows.push({instruction:'',input:'',output:''}); renderTrainRows(); }
+function trainDelRow(i){ trainRows.splice(i,1); if(!trainRows.length) trainAddRow(); else renderTrainRows(); }
+
+async function trainDataPost(body){
+  const r = await api('/api/train/dataset', {method:'POST', headers:headers(true),
+                                             body: JSON.stringify(body)});
+  const d = await r.json();
+  if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+  return d;
+}
+async function trainSaveRows(){
+  const filled = trainRows.filter(r=>(r.instruction||'').trim() && (r.output||'').trim());
+  if(!filled.length){ toast('Fyll i minst en rad med fråga och svar', true); return; }
+  try{
+    const name = (document.getElementById('trDataName').value||'').trim() || 'mitt-dataset.jsonl';
+    const d = await trainDataPost({action:'save', name, rows: filled});
+    afterDatasetSaved(d);
+  }catch(e){ toast('Kunde inte spara: '+e.message, true); }
+}
+async function trainSavePaste(){
+  try{
+    const name = (document.getElementById('trPasteName').value||'').trim() || 'mitt-dataset.jsonl';
+    const d = await trainDataPost({action:'paste', name,
+                                   content: document.getElementById('trPaste').value});
+    afterDatasetSaved(d);
+  }catch(e){ toast('Kunde inte spara: '+e.message, true); }
+}
+async function trainDemoData(){
+  try{
+    const d = await trainDataPost({action:'demo', name:'exempeldata.jsonl'});
+    trainRows = TRAIN_META.demo_rows.map(r=>Object.assign({}, r));
+    renderTrainRows();
+    afterDatasetSaved(d);
+    toast('Exempeldata skapad – nu kan du köra hela flödet');
+  }catch(e){ toast('Kunde inte skapa exempeldata: '+e.message, true); }
+}
+function afterDatasetSaved(info){
+  trainForm.data = info.path;
+  renderDataInfo(info);
+  refreshTrainStatus();
+  refreshYaml();
+}
+async function trainPickFile(){
+  const path = document.getElementById('trFileSelect').value;
+  if(!path){ return; }
+  trainForm.data = path;
+  try{
+    const r = await api('/api/train/dataset?path='+encodeURIComponent(path), {headers: headers(false)});
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    renderDataInfo(d);
+  }catch(e){ document.getElementById('trDataInfo').innerHTML =
+    '<div class="tr-note bad">Kunde inte läsa filen: '+esc(e.message)+'</div>'; }
+  refreshYaml(); updateTrainSteps();
+}
+function renderTrainFiles(){
+  const sel = document.getElementById('trFileSelect');
+  const files = (trainStatus.datasets||[]);
+  sel.innerHTML = files.length
+    ? files.map(f=>'<option value="'+esc(f.path)+'">'+esc(f.name)+'  ('+humanSize(f.size)+')</option>').join('')
+    : '<option value="">Inga filer i mappen data/ ännu</option>';
+  if(trainForm.data && files.some(f=>f.path===trainForm.data)) sel.value = trainForm.data;
+  document.getElementById('trFileHint').innerHTML = 'Lägg egna filer i <code>'
+    + esc((trainStatus.workspace||'')+'/data') + '</code> på servern så dyker de upp här.';
+}
+function renderDataInfo(info){
+  if(!info){ document.getElementById('trDataInfo').innerHTML=''; return; }
+  const rows = (info.examples||[]).map(x=>
+    '<div class="row"><div class="q">▸ '+esc(x.in || '(ingen fråga)')+'</div>'
+    + '<div class="a">→ '+esc(x.ut||'')+'</div></div>').join('');
+  const probs = (info.problems||[]).map(p=>'<div class="tr-note warn">'+esc(p)+'</div>').join('');
+  document.getElementById('trDataInfo').innerHTML =
+    '<div class="tr-note good">✓ <b>'+esc(info.path||'')+'</b> – '+info.rows+' rader · format <b>'
+    + esc(info.format)+'</b> · ca '+(info.est_tokens||0).toLocaleString('sv-SE')+' tokens</div>'
+    + probs + (rows ? '<div class="tr-prev">'+rows+'</div>' : '');
+}
+
+/* ---- Steg 2: modell och metod ---- */
+function renderTrainPickers(){
+  document.getElementById('trBases').innerHTML = TRAIN_META.bases.map(b=>
+    '<div class="tr-pick" data-base="'+esc(b.id)+'" onclick="trainPickBase(\''+esc(b.id)+'\')">'
+    + '<div class="t">'+esc(b.name)+(b.gated?' <span class="chip" style="background:#3a2f1a;color:var(--amber)">⚠ gated</span>':'')+'</div>'
+    + '<div class="d">'+esc(b.note)+'</div>'
+    + '<div class="s">'+esc(b.id)+' · '+esc(b.size)+'</div></div>').join('');
+  document.getElementById('trTasks').innerHTML = TRAIN_META.tasks.map(t=>
+    '<div class="tr-pick" data-task="'+esc(t.id)+'" onclick="trainPickTask(\''+esc(t.id)+'\')">'
+    + '<div class="t">'+esc(t.name)+'</div><div class="d">'+esc(t.desc)+'</div>'
+    + '<div class="s">Data: '+esc(t.data)+'</div></div>').join('');
+  document.getElementById('trProfiles').innerHTML = TRAIN_META.profiles.map(p=>
+    '<div class="tr-pick" data-profile="'+esc(p.id)+'" onclick="trainPickProfile(\''+esc(p.id)+'\')">'
+    + '<div class="t">'+esc(p.name)+'</div><div class="d">'+esc(p.desc)+'</div>'
+    + '<div class="s">'+esc(p.quantization)+(p.stream_layers?' · lagerströmning':'')
+    + ' · LoRA r='+p.lora_r+' · '+p.max_length+' tokens</div></div>').join('');
+}
+function markPick(attr, value){
+  document.querySelectorAll('[data-'+attr+']').forEach(el=>
+    el.classList.toggle('sel', el.getAttribute('data-'+attr) === value));
+}
+function trainPickBase(id){
+  trainForm.base = id; document.getElementById('trBaseCustom').value = '';
+  markPick('base', id); trainFormChanged();
+}
+function trainCustomBase(){
+  const v = document.getElementById('trBaseCustom').value.trim();
+  if(v){ trainForm.base = v; markPick('base', ''); }
+  trainFormChanged();
+}
+function trainPickTask(id){ trainForm.task = id; markPick('task', id); trainFormChanged(); }
+function trainPickProfile(id){
+  trainForm.profile = id;
+  const p = TRAIN_META.profiles.find(x=>x.id===id);
+  if(p){                                    // profilen sätter de tekniska fälten
+    trainForm.quantization = p.quantization; trainForm.stream_layers = p.stream_layers;
+    trainForm.lora_r = p.lora_r; trainForm.lora_alpha = p.lora_alpha;
+    trainForm.max_length = p.max_length; trainForm.batch_size = p.batch_size;
+    document.getElementById('trMaxLen').value = p.max_length;
+    document.getElementById('trLoraR').value = p.lora_r;
+  }
+  markPick('profile', id); applyTrainForm(); trainFormChanged();
+}
+function applyTrainForm(){
+  const set = (id,v)=>{ const el=document.getElementById(id); if(el && v!=null) el.value = v; };
+  set('trName', trainForm.name || '');
+  set('trEpochs', trainForm.epochs || 3);
+  set('trMaxLen', trainForm.max_length || 1024);
+  set('trLoraR', trainForm.lora_r || 16);
+  set('trLr', trainForm.lr || '2e-5');
+  if(trainForm.base && !TRAIN_META.bases.some(b=>b.id===trainForm.base))
+    set('trBaseCustom', trainForm.base);
+  markPick('base', trainForm.base || '');
+  markPick('task', trainForm.task || 'sft');
+  markPick('profile', trainForm.profile || '4gb');
+  document.getElementById('trEpochsVal').textContent = trainForm.epochs || 3;
+  document.getElementById('trMaxLenVal').textContent = trainForm.max_length || 1024;
+  document.getElementById('trLoraRVal').textContent = trainForm.lora_r || 16;
+}
+function trainFormChanged(){
+  trainForm.name = document.getElementById('trName').value.trim();
+  trainForm.epochs = parseInt(document.getElementById('trEpochs').value, 10);
+  trainForm.max_length = parseInt(document.getElementById('trMaxLen').value, 10);
+  trainForm.lora_r = parseInt(document.getElementById('trLoraR').value, 10);
+  trainForm.lora_alpha = trainForm.lora_r * 2;
+  trainForm.lr = document.getElementById('trLr').value;
+  document.getElementById('trEpochsVal').textContent = trainForm.epochs;
+  document.getElementById('trMaxLenVal').textContent = trainForm.max_length;
+  document.getElementById('trLoraRVal').textContent = trainForm.lora_r;
+  updateTrainSteps();
+  clearTimeout(trainYamlTimer);
+  trainYamlTimer = setTimeout(refreshYaml, 350);      // vänta ut skrivandet
+}
+async function refreshYaml(){
+  try{
+    const r = await api('/api/train/config', {method:'POST', headers:headers(true),
+      body: JSON.stringify({form: trainForm, save: true})});
+    const d = await r.json();
+    if(d.yaml) document.getElementById('trYaml').textContent = d.yaml;
+  }catch(e){}
+}
+
+/* ---- Steg 3: körningen ---- */
+function updateTrainSteps(){
+  const hasData = !!trainForm.data, hasModel = !!trainForm.base;
+  document.getElementById('trNum1').classList.toggle('done', hasData);
+  document.getElementById('trNum2').classList.toggle('done', hasData && hasModel);
+  const job = trainStatus && trainStatus.job;
+  const trained = (trainStatus && (trainStatus.runs||[]).some(r=>r.has_model));
+  document.getElementById('trNum3').classList.toggle('done', trained);
+  document.getElementById('trNum4').classList.toggle('done',
+    !!(trainStatus && (trainStatus.runs||[]).some(r=>r.gguf)));
+  const btn = document.getElementById('trStartBtn');
+  const soupOk = trainStatus && trainStatus.soup && trainStatus.soup.found;
+  const busy = job && job.state === 'kör';
+  btn.disabled = !hasData || !hasModel || !soupOk || busy;
+  let hint = '';
+  if(!soupOk) hint = 'Installera Soup först (steg 0 ovan).';
+  else if(!hasData) hint = 'Välj eller spara ett dataset i steg 1.';
+  else if(!hasModel) hint = 'Välj en basmodell i steg 2.';
+  else if(busy) hint = 'En körning pågår.';
+  else hint = 'Tränar ' + (trainForm.base||'') + ' på ' + (trainForm.data||'') + '.';
+  document.getElementById('trStartHint').textContent = hint;
+}
+async function trainStart(){
+  try{
+    const r = await api('/api/train/start', {method:'POST', headers:headers(true),
+      body: JSON.stringify({form: trainForm})});
+    const d = await r.json();
+    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+    trainLogNext = 0;
+    renderTrainJob(d.job); startTrainPolling(); updateTrainSteps();
+    toast('Träningen har startat');
+  }catch(e){ toast('Kunde inte starta: '+e.message, true); }
+}
+async function trainStop(){
+  try{
+    await api('/api/train/stop', {method:'POST', headers:headers(true), body:'{}'});
+    toast('Avbryter körningen…');
+  }catch(e){ toast('Kunde inte avbryta: '+e.message, true); }
+}
+async function trainInstall(){
+  try{
+    const r = await api('/api/train/install', {method:'POST', headers:headers(true), body:'{}'});
+    const d = await r.json();
+    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+    trainLogNext = 0;
+    renderTrainJob(d.job); startTrainPolling();
+    document.getElementById('trLog').style.display = 'block';
+    toast('Installerar Soup – det tar några minuter');
+  }catch(e){ toast('Kunde inte installera: '+e.message, true); }
+}
+async function trainExport(run){
+  try{
+    const r = await api('/api/train/export', {method:'POST', headers:headers(true),
+      body: JSON.stringify({run})});
+    const d = await r.json();
+    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+    trainLogNext = 0;
+    renderTrainJob(d.job); startTrainPolling();
+    toast('Exporterar till Ollama som "'+d.ollama_name+'"');
+  }catch(e){ toast('Kunde inte exportera: '+e.message, true); }
+}
+function startTrainPolling(){
+  if(trainTimer) return;
+  trainTimer = setInterval(pollTrainJob, 1500);
+}
+function stopTrainPolling(){ clearInterval(trainTimer); trainTimer = null; }
+async function pollTrainJob(){
+  try{
+    const r = await api('/api/train/log?since='+trainLogNext, {headers: headers(false)});
+    const d = await r.json();
+    if(!d.job){ stopTrainPolling(); return; }
+    renderTrainJob(d.job);
+    if(d.job.state !== 'kör'){
+      stopTrainPolling();
+      refreshTrainStatus();
+      refresh();                                  // ev. ny modell i Ollama
+      if(d.job.state === 'klar') toast(d.job.label + ' – klart!');
+      else if(d.job.state === 'fel') toast(d.job.label + ' misslyckades', true);
+    }
+  }catch(e){ stopTrainPolling(); }
+}
+function renderTrainJob(job){
+  if(!job) return;
+  document.getElementById('trRunBox').style.display = 'block';
+  document.getElementById('trStopBtn').style.display = job.state === 'kör' ? 'inline-flex' : 'none';
+  document.getElementById('trStartBtn').disabled = job.state === 'kör';
+  const m = job.metrics || {};
+  const pct = m.percent != null ? m.percent : (job.state === 'klar' ? 100 : 0);
+  const prog = document.getElementById('trProgress');
+  prog.classList.toggle('done', job.state === 'klar');
+  prog.classList.toggle('bad', job.state === 'fel');
+  document.getElementById('trProgressBar').style.width = pct + '%';
+  document.getElementById('trJobPct').textContent = m.percent != null ? (m.percent + '%') : '';
+  document.getElementById('trJobLabel').innerHTML = '<b>' + esc(job.label||'') + '</b>';
+  document.getElementById('trStep').textContent = m.step != null
+    ? (m.step + (m.total ? ' / ' + m.total : '')) : '–';
+  document.getElementById('trLoss').textContent = m.loss != null ? m.loss.toFixed(4) : '–';
+  document.getElementById('trEpoch').textContent = m.epoch != null ? m.epoch.toFixed(2) : '–';
+  document.getElementById('trElapsed').textContent = fmtDuration(job.elapsed);
+  document.getElementById('trEta').textContent = m.eta || '–';
+  const state = {'kör':'⏳ Kör…','klar':'✓ Klart','fel':'✕ Misslyckades','stoppad':'■ Avbruten'}[job.state] || job.state;
+  document.getElementById('trJobState').innerHTML = esc(state)
+    + (job.error ? ' – <span style="color:var(--danger)">'+esc(job.error)+'</span>' : '');
+  const chart = document.getElementById('trChart');
+  chart.style.display = job.kind === 'train' ? '' : 'none';
+  if(job.kind === 'train') drawLossChart(job.history || []);
+  // Steg/loss/epok är bara meningsfullt under träning
+  document.getElementById('trStatsRow').style.display = job.kind === 'train' ? 'flex' : 'none';
+  if(job.lines && job.lines.length){
+    const box = document.getElementById('trLog');
+    const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.textContent += (box.textContent ? '\n' : '') + job.lines.join('\n');
+    if(atBottom) box.scrollTop = box.scrollHeight;
+    trainLogNext = job.next;
+  }
+  if(job.state === 'fel' && job.error) document.getElementById('trLog').style.display = 'block';
+}
+function fmtDuration(sec){
+  sec = Math.max(0, parseInt(sec||0, 10));
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  return (h ? h+'h ' : '') + (h||m ? m+'m ' : '') + s + 's';
+}
+function drawLossChart(history){
+  const svg = document.getElementById('trChart');
+  if(!history.length){ svg.innerHTML = '<text x="300" y="60" fill="#4b5563" font-size="12" '
+    + 'text-anchor="middle">Loss-kurvan ritas när träningen kommit igång</text>'; return; }
+  const losses = history.map(p=>p.loss);
+  const min = Math.min(...losses), max = Math.max(...losses), span = (max-min) || 1;
+  const pts = history.map((p,i)=>{
+    const x = history.length === 1 ? 300 : (i/(history.length-1))*580 + 10;
+    const y = 96 - ((p.loss - min)/span)*82;
+    return x.toFixed(1)+','+y.toFixed(1);
+  }).join(' ');
+  svg.innerHTML =
+    '<polyline points="'+pts+'" fill="none" stroke="#7c5cff" stroke-width="2"/>'
+    + '<text x="8" y="14" fill="#6b7280" font-size="10">loss '+max.toFixed(3)+'</text>'
+    + '<text x="8" y="106" fill="#6b7280" font-size="10">'+min.toFixed(3)+'</text>'
+    + '<text x="592" y="106" fill="#6b7280" font-size="10" text-anchor="end">steg '
+    + (history[history.length-1].step||history.length)+'</text>';
+}
+
+/* ---- Steg 4: färdiga modeller ---- */
+function renderTrainRuns(){
+  const runs = (trainStatus.runs||[]);
+  const box = document.getElementById('trRuns');
+  if(!runs.length){
+    box.innerHTML = '<div class="tr-note">Här dyker dina tränade modeller upp. Kör steg 1–3 först.</div>';
+    return;
+  }
+  const busy = trainStatus.job && trainStatus.job.state === 'kör';
+  box.innerHTML = runs.map(r=>{
+    const inOllama = installed.has(r.ollama_name+':latest') || installed.has(r.ollama_name);
+    const right = inOllama
+      ? '<span class="installed">✓ I Ollama</span>'
+        + '<button class="btn ghost small" onclick="chatWithModel(\''+esc(r.ollama_name)+'\')">💬 Chatta</button>'
+      : (r.has_model
+          ? '<button class="btn accent small" onclick="trainExport(\''+esc(r.name)+'\')"'
+            + (busy?' disabled':'') + '>📦 Lägg in i Ollama</button>'
+          : '<span class="meta">Ingen färdig modell i mappen</span>');
+    return '<div class="tr-runitem"><div><div class="name">'+esc(r.name)+'</div>'
+      + '<div class="meta">'+esc(r.path)+' · '+(r.gguf?'GGUF klar · ':'')
+      + 'som <code>'+esc(r.ollama_name)+'</code></div></div>'
+      + '<div class="right">'+right+'</div></div>';
+  }).join('');
+}
+function chatWithModel(name){
+  showView('chat');
+  const sel = document.getElementById('chatModel');
+  const match = [...sel.options].find(o=>o.value === name || o.value === name+':latest');
+  if(match){ sel.value = match.value; saveChatModel(); }
+}
+
+/* ---- Hugging Face-sök (GGUF-modeller utanför Ollamas bibliotek) ---- */
+let hfModels = [];          // senaste sökträffar
+let hfQuants = {};          // repo -> kvantiseringar (hämtas vid utfällning)
+async function hfSearch(){
+  const q = (document.getElementById('hfQuery').value||'').trim();
+  const hint = document.getElementById('hfHint');
+  const list = document.getElementById('hfResults');
+  if(!q){ hint.textContent = 'Skriv något att söka efter.'; list.innerHTML=''; return; }
+  hint.textContent = 'Söker på Hugging Face…'; list.innerHTML='';
+  try{
+    const r = await api('/api/hf/search?q='+encodeURIComponent(q), {headers: headers(false)});
+    const d = await r.json();
+    if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+    hfModels = d.models || [];
+    hint.textContent = hfModels.length
+      ? (hfModels.length+' träffar · endast GGUF-modeller (det Ollama kan läsa)')
+      : 'Inga GGUF-modeller matchade sökningen.';
+    renderHfResults();
+  }catch(e){ hint.textContent = 'Sökningen misslyckades: '+e.message; }
+}
+function renderHfResults(){
+  document.getElementById('hfResults').innerHTML = hfModels.map((m,i)=>{
+    const dl = m.downloads ? (m.downloads.toLocaleString('sv-SE')+' nedladdningar') : '';
+    const likes = m.likes ? ('♥ '+m.likes) : '';
+    const meta = [dl, likes].filter(Boolean).join('  ·  ');
+    const gated = m.gated
+      ? '<div class="hf-gated">⚠ Kräver godkännande på Hugging Face (gated) – Ollama kan inte hämta den utan det.</div>'
+      : '';
+    return '<div class="hf-card"><div class="hf-top">'
+      + '<h3><a href="'+esc(m.url)+'" target="_blank" rel="noopener">'+esc(m.id)+'</a></h3>'
+      + '<div class="right">'
+      + '<button class="btn ghost small" onclick="hfToggleQuants('+i+')">Varianter</button>'
+      + '<button class="btn accent small" onclick="startPull(\''+esc(m.pull)+'\')">↓ Installera</button>'
+      + '</div></div>'
+      + (meta ? '<div class="hf-meta">'+esc(meta)+'</div>' : '')
+      + gated
+      + '<div class="hf-quants" id="hfq'+i+'" style="display:none"></div></div>';
+  }).join('');
+}
+async function hfToggleQuants(i){
+  const m = hfModels[i]; if(!m) return;
+  const box = document.getElementById('hfq'+i);
+  if(box.style.display !== 'none'){ box.style.display='none'; return; }
+  box.style.display='block';
+  if(!hfQuants[m.id]){
+    box.innerHTML = '<div class="hf-meta">Hämtar filer…</div>';
+    try{
+      const r = await api('/api/hf/files?repo='+encodeURIComponent(m.id), {headers: headers(false)});
+      const d = await r.json();
+      if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
+      hfQuants[m.id] = d;
+    }catch(e){
+      box.innerHTML = '<div class="hf-meta">Kunde inte läsa filerna: '+esc(e.message)+'</div>';
+      return;
+    }
+  }
+  const d = hfQuants[m.id];
+  const rows = (d.quants||[]).map(q=>{
+    const size = q.size ? humanSize(q.size) : 'okänd storlek';
+    const parts = q.parts > 1 ? ('  ·  '+q.parts+' delar') : '';
+    const dflt = (q.quant === d.default) ? ' <span class="chip">standard</span>' : '';
+    return '<div class="hf-quant"><span class="q">'+esc(q.quant)+'</span>'
+      + '<span class="sz">'+esc(size)+esc(parts)+'</span>'+dflt
+      + '<button class="btn ghost small" onclick="startPull(\''+esc(q.pull)+'\')">↓ Installera</button></div>';
+  }).join('');
+  box.innerHTML = rows || '<div class="hf-meta">Inga GGUF-filer i det här repot.</div>';
+}
+
 /* ---- Installera / ladda ner (strömmar status från servern) ---- */
 function pullCustom(){
   const n = document.getElementById('customName').value.trim();
@@ -2285,6 +3636,8 @@ async function startPull(name){
   document.getElementById('dlTitle').textContent = 'Laddar ner  '+name;
   document.getElementById('dlPct').textContent = '';
   document.getElementById('dlStatus').textContent = 'Förbereder…';
+  document.getElementById('dlExtra').innerHTML = '';
+  pullHf = null; pullError = null;
   const bar = document.getElementById('dlBar'); bar.style.width='0'; bar.style.background='var(--accent)';
   document.getElementById('dlCancel').textContent = 'Avbryt';
 
@@ -2303,7 +3656,8 @@ async function startPull(name){
         if(line){ try{ onProgress(JSON.parse(line)); }catch(e){} }
       }
     }
-    pullDone(name, 'success');
+    if(pullError) pullDone(name, 'error', pullError);
+    else pullDone(name, 'success');
   }catch(e){
     if(e.name === 'AbortError') pullDone(name, 'cancelled');
     else pullDone(name, 'error', e.message);
@@ -2312,6 +3666,7 @@ async function startPull(name){
   }
 }
 function onProgress(m){
+  if(m.hf){ showHfSwitch(m.hf); return; }        // servern bytte källa till Hugging Face
   const status = m.status || '';
   if(m.total && m.completed != null){
     const f = m.completed/m.total;
@@ -2322,18 +3677,41 @@ function onProgress(m){
     document.getElementById('dlStatus').textContent = status;
     if(status.includes('success')) document.getElementById('dlBar').style.width='100%';
   }
-  if(m.error){ document.getElementById('dlStatus').textContent = 'Fel: '+m.error; }
+  if(m.error){
+    pullError = m.error;                       // avgör utfallet när strömmen tar slut
+    document.getElementById('dlStatus').textContent = 'Fel: '+m.error;
+  }
+}
+let pullHf = null;      // Hugging Face-träffen servern valde (om den bytte källa)
+let pullError = null;   // sista felraden i strömmen (en ström kan sluta med fel)
+function showHfSwitch(hf){
+  pullHf = hf;
+  const size = hf.size ? ('  ·  ' + humanSize(hf.size)) : '';
+  const quant = hf.quant ? ('  ·  ' + hf.quant) : '';
+  let html = '🤗 Hugging Face: <a href="'+esc(hf.url||'')+'" target="_blank" rel="noopener" '
+    + 'style="color:var(--accent-hov)">'+esc(hf.repo)+'</a>'+esc(quant)+esc(size);
+  if(hf.gated) html += '<br><span style="color:var(--amber)">⚠ Repot är gated – du måste '
+    + 'godkänna villkoren på Hugging Face först.</span>';
+  const alts = hf.alternatives || [];
+  if(alts.length){
+    html += '<br>Andra träffar: ' + alts.map(a =>
+      '<a href="#" onclick="startPull(\''+esc(a.pull)+'\');return false" '
+      + 'style="color:var(--subtle)">'+esc(a.id)+'</a>').join('  ·  ');
+  }
+  if(hf.auto) document.getElementById('dlTitle').textContent = 'Laddar ner  ' + (hf.pull || hf.repo);
+  document.getElementById('dlExtra').innerHTML = html;
 }
 function pullDone(name, outcome, detail){
   const bar = document.getElementById('dlBar');
   const cancel = document.getElementById('dlCancel');
+  const shown = (pullHf && pullHf.auto && pullHf.pull) ? pullHf.pull : name;
   if(outcome==='success'){
     bar.style.width='100%'; bar.style.background='var(--green)';
     document.getElementById('dlPct').textContent='100%';
-    document.getElementById('dlTitle').textContent='✓  '+name+' installerad';
+    document.getElementById('dlTitle').textContent='✓  '+shown+' installerad';
     document.getElementById('dlStatus').textContent='Klar! Modellen finns nu under "Mina modeller".';
     document.getElementById('customName').value='';
-    toast('"'+name+'" installerad');
+    toast('"'+shown+'" installerad');
   }else if(outcome==='cancelled'){
     document.getElementById('dlTitle').textContent='Avbruten';
     document.getElementById('dlStatus').textContent='Nedladdningen avbröts.';
@@ -2836,6 +4214,26 @@ async function loadConfig(){
   const memTools = document.getElementById('csMemoryTools');
   if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
   updateCodeView();   // Codex-fliken syns alltid; visa av-läge om den inte är påslagen
+  updateHfView();     // Hugging Face-sök syns bara om stödet är påslaget
+  updateTrainNav();   // AI-träningsfliken kräver soup_train.py
+}
+function updateTrainNav(){
+  // Fliken finns bara om soup_train.py ligger bredvid appen. Är den där men
+  // avstängd syns fliken ändå, med en förklaring inuti (som Codex).
+  const nav = document.getElementById('nav-train');
+  if(nav) nav.style.display = cfg.train_module ? '' : 'none';
+}
+function updateHfView(){
+  const box = document.getElementById('hfBox');
+  if(box) box.style.display = cfg.hf ? 'block' : 'none';
+  const hint = document.getElementById('customHint');
+  if(hint){
+    hint.textContent = cfg.hf
+      ? 'Skriv modellnamn från ollama.com/library (t.ex. "llama3.1:8b"). Finns det inte där '
+        + (cfg.hf_auto ? 'söker vi automatiskt vidare på Hugging Face. ' : 'visar vi träffar från Hugging Face. ')
+        + 'Du kan också klistra in en Hugging Face-länk eller skriva "hf.co/ägare/repo:Q4_K_M".'
+      : 'Skriv exakt modellnamn från ollama.com/library, t.ex. "llama3.1:8b" eller "mistral-nemo".';
+  }
 }
 function updateCodeView(){
   const off = document.getElementById('codeOff');
@@ -2870,6 +4268,7 @@ function updateCodeView(){
 let mem0KeyIsSet = false;      // om en nyckel redan finns sparad
 let mem0KeyClear = false;      // användaren har valt att ta bort nyckeln
 let ghTokenIsSet = false, ghTokenClear = false;
+let hfTokenIsSet = false, hfTokenClear = false;
 async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
@@ -2889,6 +4288,36 @@ async function loadSettingsForm(){
   document.getElementById('stMem0KeyState').textContent =
     mem0KeyIsSet ? '● En nyckel är sparad (lämna tomt för att behålla den)' : 'Ingen nyckel sparad';
   document.getElementById('stMem0Test').textContent = '';
+  chk('stHfEnabled', s.hf_enabled);
+  chk('stHfAuto', s.hf_auto);
+  hfTokenIsSet = !!s.hf_token_set; hfTokenClear = false;
+  const hfEl = document.getElementById('stHfToken'); if(hfEl) hfEl.value='';
+  const hfState = document.getElementById('stHfTokenState');
+  if(hfState) hfState.textContent = hfTokenIsSet
+    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+  const hfInfo = document.getElementById('stHfState');
+  if(hfInfo){
+    if(!s.hf_module) hfInfo.textContent = 'Status: modulen huggingface.py saknas bredvid appen – '
+      + 'stödet är inaktivt. Hämta senaste versionen med ↻ Uppdatera.';
+    else if(!s.hf_active) hfInfo.textContent = 'Status: avstängt.';
+    else hfInfo.textContent = 'Status: ✓ på · ' + (s.hf_auto_active
+      ? 'okända modellnamn hämtas automatiskt från Hugging Face'
+      : 'okända modellnamn visar träffar från Hugging Face att välja bland');
+  }
+  chk('stTrainEnabled', s.train_enabled);
+  set('stTrainWs', s.train_workspace);
+  set('stTrainBin', s.train_soup_bin);
+  const twState = document.getElementById('stTrainWsState');
+  if(twState) twState.innerHTML = s.train_workspace_path
+    ? ('Används: <code>' + esc(s.train_workspace_path) + '</code> (skapas när du sparar ett dataset)')
+    : '';
+  const tState = document.getElementById('stTrainState');
+  if(tState){
+    if(!s.train_module) tState.textContent = 'Status: modulen soup_train.py saknas bredvid appen '
+      + '– fliken är dold. Hämta senaste versionen med ↻ Uppdatera.';
+    else if(!s.train_active) tState.textContent = 'Status: avstängd.';
+    else tState.textContent = 'Status: ✓ på – öppna fliken 🎓 AI-träning i menyn.';
+  }
   chk('stCodeEnabled', s.code_enabled);
   set('stCodeWs', s.code_workspace);
   const cws = document.getElementById('stCodeWsState');
@@ -2941,6 +4370,11 @@ function clearMem0Key(){
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
   document.getElementById('stMem0KeyState').textContent = '✕ Nyckeln tas bort när du sparar';
 }
+function clearHfToken(){
+  hfTokenClear = true; hfTokenIsSet = false;
+  const el = document.getElementById('stHfToken'); if(el) el.value='';
+  document.getElementById('stHfTokenState').textContent = '✕ Token tas bort när du sparar';
+}
 function clearGhToken(){
   ghTokenClear = true; ghTokenIsSet = false;
   const el = document.getElementById('stGhToken'); if(el) el.value='';
@@ -2957,6 +4391,11 @@ function collectSettings(){
     mem0_auth_scheme: val('stMem0Auth'),
     mem0_org_id: val('stMem0Org'),
     mem0_project_id: val('stMem0Proj'),
+    hf_enabled: document.getElementById('stHfEnabled').checked,
+    hf_auto: document.getElementById('stHfAuto').checked,
+    train_enabled: document.getElementById('stTrainEnabled').checked,
+    train_workspace: val('stTrainWs'),
+    train_soup_bin: val('stTrainBin'),
     code_enabled: document.getElementById('stCodeEnabled').checked,
     code_workspace: val('stCodeWs'),
     github_base: val('stGhBase'),
@@ -2970,6 +4409,9 @@ function collectSettings(){
   const gh = val('stGhToken');
   if(ghTokenClear && !gh) body.github_token = null;    // rensa
   else if(gh) body.github_token = gh;                  // ny token (annars orörd)
+  const hft = val('stHfToken');
+  if(hfTokenClear && !hft) body.hf_token = null;       // rensa
+  else if(hft) body.hf_token = hft;                    // ny token (annars orörd)
   return body;
 }
 async function saveSettings(){
@@ -2985,6 +4427,8 @@ async function saveSettings(){
     const memRow=document.getElementById('csMemoryRow'); if(memRow) memRow.style.display = cfg.memory?'flex':'none';
     const memTools=document.getElementById('csMemoryTools'); if(memTools) memTools.style.display = cfg.memory?'block':'none';
     updateCodeView();
+    updateHfView();
+    updateTrainNav();
     loadSettingsForm();
   }catch(e){ toast('Kunde inte spara: '+e.message, true); }
 }
@@ -3684,9 +5128,19 @@ restoreCodeLog();
 """
 
 
+def train_meta():
+    """Statiska val för AI-träningsvyn (basmodeller, uppgifter, profiler)."""
+    if TRAIN is None:
+        return {"bases": [], "tasks": [], "profiles": [], "demo_rows": []}
+    return {"bases": TRAIN.BASE_MODELS, "tasks": TRAIN.TASKS,
+            "profiles": TRAIN.PROFILES, "demo_rows": TRAIN.DEMO_ROWS,
+            "formats": TRAIN.DATA_FORMATS}
+
+
 def render_page():
     return (PAGE
             .replace("__CATALOG_JSON__", json.dumps(CATALOG, ensure_ascii=False))
+            .replace("__TRAIN_JSON__", json.dumps(train_meta(), ensure_ascii=False))
             .replace("__AUTH_ENABLED__", "true" if TOKEN else "false"))
 
 
@@ -3695,6 +5149,10 @@ _PAGE_BYTES = render_page().encode("utf-8")
 
 # Största POST-body vi läser in (skydd mot minnesutmattning). Justera vid behov.
 MAX_BODY_BYTES = int(os.environ.get("OLLAMA_STUDIO_MAX_BODY", str(64 * 1024 * 1024)))
+# Träningsdata som skickas via webbläsaren: läs/skriv-tak så en tabbe inte
+# sväljer minnet. Större dataset läggs direkt i träningsmappens data/-mapp.
+TRAIN_DATASET_WRITE_CAP = 16 * 1024 * 1024
+TRAIN_DATASET_READ_CAP = 8 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------
@@ -3785,6 +5243,10 @@ class Handler(BaseHTTPRequestHandler):
                     "code_ready": code_toggle_on(),   # vyn funkar (skisslage utan arbetsyta)
                     "code_ws": code_enabled(),        # arbetsyta finns → läsa/spara/git/köra
                     "code_run": code_run_enabled(),
+                    "hf": hf_enabled(),
+                    "hf_auto": hf_auto_enabled(),
+                    "train": train_toggle_on(),
+                    "train_module": TRAIN is not None,
                 })
             if path == "/api/settings":
                 return self._send_json(settings_public())
@@ -3807,6 +5269,74 @@ class Handler(BaseHTTPRequestHandler):
                 if not code_enabled():
                     return self._send_json({"repo": False})
                 return self._send_json(git_status_info())
+            if path in ("/api/train/status", "/api/train/log"):
+                if not train_toggle_on():
+                    return self._send_json({"enabled": False, "module": TRAIN is not None})
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                since = 0
+                try:
+                    since = int(q.get("since", ["0"])[0])
+                except ValueError:
+                    pass
+                if path == "/api/train/log":      # lätt polling under körning
+                    job = train_job_current()
+                    return self._send_json({"job": job.snapshot(since) if job else None})
+                return self._send_json(train_status(since))
+
+            if path == "/api/train/dataset":
+                if not train_toggle_on():
+                    return self._send_json({"error": "AI-träning är avstängd"}, 400)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                rel = (q.get("path", [""])[0]).strip()
+                try:
+                    full = train_resolve(rel)
+                    with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                        text = fh.read(TRAIN_DATASET_READ_CAP)
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 400)
+                info = TRAIN.inspect_jsonl(text)
+                info["path"] = rel
+                return self._send_json(info)
+
+            if path == "/api/hf/search":
+                if not hf_enabled():
+                    return self._send_json({"error": "Hugging Face är avstängt"}, 400)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                query = (q.get("q", [""])[0]).strip()
+                if not query:
+                    return self._send_json({"query": "", "models": []})
+                try:
+                    term, _owner = HF.search_terms(query)
+                    found = HF.search_models(term or query, limit=HF_SEARCH_LIMIT,
+                                             token=hf_token())
+                except Exception as e:
+                    return self._send_json({"error": "Hugging Face svarade inte: %s" % e}, 502)
+                # Rangordna mot det som skrevs, men visa även svagare träffar
+                # (användaren letar själv här – till skillnad från autoreserven).
+                ranked = HF.rank_candidates(query, found, min_similarity=0.0)
+                for m in ranked:
+                    m["pull"] = HF.pull_ref(m["id"])
+                return self._send_json({"query": query, "models": ranked})
+
+            if path == "/api/hf/files":
+                if not hf_enabled():
+                    return self._send_json({"error": "Hugging Face är avstängt"}, 400)
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                repo = (q.get("repo", [""])[0]).strip()
+                if not HF.valid_repo_id(repo):
+                    return self._send_json({"error": "ogiltigt repo (väntar ägare/namn)"}, 400)
+                try:
+                    quants = HF.group_quants(HF.list_gguf_files(repo, token=hf_token()))
+                except Exception as e:
+                    return self._send_json({"error": "Hugging Face svarade inte: %s" % e}, 502)
+                best = HF.pick_quant(quants)
+                for item in quants:
+                    item["pull"] = HF.pull_ref(repo, item["quant"])
+                return self._send_json({
+                    "repo": repo, "url": HF.repo_url(repo), "quants": quants,
+                    "default": best["quant"] if best else None,
+                })
+
             if path == "/api/system":
                 try:
                     return self._send_json(gather_system())
@@ -3867,6 +5397,16 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 return self._send_json({"error": "name saknas"}, 400)
             return self._stream_pull(name)
+
+        if path.startswith("/api/train/"):
+            if not train_toggle_on():
+                return self._send_json({"error": "AI-träning är avstängd"}, 400)
+            try:
+                return self._train_post(path, data if isinstance(data, dict) else {})
+            except ValueError as e:
+                return self._send_json({"error": str(e)}, 400)
+            except Exception as e:
+                return self._send_json({"error": str(e)}, 500)
 
         if path == "/api/settings":
             try:
@@ -4138,8 +5678,243 @@ class Handler(BaseHTTPRequestHandler):
         self._emit_content(search_footer(query, results))
         self._emit(done2 or {"done": True})
 
+    # ---- AI-träning: dataset, konfig, körningar --------------------------
+    def _train_post(self, path, data):
+        """POST-åtgärderna bakom /api/train/… Kastar ValueError vid indatafel."""
+        action = path[len("/api/train/"):]
+
+        if action == "dataset":
+            return self._send_json(self._train_dataset(data))
+
+        if action == "config":
+            form = data.get("form") or {}
+            errors = TRAIN.validate(form) if data.get("strict") else []
+            yaml_text = TRAIN.build_yaml(form)
+            if data.get("save"):
+                prefs_set({"train_form": json.dumps(form, ensure_ascii=False)})
+                cfg = train_resolve("soup.yaml", create=True)
+                with open(cfg, "w", encoding="utf-8") as fh:
+                    fh.write(yaml_text)
+            return self._send_json({"yaml": yaml_text, "errors": errors})
+
+        if action == "start":
+            form = data.get("form") or {}
+            errors = TRAIN.validate(form)
+            if errors:
+                return self._send_json({"error": errors[0], "errors": errors}, 400)
+            binary = soup_binary()
+            if not binary:
+                return self._send_json({"error": "Soup är inte installerat på servern."}, 400)
+            root = train_workspace_root(create=True)
+            if not root:
+                return self._send_json({"error": "Kunde inte skapa träningsmappen."}, 500)
+            dataset = train_resolve(form.get("data") or "")
+            if not os.path.isfile(dataset):
+                return self._send_json({"error": "Datafilen finns inte: %s"
+                                                 % form.get("data")}, 400)
+            cfg_path = train_resolve("soup.yaml", create=True)
+            with open(cfg_path, "w", encoding="utf-8") as fh:
+                fh.write(TRAIN.build_yaml(form))
+            prefs_set({"train_form": json.dumps(form, ensure_ascii=False)})
+            name = TRAIN.safe_name(form.get("name") or "min-modell")
+            out_dir = train_resolve("runs/" + name, create=True)
+            cmd = TRAIN.train_command(binary, cfg_path, out_dir)
+            job, err = train_job_start("train", cmd, root, label="Tränar " + name,
+                                       env={"HF_TOKEN": hf_token()})
+            if err:
+                return self._send_json({"error": err}, 409)
+            return self._send_json({"ok": True, "job": job.snapshot()})
+
+        if action == "export":
+            run = TRAIN.safe_name(data.get("run") or "")
+            if not run:
+                return self._send_json({"error": "Ingen körning vald."}, 400)
+            binary = soup_binary()
+            if not binary:
+                return self._send_json({"error": "Soup är inte installerat på servern."}, 400)
+            model_dir = train_resolve("runs/" + run)
+            if not os.path.isdir(model_dir):
+                return self._send_json({"error": "Körningen finns inte: %s" % run}, 400)
+            ollama_name = TRAIN.ollama_model_name(run)
+            cmd = TRAIN.export_command(binary, model_dir, ollama_name)
+            job, err = train_job_start("export", cmd, train_workspace_root(create=True),
+                                       label="Exporterar " + run,
+                                       env={"HF_TOKEN": hf_token(),
+                                            "OLLAMA_HOST": PRIMARY["url"]})
+            if err:
+                return self._send_json({"error": err}, 409)
+            return self._send_json({"ok": True, "job": job.snapshot(),
+                                    "ollama_name": ollama_name})
+
+        if action == "install":
+            if soup_binary():
+                return self._send_json({"error": "Soup är redan installerat."}, 400)
+            cmd = TRAIN.install_command()
+            job, err = train_job_start("install", cmd, APP_DIR,
+                                       label="Installerar " + TRAIN.SOUP_PACKAGE)
+            if err:
+                return self._send_json({"error": err}, 409)
+            _soup_version_cache.update({"path": None, "version": None, "at": 0})
+            return self._send_json({"ok": True, "job": job.snapshot()})
+
+        if action == "stop":
+            job = train_job_current()
+            if not job or not job.running():
+                return self._send_json({"error": "Ingen körning pågår."}, 400)
+            job.stop()
+            return self._send_json({"ok": True})
+
+        return self._send_json({"error": "okänd åtgärd"}, 404)
+
+    def _train_dataset(self, data):
+        """Skapa, spara eller granska en datafil i träningsmappen."""
+        action = (data.get("action") or "").strip()
+        name = (data.get("name") or "").strip()
+        if action == "demo":
+            name = name or "exempeldata.jsonl"
+            text = TRAIN.demo_jsonl()
+        elif action == "save":
+            text = TRAIN.rows_to_jsonl(data.get("rows") or [])
+            if not text.strip():
+                raise ValueError("Fyll i minst en rad med både fråga och svar.")
+        elif action == "paste":
+            text = data.get("content") or ""
+            if not text.strip():
+                raise ValueError("Klistra in minst en rad JSONL.")
+        else:
+            raise ValueError("okänd åtgärd: %s" % action)
+
+        filename = TRAIN.safe_name(name or "mitt-dataset", "mitt-dataset")
+        if not filename.endswith(".jsonl"):
+            filename += ".jsonl"
+        if len(text.encode("utf-8")) > TRAIN_DATASET_WRITE_CAP:
+            raise ValueError("Datafilen är för stor för att sparas via webbläsaren "
+                             "(max %d MB). Lägg den i mappen data/ på servern i stället."
+                             % (TRAIN_DATASET_WRITE_CAP // (1024 * 1024)))
+        full = train_resolve("data/" + filename, create=True)
+        with open(full, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        info = TRAIN.inspect_jsonl(text)
+        info.update({"path": "data/" + filename, "name": filename, "saved": True})
+        return info
+
     def _stream_pull(self, name):
-        return self._proxy_stream("/api/pull", {"name": name, "stream": True})
+        """Installera en modell och strömma förloppet som NDJSON.
+
+        Först provas Ollamas eget bibliotek. Saknas modellen där (och Hugging
+        Face-reserven är påslagen) söker vi efter en GGUF-version på Hugging
+        Face och fortsätter nedladdningen därifrån – i samma ström, så UI:t
+        bara ser en enda nedladdning som byter källa.
+        """
+        if HF is not None:
+            name = HF.normalize_name(name) or name
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        ok, err = self._pull_once(name)
+        if ok or err is None:
+            return                     # klart, eller så avbröt webbläsaren
+        # Redan ett Hugging Face-namn, HF av, eller ett fel som inte betyder
+        # "finns inte" (nätverk, disk fullt, …) → visa Ollamas fel som det är.
+        if not hf_enabled() or HF.is_hf_ref(name) or not HF.is_missing_model_error(err):
+            return self._emit({"error": err})
+
+        self._emit({"status": 'Hittades inte i Ollamas bibliotek – söker efter "%s" '
+                              'på Hugging Face…' % name})
+        try:
+            term, _owner = HF.search_terms(name)
+            found = HF.search_models(term or name, limit=HF_FALLBACK_LIMIT, token=hf_token())
+        except Exception as e:
+            return self._emit({"error": "%s\nSökningen på Hugging Face misslyckades: %s"
+                                        % (err, e)})
+        ranked = HF.rank_candidates(name, found)
+        if not ranked:
+            return self._emit({"error": '"%s" finns varken i Ollamas bibliotek eller som '
+                                        'GGUF-modell på Hugging Face.' % name})
+
+        best = ranked[0]
+        try:
+            ref, quant, quants = HF.resolve(best["id"], token=hf_token())
+        except Exception as e:
+            return self._emit({"error": "Kunde inte läsa filerna i %s på Hugging Face: %s"
+                                        % (best["id"], e)})
+        if not quants:
+            return self._emit({"error": "%s på Hugging Face innehåller inga GGUF-filer "
+                                        "(Ollama kan bara läsa GGUF)." % best["id"]})
+
+        alternatives = [{"id": m["id"], "pull": HF.pull_ref(m["id"]),
+                         "downloads": m.get("downloads", 0), "gated": m.get("gated", False),
+                         "url": m.get("url", "")} for m in ranked[1:5]]
+        self._emit({"hf": {
+            "repo": best["id"], "pull": ref, "url": best.get("url", ""),
+            "quant": quant["quant"] if quant else None,
+            "size": quant["size"] if quant else 0,
+            "downloads": best.get("downloads", 0), "gated": best.get("gated", False),
+            "auto": hf_auto_enabled(), "alternatives": alternatives,
+        }})
+        if not hf_auto_enabled():
+            return self._emit({"status": "Automatisk nedladdning från Hugging Face är "
+                                         "avstängd – välj själv i listan ovan."})
+        if best.get("gated"):
+            return self._emit({"error": "%s kräver godkännande på Hugging Face (gated) och "
+                                        "kan inte hämtas automatiskt. Se länken ovan."
+                                        % best["id"]})
+
+        self._emit({"status": "Hittade %s på Hugging Face – hämtar %s"
+                              % (best["id"], quant["quant"] if quant else "GGUF")})
+        ok2, err2 = self._pull_once(ref)
+        if not ok2 and err2 is not None:
+            self._emit({"error": "Hugging Face-nedladdningen misslyckades: %s" % err2})
+
+    def _pull_once(self, name):
+        """Kör ETT pull-försök mot Ollama och vidarebefordra raderna.
+
+        Returnerar (lyckades, felmeddelande). Felraden skickas medvetet INTE
+        vidare till webbläsaren – anroparen kan vilja försöka igen mot en annan
+        källa först. `None` som fel betyder "webbläsaren avbröt".
+        """
+        try:
+            body = json.dumps({"name": name, "stream": True}).encode()
+            req = urllib.request.Request(PRIMARY["url"] + "/api/pull", data=body,
+                                         method="POST",
+                                         headers={"Content-Type": "application/json"})
+            upstream = urllib.request.urlopen(req, timeout=120)
+        except urllib.error.HTTPError as e:
+            return False, _pull_error_text(e)
+        except Exception as e:
+            return False, str(e)
+
+        success, error = False, None
+        try:
+            for raw in upstream:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line.decode("utf-8", errors="replace"))
+                except Exception:
+                    msg = None
+                if isinstance(msg, dict):
+                    if msg.get("error"):
+                        error = str(msg["error"])
+                        continue                     # hålls tillbaka – kan bli HF-reserv
+                    if msg.get("status") == "success":
+                        success = True
+                self.wfile.write(line + b"\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return False, None                       # webbläsaren avbröt
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+        if not success and not error:
+            error = "Nedladdningen slutfördes inte."
+        return success, error
 
     # ---- Kodassistent: agent-loop (läs-verktyg + föreslå diffar) ----------
     def _run_agent(self, model, messages, base):

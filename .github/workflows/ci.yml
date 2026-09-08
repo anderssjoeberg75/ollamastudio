@@ -21,7 +21,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Kompilera (py_compile)
-        run: python -m py_compile ollama_web.py ollama_studio.py catalog.py
+        run: python -m py_compile ollama_web.py ollama_studio.py catalog.py huggingface.py soup_train.py
 
       - name: Kör tester
         run: python -m unittest discover -s tests -v
