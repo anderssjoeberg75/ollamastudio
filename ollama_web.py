@@ -5249,7 +5249,15 @@ function restoreCodeLog(){
 function clearCode(){
   const box = codeLogEl();
   if(!codeMessages.length && box && box.querySelector('.chat-empty')){ toast('Codex är redan tom'); return; }
-  if(!confirm('Töm Codex-loggen? Konversationen och kontexten rensas.')) return;
+  // Var tydlig med vad som faktiskt försvinner: loggen och kontexten – aldrig
+  // filerna. Väntande, osparade förslag lever bara i loggen och följer med.
+  const pending = pendingEdits().length;
+  const warn = pending
+    ? ('\n\n⚠ ' + pending + (pending === 1 ? ' föreslagen ändring som du inte sparat'
+        : ' föreslagna ändringar som du inte sparat') + ' försvinner.')
+    : '';
+  if(!confirm('Töm Codex-loggen?\n\nKonversationen och kontexten rensas. Filerna i arbetsytan '
+      + 'rörs inte – ändringar du redan sparat ligger kvar på disken.' + warn)) return;
   if(codeController) codeController.abort();
   codeMessages = [];
   try{ localStorage.removeItem(CODE_MSGS_KEY); }catch(e){}
