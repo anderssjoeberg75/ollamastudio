@@ -5419,7 +5419,9 @@ async function sendAgent(){
   saveCodeMsgs();
   codeAppend('<div class="code-user">'+esc(text)+'</div>');
   inp.value='';
-  const send = document.getElementById('codeSend'); send.textContent='Stoppar…'; send.disabled=true;
+  // Knappen blir en stoppknapp under körningen (klick → codeController.abort()).
+  // Den får INTE stängas av – då går körningen inte att avbryta.
+  const send = document.getElementById('codeSend'); send.textContent='■ Stoppa';
   codeController = new AbortController();
   try{
     if(localDir) await runAgentLocal(model);      // lokal mapp i webbläsaren
@@ -5427,7 +5429,7 @@ async function sendAgent(){
   }catch(e){
     if(e.name!=='AbortError') codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>');
   }finally{
-    codeController=null; send.textContent='Skicka'; send.disabled=false;
+    codeController=null; send.textContent='Skicka';
     saveCodeMsgs();   // spara konversationen (överlever omladdning)
   }
 }
