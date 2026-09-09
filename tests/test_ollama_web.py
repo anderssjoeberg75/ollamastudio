@@ -479,6 +479,122 @@ class TestPullFallback(_DBTest):
         self.assertEqual(data["quants"][1]["pull"], "hf.co/bartowski/Viking-7B-GGUF:Q8_0")
 
 
+class TestClockContext(unittest.TestCase):
+    """Modellen ska veta vilken dag det är – annars svarar den från träningsdatan."""
+
+    def setUp(self):
+        self._tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Stockholm"
+        try:
+            time.tzset()                       # saknas på Windows – testet hoppas då över
+        except AttributeError:
+            self.skipTest("time.tzset saknas på den här plattformen")
+
+    def tearDown(self):
+        if self._tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._tz
+        try:
+            time.tzset()
+        except AttributeError:
+            pass
+
+    def test_format_now_is_swedish(self):
+        # 2026-09-09 14:32 lokal tid (Europe/Stockholm)
+        ts = time.mktime((2026, 9, 9, 14, 32, 0, 0, 0, -1))
+        self.assertEqual(w.format_now(ts), "onsdag 9 september 2026, klockan 14:32")
+
+    def test_format_now_covers_all_weekdays_and_months(self):
+        self.assertEqual(len(w.SWEDISH_WEEKDAYS), 7)
+        self.assertEqual(len(w.SWEDISH_MONTHS), 12)
+        for month in range(1, 13):             # ingen indexering utanför listan
+            ts = time.mktime((2026, month, 1, 12, 0, 0, 0, 0, -1))
+            self.assertIn(w.SWEDISH_MONTHS[month - 1], w.format_now(ts))
+
+    def test_now_context_has_date_and_warns_about_stale_knowledge(self):
+        ts = time.mktime((2026, 9, 9, 14, 32, 0, 0, 0, -1))
+        text = w.now_context(ts)
+        self.assertIn("onsdag 9 september 2026", text)
+        self.assertIn("klockan 14:32", text)
+        self.assertIn("Din träningsdata är äldre", text)   # varning mot att gissa
+        self.assertIn("gissa aldrig", text)
+
+    def test_websearch_instructions_carry_the_date(self):
+        for text in (w.websearch_instruction(), w.websearch_answer_instruction()):
+            self.assertIn("Just nu är det", text)
+        self.assertIn(w.WEBSEARCH_MARKER, w.websearch_instruction())
+
+
+class TestChatClock(_DBTest):
+    """Tidskontexten ska hamna först i /api/chat – och försvinna när den stängs av."""
+
+    class _EchoOllama(BaseHTTPRequestHandler):
+        seen = []
+
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            self.__class__.seen.append(json.loads(self.rfile.read(length) or b"{}"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(b'{"message":{"content":"ok"},"done":true}\n')
+
+    def setUp(self):
+        super().setUp()
+        self._EchoOllama.seen = []
+        self._old_log = w.Handler.log_message
+        w.Handler.log_message = lambda *a, **k: None
+        self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._EchoOllama)
+        threading.Thread(target=self.ollama.serve_forever, daemon=True).start()
+        self._old_primary = w.PRIMARY
+        w.PRIMARY = {"label": "test", "gpu": None,
+                     "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
+        self._old_backends = w.BACKENDS
+        w.BACKENDS = [w.PRIMARY]
+        self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
+        threading.Thread(target=self.studio.serve_forever, daemon=True).start()
+        self.base = "http://127.0.0.1:%d" % self.studio.server_address[1]
+
+    def tearDown(self):
+        w.Handler.log_message = self._old_log
+        for srv in (self.studio, self.ollama):
+            srv.shutdown()
+            srv.server_close()
+        w.PRIMARY, w.BACKENDS = self._old_primary, self._old_backends
+        super().tearDown()
+
+    def _chat(self, **extra):
+        body = dict({"model": "m", "messages": [{"role": "user", "content": "vilken dag är det?"}]},
+                    **extra)
+        req = urllib.request.Request(self.base + "/api/chat", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            resp.read()
+        return self._EchoOllama.seen[0]["messages"]
+
+    def test_enabled_by_default_and_placed_first(self):
+        self.assertTrue(w.chat_time_enabled())
+        msgs = self._chat()
+        self.assertEqual(msgs[0]["role"], "system")
+        self.assertIn("Just nu är det", msgs[0]["content"])
+        self.assertEqual(msgs[-1]["content"], "vilken dag är det?")   # frågan är orörd
+
+    def test_can_be_turned_off(self):
+        w.settings_set({"chat_time": False})
+        self.assertEqual([m["role"] for m in self._chat()], ["user"])
+
+    def test_search_step_also_gets_the_date(self):
+        w.settings_set({"websearch": True})
+        msgs = self._chat(websearch=True)
+        systems = [m["content"] for m in msgs if m["role"] == "system"]
+        self.assertTrue(any(w.WEBSEARCH_MARKER in c for c in systems))
+        self.assertTrue(all("Just nu är det" in c for c in systems if w.WEBSEARCH_MARKER in c))
+
+
 class TestModelSearch(_DBTest):
     """Ett sökfält som täcker både Ollamas bibliotek och Hugging Face."""
 
