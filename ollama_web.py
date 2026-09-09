@@ -1754,6 +1754,33 @@ def local_repos():
     return out
 
 
+def _rmtree_force(path):
+    """Radera en mapp. Returnerar None vid lyckat, annars felet.
+
+    Git-objekt är skrivskyddade. På vissa system (och alltid på Windows) stoppar
+    det shutil.rmtree, så vid fel tar vi bort skrivskyddet och försöker igen.
+    """
+    try:
+        shutil.rmtree(path)
+        return None
+    except OSError as first:
+        try:
+            for root, dirs, files in os.walk(path):
+                for name in dirs + files:
+                    try:
+                        os.chmod(os.path.join(root, name), 0o700)
+                    except OSError:
+                        pass
+            try:
+                os.chmod(path, 0o700)
+            except OSError:
+                pass
+            shutil.rmtree(path)
+            return None
+        except OSError as second:
+            return second or first
+
+
 def remove_local_repo(slug):
     """Radera ett hämtat repo från disken. Returnerar (ok, meddelande).
 
@@ -1773,10 +1800,13 @@ def remove_local_repo(slug):
         return False, "%s är inte hämtat" % slug
     if not os.path.isdir(os.path.join(target, ".git")):
         return False, "Mappen ser inte ut som ett git-repo – raderar inget"
-    try:
-        shutil.rmtree(target)
-    except OSError as e:
-        return False, "Kunde inte radera: %s" % e
+    error = _rmtree_force(target)
+    if error is not None:
+        return False, "Kunde inte radera %s: %s" % (target, error)
+    if os.path.exists(target):
+        # Säg aldrig "borttaget" om mappen finns kvar – då letar man på fel ställe.
+        return False, ("Mappen finns kvar efter raderingsförsöket: %s "
+                       "(kontrollera rättigheterna för användaren som kör servern)" % target)
     # Pekade arbetsytan hit? Släpp den, annars hamnar Codex i ett spöke.
     if os.path.realpath(setting_str("code_workspace") or "") == target:
         settings_set({"code_workspace": ""})
@@ -5800,6 +5830,9 @@ function renderRepos(currentPath){
   const mine = (currentPath||'').split('/').pop();
   const match = repoList.find(r=>mine && mine === r.slug.replace('/','__'));
   if(match) sel.value = match.slug;
+  // Utan det här står valet kvar men knapparna vet inte om det: "Ta bort lokalt"
+  // förblev dold tills man bytte i listan.
+  onRepoPick();
 }
 function localRepo(slug){
   return localRepos.find(r=>r.slug === slug) || null;
