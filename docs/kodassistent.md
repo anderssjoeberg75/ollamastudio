@@ -64,6 +64,17 @@ Webb-UI (ny vy "Kod")  ──►  /api/agent (server)  ──►  Agent-loop
 | `github_open_pr(...)` | Öppna en PR via GitHub REST (kräver token) |
 | `github_clone(repo)` | Klona ett repo till arbetsytan |
 
+**Var körningen lever.** Codex-körningen drivs från webbläsaren: `POST /api/agent` strömmar
+NDJSON tillbaka och JS:et matar loggen. Det betyder att den **fortsätter när du byter vy** i
+appen (Mina modeller, Chatta, System …) – loggen fylls på i bakgrunden och allt finns kvar när
+du kommer tillbaka. Den **avbryts** däremot om du laddar om sidan eller stänger fliken:
+strömmen dör med webbläsaren, och servern slutar då streama (bruten pipe). Knappen **Skicka**
+blir **■ Stoppa** under körningen. Konversationen sparas i `localStorage`, så texten överlever
+en omladdning även om själva körningen inte gör det.
+
+AI-träningen fungerar tvärtom: den kör som en process på servern och överlever både vybyten
+och omladdning.
+
 **Hämta repo från UI:t (v2):** rullmenyn högst upp i Codex-vyn listar repon som
 GitHub-token ger tillgång till (`GET /api/github/repos`). Vid **⬇ Hämta & arbeta här**
 (`POST /api/github/fetch`) klonas repot till `OLLAMA_STUDIO_REPOS_DIR`
