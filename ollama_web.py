@@ -93,6 +93,7 @@ SETTINGS_SPEC = {
     "train_soup_bin":   ("OLLAMA_STUDIO_SOUP_BIN", "", "str", False),
     "code_enabled":     ("OLLAMA_STUDIO_CODE", "1", "bool", False),
     "code_workspace":   ("OLLAMA_STUDIO_WORKSPACE", "", "str", False),
+    "code_repos_dir":   ("OLLAMA_STUDIO_REPOS_DIR", "", "str", False),
     "github_token":     ("GITHUB_TOKEN", "", "str", True),
     "github_base":      ("OLLAMA_STUDIO_GITHUB_BASE", "main", "str", False),
     "code_run_enabled": ("OLLAMA_STUDIO_CODE_RUN", "0", "bool", False),
@@ -1464,9 +1465,9 @@ def _restart_process():
     os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
 
 
-def _git(args, timeout=30, extra_env=None):
-    """Kör git i arbetsytans rot. Returnerar (returkod, stdout, stderr)."""
-    root = code_workspace_root()
+def _git(args, timeout=30, extra_env=None, cwd=None):
+    """Kör git i arbetsytans rot (eller `cwd`). Returnerar (returkod, stdout, stderr)."""
+    root = cwd or code_workspace_root()
     if not root:
         return 1, "", "Ingen arbetsyta"
     if not git_available():
@@ -1575,6 +1576,141 @@ def git_push(branch=None):
     else:
         rc, out, err = _git(["push", "-u", "origin", branch], timeout=120)
     return (rc == 0), (err or out or ("pushade " + branch))
+
+
+# --------------------------------------------------------------------------
+# Hämta ett GitHub-repo och gör det till arbetsyta. Alternativet till att
+# själv skapa mappar på servern: välj repo i en lista, koden klonas ner och
+# Codex pekas om dit. Commit/push/PR sköts sedan av funktionerna ovan.
+# --------------------------------------------------------------------------
+GITHUB_API = "https://api.github.com"
+_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+_repos_cache = {"at": 0, "items": []}
+_repos_lock = threading.Lock()
+
+
+def code_repos_root(create=False):
+    """Mappen där hämtade repon hamnar (en undermapp per repo)."""
+    raw = setting_str("code_repos_dir")
+    path = os.path.expanduser(raw) if raw else os.path.join(
+        os.path.expanduser("~"), "ollama-studio-repos")
+    try:
+        path = os.path.realpath(path)
+    except Exception:
+        return None
+    if create:
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            return None
+    return path
+
+
+def repo_dir_name(slug):
+    """Mappnamn för ett repo: "ägare__namn" (platt och förutsägbart)."""
+    owner, _, name = (slug or "").partition("/")
+    return "%s__%s" % (re.sub(r"[^A-Za-z0-9._-]", "-", owner),
+                       re.sub(r"[^A-Za-z0-9._-]", "-", name))
+
+
+def github_list_repos(limit=100, ttl=120):
+    """Repon användaren har tillgång till, nyast uppdaterade först.
+
+    Returnerar (lista, felmeddelande). Kort cache – listan används i en
+    rullmeny som kan öppnas ofta.
+    """
+    token = setting_str("github_token")
+    if not token:
+        return [], "Ingen GitHub-token angiven (⚙ Inställningar)"
+    with _repos_lock:
+        if _repos_cache["items"] and (time.time() - _repos_cache["at"]) < ttl:
+            return _repos_cache["items"], None
+    url = (GITHUB_API + "/user/repos?per_page=%d&sort=pushed&affiliation="
+           "owner,collaborator,organization_member" % max(1, min(100, limit)))
+    req = urllib.request.Request(url, headers={
+        "Authorization": "Bearer " + token,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "OllamaStudio"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        detail = "kontrollera att token har rättigheten repo" if e.code in (401, 403) else ""
+        return [], "GitHub svarade %d%s" % (e.code, (" – " + detail) if detail else "")
+    except Exception as e:
+        return [], "Kunde inte nå GitHub: %s" % e
+    items = []
+    for r in data if isinstance(data, list) else []:
+        if not isinstance(r, dict) or not r.get("full_name"):
+            continue
+        items.append({
+            "slug": r["full_name"],
+            "private": bool(r.get("private")),
+            "branch": r.get("default_branch") or "main",
+            "desc": (r.get("description") or "")[:120],
+            "pushed": r.get("pushed_at") or "",
+        })
+    with _repos_lock:
+        _repos_cache.update({"at": time.time(), "items": items})
+    return items, None
+
+
+def github_fetch_repo(slug, branch=""):
+    """Klona (eller uppdatera) ett repo och peka arbetsytan dit.
+
+    Returnerar (ok, meddelande, sökväg). Token skrivs aldrig till .git/config:
+    vi klonar via en autentiserad URL och sätter sedan tillbaka en ren origin,
+    precis som git_push() gör vid pushen.
+    """
+    slug = (slug or "").strip().strip("/")
+    if not _SLUG_RE.match(slug):
+        return False, "Ogiltigt repo-namn (väntar ägare/namn)", ""
+    if not git_available():
+        return False, "git är inte installerat på servern", ""
+    token = setting_str("github_token")
+    if not token:
+        return False, "Ingen GitHub-token angiven (⚙ Inställningar)", ""
+    root = code_repos_root(create=True)
+    if not root:
+        return False, "Kunde inte skapa mappen för hämtade repon", ""
+
+    owner, _, name = slug.partition("/")
+    target = os.path.join(root, repo_dir_name(slug))
+    clean_url = "https://github.com/%s/%s.git" % (owner, name)
+    auth_url = _authed_push_url(owner, name, token)
+    branch = (branch or "").strip()
+
+    def hide(text):
+        return (text or "").replace(token, "***")
+
+    if os.path.isdir(os.path.join(target, ".git")):
+        # Redan hämtat – uppdatera i stället för att klona om.
+        rc, _out, err = _git(["fetch", auth_url, "--prune"], timeout=180, cwd=target)
+        if rc != 0:
+            return False, "Kunde inte hämta uppdateringar: " + hide(err), target
+        if branch:
+            _git(["checkout", branch], timeout=60, cwd=target)
+        current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target)[1] or "").strip()
+        dirty = bool((_git(["status", "--porcelain"], cwd=target)[1] or "").strip())
+        if dirty:
+            # Rör aldrig ett träd med osparade ändringar – bara hämta hem refsen.
+            return True, ("%s hämtat – dina osparade ändringar i %s är kvar"
+                          % (slug, current or "?")), target
+        rc, _out, err = _git(["merge", "--ff-only", "FETCH_HEAD"], timeout=60, cwd=target)
+        note = ("uppdaterad" if rc == 0
+                else "hämtat (grenen %s ligger före/isär – inget slogs ihop)" % (current or "?"))
+        return True, "%s %s (gren %s)" % (slug, note, current or "?"), target
+
+    args = ["clone", "--depth", "50"]
+    if branch:
+        args += ["--branch", branch]
+    args += [auth_url, target]
+    rc, _out, err = _git(args, timeout=600, cwd=root)
+    if rc != 0:
+        return False, "Kloningen misslyckades: " + hide(err)[:300], ""
+    _git(["remote", "set-url", "origin", clean_url], cwd=target)   # ingen token på disk
+    current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target)[1] or "").strip()
+    return True, "%s hämtat (gren %s)" % (slug, current or "?"), target
 
 
 def github_create_pr(title, body, base=None, head=None):
@@ -2337,6 +2473,14 @@ PAGE = r"""<!doctype html>
   /* Kodassistent */
   .view.code{display:flex;flex-direction:column;overflow:hidden;padding:8px 24px 16px}
   .code-wrap{flex:1;display:flex;gap:12px;min-height:0}
+  .code-repobar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--card);
+    border:1px solid var(--border);border-radius:9px;padding:8px 12px;margin:0 2px 8px}
+  .code-repobar label{color:var(--subtle);font-size:12.5px}
+  .code-repobar select{flex:1;min-width:220px;max-width:520px;background:var(--bg);
+    border:1px solid var(--border);border-radius:8px;color:var(--text);padding:7px 10px;font-size:13px}
+  .code-repobar select:focus{outline:none;border-color:var(--accent)}
+  .code-repobar .hint{color:var(--faint);font-size:12px}
+
   .code-tree{width:240px;min-width:200px;background:var(--card);border:1px solid var(--border);
     border-radius:10px;display:flex;flex-direction:column;overflow:hidden}
   .code-tree-head{display:flex;justify-content:space-between;align-items:center;padding:10px;
@@ -2752,6 +2896,15 @@ PAGE = r"""<!doctype html>
           <div id="codeTree" class="code-files"></div>
         </div>
         <div class="code-main">
+          <div id="codeRepoBar" class="code-repobar" style="display:none">
+            <label>GitHub-repo:</label>
+            <select id="codeRepoSelect" onchange="onRepoPick()">
+              <option value="">Laddar…</option>
+            </select>
+            <button class="btn accent small" id="codeRepoFetch" onclick="fetchRepo()">⬇ Hämta &amp; arbeta här</button>
+            <button class="btn ghost small" onclick="loadRepos(true)" title="Uppdatera listan">↻</button>
+            <span class="hint" id="codeRepoHint"></span>
+          </div>
           <div id="codeGit" class="code-git" style="display:none">
             <span class="gi" id="codeGitInfo"></span>
             <span class="gacts">
@@ -3322,6 +3475,7 @@ function showView(v){
     updateCodeView();
     if(cfg.code){
       populateCodeModels();
+      loadRepos();
       if(localDir) loadLocalTree();
       else if(cfg.code_ws){ loadTree(); gitStatus(); }
       const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
@@ -4840,6 +4994,8 @@ function updateCodeView(){
   }
   const tree = document.querySelector('#view-code .code-tree');
   if(tree) tree.style.display = ws ? 'flex' : 'none';
+  const repoBar = document.getElementById('codeRepoBar');
+  if(repoBar) repoBar.style.display = on ? 'flex' : 'none';
   const noWs = document.getElementById('codeNoWs');
   if(noWs){
     noWs.style.display = (on && !ws) ? 'block' : 'none';
@@ -5522,6 +5678,75 @@ function gitMsg(text, err){
   const el = document.getElementById('codeGitMsg');
   if(el){ el.innerHTML = text || ''; el.style.color = err ? 'var(--danger)' : 'var(--faint)'; }
 }
+/* ---- GitHub-repo: välj i listan, hämta hem, arbeta, pusha tillbaka ---- */
+let repoList = [];
+async function loadRepos(force){
+  const sel = document.getElementById('codeRepoSelect');
+  const hint = document.getElementById('codeRepoHint');
+  if(!sel) return;
+  if(repoList.length && !force){ renderRepos(); return; }
+  sel.innerHTML = '<option value="">Hämtar dina repon…</option>';
+  try{
+    const r = await api('/api/github/repos', {headers: headers(false)});
+    const d = await r.json();
+    repoList = d.repos || [];
+    if(d.error){
+      sel.innerHTML = '<option value="">'+esc(d.error)+'</option>';
+      hint.innerHTML = 'Lägg in en GitHub-token i <a href="#" onclick="showView(\'settings\');'
+        + 'return false" style="color:var(--accent-hov)">Inställningar</a> för att kunna välja repo.';
+      return;
+    }
+    hint.textContent = d.dir ? ('Hämtas till ' + d.dir) : '';
+    renderRepos(d.current);
+  }catch(e){
+    sel.innerHTML = '<option value="">Kunde inte hämta listan</option>';
+    hint.textContent = e.message;
+  }
+}
+function renderRepos(currentPath){
+  const sel = document.getElementById('codeRepoSelect');
+  if(!repoList.length){
+    sel.innerHTML = '<option value="">Inga repon hittades för din token</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">Välj ett repo…</option>' + repoList.map(r=>
+    '<option value="'+esc(r.slug)+'">'+esc(r.slug)+(r.private?'  🔒':'')
+    + (r.desc ? '  –  '+esc(r.desc) : '')+'</option>').join('');
+  // Är arbetsytan redan ett hämtat repo? Förvälj det.
+  const mine = (currentPath||'').split('/').pop();
+  const match = repoList.find(r=>mine && mine === r.slug.replace('/','__'));
+  if(match) sel.value = match.slug;
+}
+function onRepoPick(){
+  const slug = document.getElementById('codeRepoSelect').value;
+  const btn = document.getElementById('codeRepoFetch');
+  if(btn) btn.disabled = !slug;
+}
+async function fetchRepo(){
+  const slug = document.getElementById('codeRepoSelect').value;
+  if(!slug){ toast('Välj ett repo först', true); return; }
+  const btn = document.getElementById('codeRepoFetch');
+  const hint = document.getElementById('codeRepoHint');
+  btn.disabled = true;
+  hint.textContent = 'Hämtar ' + slug + '… (första gången kan ta en stund)';
+  try{
+    const r = await api('/api/github/fetch', {method:'POST', headers:headers(true),
+      body: JSON.stringify({repo: slug})});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.message || d.error || ('HTTP '+r.status));
+    hint.textContent = '✓ ' + d.message + ' · arbetsyta: ' + d.path;
+    toast('Arbetar nu mot ' + slug);
+    // Arbetsytan bytte på servern – hämta om konfig, filträd och git-status
+    try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
+    updateCodeView(); loadTree(); gitStatus();
+  }catch(e){
+    hint.textContent = '✕ ' + e.message;
+    toast('Kunde inte hämta repot: '+e.message, true);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
 async function gitStatus(){
   const bar = document.getElementById('codeGit');
   try{
@@ -5881,6 +6106,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"path": rel, "content": ws_current(rel)})
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
+            if path == "/api/github/repos":
+                if not code_toggle_on():
+                    return self._send_json({"repos": [], "error": "Codex är av"}, 400)
+                items, err = github_list_repos()
+                return self._send_json({"repos": items, "error": err,
+                                        "dir": code_repos_root() or "",
+                                        "current": setting_str("code_workspace")})
+
             if path == "/api/git/status":
                 if not code_enabled():
                     return self._send_json({"repo": False})
@@ -6126,6 +6359,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
             ok, out = run_command(data.get("cmd", ""))
             return self._send_json({"ok": ok, "output": out})
+
+        if path == "/api/github/fetch":
+            # Hämta ett repo och gör det till arbetsyta (kräver bara att Codex är på –
+            # till skillnad från de andra git-vägarna som kräver en arbetsyta redan).
+            if not code_toggle_on():
+                return self._send_json({"ok": False, "error": "Codex är av"}, 400)
+            ok, message, target = github_fetch_repo(data.get("repo", ""),
+                                                    data.get("branch", ""))
+            if ok and target:
+                settings_set({"code_workspace": target})   # peka om Codex hit
+            return self._send_json({"ok": ok, "message": message, "path": target,
+                                    "status": git_status_info() if ok else {"repo": False}},
+                                   200 if ok else 400)
 
         if path in ("/api/git/branch", "/api/git/commit", "/api/git/push", "/api/github/pr"):
             if not code_enabled():
