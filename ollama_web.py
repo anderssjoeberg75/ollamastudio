@@ -1713,6 +1713,76 @@ def github_fetch_repo(slug, branch=""):
     return True, "%s hämtat (gren %s)" % (slug, current or "?"), target
 
 
+def local_repo_state(path):
+    """Osparade ändringar och opushade commits i ett hämtat repo.
+
+    Används för varningen innan man raderar: siffrorna säger exakt vad som
+    försvinner. `ahead` är None när grenen inte finns på origin (då är allt
+    lokalt arbete opushat).
+    """
+    if not os.path.isdir(os.path.join(path, ".git")):
+        return {"repo": False}
+    branch = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path)[1] or "").strip()
+    dirty = [l for l in (_git(["status", "--porcelain"], cwd=path)[1] or "").splitlines()
+             if l.strip()]
+    ahead = None
+    if branch:
+        rc, out, _err = _git(["rev-list", "--count", "origin/%s..HEAD" % branch], cwd=path)
+        if rc == 0 and out.strip().isdigit():
+            ahead = int(out.strip())
+    return {"repo": True, "branch": branch, "dirty": len(dirty), "ahead": ahead}
+
+
+def local_repos():
+    """Repon som redan är hämtade till servern, med deras git-läge."""
+    root = code_repos_root()
+    out = []
+    if not root or not os.path.isdir(root):
+        return out
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return out
+    for name in names:
+        path = os.path.join(root, name)
+        if not os.path.isdir(os.path.join(path, ".git")):
+            continue
+        owner, _, repo = name.partition("__")
+        state = local_repo_state(path)
+        state.update({"slug": "%s/%s" % (owner, repo) if repo else name, "path": path})
+        out.append(state)
+    return out
+
+
+def remove_local_repo(slug):
+    """Radera ett hämtat repo från disken. Returnerar (ok, meddelande).
+
+    Raderar bara inuti mappen för hämtade repon – aldrig en arbetsyta som
+    användaren pekat ut själv, och aldrig något utanför den roten.
+    """
+    slug = (slug or "").strip().strip("/")
+    if not _SLUG_RE.match(slug):
+        return False, "Ogiltigt repo-namn (väntar ägare/namn)"
+    root = code_repos_root()
+    if not root:
+        return False, "Ingen mapp för hämtade repon"
+    target = os.path.realpath(os.path.join(root, repo_dir_name(slug)))
+    if not target.startswith(os.path.realpath(root) + os.sep):
+        return False, "Sökvägen ligger utanför mappen för hämtade repon"
+    if not os.path.isdir(target):
+        return False, "%s är inte hämtat" % slug
+    if not os.path.isdir(os.path.join(target, ".git")):
+        return False, "Mappen ser inte ut som ett git-repo – raderar inget"
+    try:
+        shutil.rmtree(target)
+    except OSError as e:
+        return False, "Kunde inte radera: %s" % e
+    # Pekade arbetsytan hit? Släpp den, annars hamnar Codex i ett spöke.
+    if os.path.realpath(setting_str("code_workspace") or "") == target:
+        settings_set({"code_workspace": ""})
+    return True, "%s borttaget från servern" % slug
+
+
 def github_create_pr(title, body, base=None, head=None):
     """Öppna en pull request via GitHub REST. Returnerar (ok, url_eller_fel)."""
     token = setting_str("github_token")
@@ -2902,6 +2972,8 @@ PAGE = r"""<!doctype html>
               <option value="">Laddar…</option>
             </select>
             <button class="btn accent small" id="codeRepoFetch" onclick="fetchRepo()">⬇ Hämta &amp; arbeta här</button>
+            <button class="btn ghost small" id="codeRepoRemove" onclick="removeRepo()"
+                    title="Radera det hämtade repot från serverns disk" style="display:none">🗑 Ta bort lokalt</button>
             <button class="btn ghost small" onclick="loadRepos(true)" title="Uppdatera listan">↻</button>
             <span class="hint" id="codeRepoHint"></span>
           </div>
@@ -5690,6 +5762,7 @@ function gitMsg(text, err){
 }
 /* ---- GitHub-repo: välj i listan, hämta hem, arbeta, pusha tillbaka ---- */
 let repoList = [];
+let localRepos = [];        // repon som redan ligger på serverns disk
 async function loadRepos(force){
   const sel = document.getElementById('codeRepoSelect');
   const hint = document.getElementById('codeRepoHint');
@@ -5700,6 +5773,7 @@ async function loadRepos(force){
     const r = await api('/api/github/repos', {headers: headers(false)});
     const d = await r.json();
     repoList = d.repos || [];
+    localRepos = d.local || [];
     if(d.error){
       sel.innerHTML = '<option value="">'+esc(d.error)+'</option>';
       hint.innerHTML = 'Lägg in en GitHub-token i <a href="#" onclick="showView(\'settings\');'
@@ -5727,10 +5801,76 @@ function renderRepos(currentPath){
   const match = repoList.find(r=>mine && mine === r.slug.replace('/','__'));
   if(match) sel.value = match.slug;
 }
+function localRepo(slug){
+  return localRepos.find(r=>r.slug === slug) || null;
+}
 function onRepoPick(){
   const slug = document.getElementById('codeRepoSelect').value;
   const btn = document.getElementById('codeRepoFetch');
   if(btn) btn.disabled = !slug;
+  // "Ta bort lokalt" visas bara för repon som faktiskt ligger på servern
+  const rm = document.getElementById('codeRepoRemove');
+  const local = localRepo(slug);
+  if(rm){
+    rm.style.display = local ? '' : 'none';
+    rm.title = local ? ('Radera ' + local.path + ' från serverns disk') : '';
+  }
+  const hint = document.getElementById('codeRepoHint');
+  if(hint && local){
+    const bits = ['📁 hämtat: ' + local.path, 'gren ' + (local.branch||'?')];
+    if(local.dirty) bits.push(local.dirty + (local.dirty === 1
+      ? ' osparad ändring' : ' osparade ändringar'));
+    if(local.ahead) bits.push(local.ahead + (local.ahead === 1
+      ? ' opushad commit' : ' opushade commits'));
+    hint.textContent = bits.join(' · ');
+  }
+}
+async function removeRepo(){
+  const slug = document.getElementById('codeRepoSelect').value;
+  const local = localRepo(slug);
+  if(!local){ toast('Repot är inte hämtat', true); return; }
+
+  // Varning nummer ett: vad som raderas, och vad som går förlorat.
+  const risk = [];
+  if(local.dirty) risk.push(local.dirty + (local.dirty === 1
+    ? ' osparad ändring' : ' osparade ändringar'));
+  if(local.ahead) risk.push(local.ahead + (local.ahead === 1
+    ? ' commit som inte pushats till GitHub' : ' commits som inte pushats till GitHub'));
+  if(local.ahead === null) risk.push('grenen "' + (local.branch||'?') + '" finns inte på GitHub '
+    + '– allt arbete i den är opushat');
+  const warn = risk.length
+    ? '\n\n⚠ DU FÖRLORAR:\n· ' + risk.join('\n· ') + '\nDet går inte att ångra.'
+    : '\n\nAllt arbete verkar pushat till GitHub, så det går att hämta hem igen.';
+  if(!confirm('Radera ' + slug + ' från serverns disk?\n\nMappen som tas bort:\n' + local.path
+      + warn)) return;
+
+  // Varning nummer två – bara när något faktiskt riskerar att försvinna.
+  if(risk.length && !confirm('Sista kontrollen: ' + risk.join(' och ')
+      + ' i ' + slug + ' försvinner för alltid.\n\nRadera ändå?')) return;
+
+  const rm = document.getElementById('codeRepoRemove');
+  const hint = document.getElementById('codeRepoHint');
+  rm.disabled = true;
+  hint.textContent = 'Raderar ' + slug + '…';
+  try{
+    const r = await api('/api/github/remove', {method:'POST', headers:headers(true),
+      body: JSON.stringify({repo: slug})});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.message || d.error || ('HTTP '+r.status));
+    localRepos = d.local || [];
+    hint.textContent = '✓ ' + d.message;
+    toast(d.message);
+    // Arbetsytan kan ha släppts på servern – hämta om läget
+    try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
+    updateCodeView(); onRepoPick();
+    if(cfg.code_ws){ loadTree(); gitStatus(); }
+    else { const t = document.getElementById('codeTree'); if(t) t.innerHTML = ''; gitStatus(); }
+  }catch(e){
+    hint.textContent = '✕ ' + e.message;
+    toast('Kunde inte radera: '+e.message, true);
+  }finally{
+    rm.disabled = false;
+  }
 }
 async function fetchRepo(){
   const slug = document.getElementById('codeRepoSelect').value;
@@ -5746,6 +5886,9 @@ async function fetchRepo(){
     if(!d.ok) throw new Error(d.message || d.error || ('HTTP '+r.status));
     hint.textContent = '✓ ' + d.message + ' · arbetsyta: ' + d.path;
     toast('Arbetar nu mot ' + slug);
+    await loadRepos(true);                      // repot finns nu lokalt
+    document.getElementById('codeRepoSelect').value = slug;
+    onRepoPick();
     // Arbetsytan bytte på servern – hämta om konfig, filträd och git-status
     try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
     updateCodeView(); loadTree(); gitStatus();
@@ -6122,6 +6265,7 @@ class Handler(BaseHTTPRequestHandler):
                 items, err = github_list_repos()
                 return self._send_json({"repos": items, "error": err,
                                         "dir": code_repos_root() or "",
+                                        "local": local_repos(),
                                         "current": setting_str("code_workspace")})
 
             if path == "/api/git/status":
@@ -6382,6 +6526,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json({"ok": ok, "message": message, "path": target,
                                     "status": git_status_info() if ok else {"repo": False}},
                                    200 if ok else 400)
+
+        if path == "/api/github/remove":
+            if not code_toggle_on():
+                return self._send_json({"ok": False, "error": "Codex är av"}, 400)
+            ok, message = remove_local_repo(data.get("repo", ""))
+            return self._send_json({"ok": ok, "message": message,
+                                    "local": local_repos()}, 200 if ok else 400)
 
         if path in ("/api/git/branch", "/api/git/commit", "/api/git/push", "/api/github/pr"):
             if not code_enabled():

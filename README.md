@@ -97,7 +97,8 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Hämta GitHub-repo i Codex** – välj ett av dina repon i rullmenyn högst upp i Codex-vyn,
   klicka **⬇ Hämta & arbeta här**: koden klonas till servern, arbetsytan pekas om dit, och
   när du är klar tar knapparna **Ny gren → Committa → Push → Skapa PR** allt tillbaka till
-  GitHub. Ingen sökväg att fylla i för hand.
+  GitHub. Ingen sökväg att fylla i för hand. **🗑 Ta bort lokalt** raderar kopian från servern
+  igen – med en varning som räknar upp osparade ändringar och opushade commits först.
 - **Codex – kodassistent (experimentell)** (webbversionen) – utan arbetsyta fungerar Codex som
   en **kod-chatt** (skriver kod du kopierar, ingen GitHub eller mapp krävs). Du kan också öppna en
   **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser/skriver Codex filerna

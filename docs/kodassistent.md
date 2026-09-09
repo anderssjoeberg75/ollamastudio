@@ -75,6 +75,14 @@ en omladdning även om själva körningen inte gör det.
 AI-träningen fungerar tvärtom: den kör som en process på servern och överlever både vybyten
 och omladdning.
 
+**Ta bort ett hämtat repo (v2):** knappen **🗑 Ta bort lokalt** i repo-raden dyker upp när
+det valda repot ligger på servern (`POST /api/github/remove`). Innan raderingen räknas
+osparade ändringar och opushade commits fram (`git status --porcelain`, `rev-list --count
+origin/<gren>..HEAD`) och skrivs ut i varningen; finns något att förlora krävs en andra
+bekräftelse. Raderingen sker bara inuti `OLLAMA_STUDIO_REPOS_DIR` – aldrig en arbetsyta man
+pekat ut själv, och aldrig en mapp som inte är ett git-repo. Pekade arbetsytan på det som
+raderades nollställs `code_workspace`.
+
 **Hämta repo från UI:t (v2):** rullmenyn högst upp i Codex-vyn listar repon som
 GitHub-token ger tillgång till (`GET /api/github/repos`). Vid **⬇ Hämta & arbeta här**
 (`POST /api/github/fetch`) klonas repot till `OLLAMA_STUDIO_REPOS_DIR`
