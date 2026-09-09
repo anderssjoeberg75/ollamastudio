@@ -4841,7 +4841,20 @@ function updateCodeView(){
   const tree = document.querySelector('#view-code .code-tree');
   if(tree) tree.style.display = ws ? 'flex' : 'none';
   const noWs = document.getElementById('codeNoWs');
-  if(noWs) noWs.style.display = (on && !ws) ? 'block' : 'none';
+  if(noWs){
+    noWs.style.display = (on && !ws) ? 'block' : 'none';
+    // Skilj "ingen arbetsyta vald" från "vald men hittades inte" – annars letar
+    // man efter fel sak (t.ex. bland tokens) när sökvägen bara är felstavad.
+    const settingsLink = '<a href="#" onclick="showView(\'settings\');return false">Inställningar</a>';
+    noWs.innerHTML = (cfg.code_ws_set && !cfg.code_ws)
+      ? '⚠ Arbetsytan <code>' + esc(cfg.code_ws_path || '') + '</code> hittades inte på servern ('
+        + esc(cfg.server_os || '?') + '). Codex kan därför bara skissa kod. Kontrollera att '
+        + 'sökvägen finns <b>på servern</b> där appen körs, och att den går att läsa – rätta '
+        + 'den i ' + settingsLink + '.'
+      : '💡 Skisslage – ingen arbetsyta vald. Codex skriver kod åt dig men kan inte läsa '
+        + 'projektet eller spara till disk. Kopiera koden, eller välj en arbetsyta i '
+        + settingsLink + ' för att läsa/spara/köra.';
+  }
   // Knapp för lokal mapp: visa när växeln är på (och webbläsaren stödjer det)
   const lb = document.getElementById('codeLocalBar');
   if(lb) lb.style.display = (on && FS_OK) ? 'flex' : 'none';
@@ -5841,6 +5854,10 @@ class Handler(BaseHTTPRequestHandler):
                     "code": code_toggle_on(),
                     "code_ready": code_toggle_on(),   # vyn funkar (skisslage utan arbetsyta)
                     "code_ws": code_enabled(),        # arbetsyta finns → läsa/spara/git/köra
+                    "code_ws_set": bool(setting_str("code_workspace")),
+                    "code_ws_path": setting_str("code_workspace"),
+                    "server_os": ("Windows" if os.name == "nt"
+                                  else ("macOS" if sys.platform == "darwin" else "Linux")),
                     "code_run": code_run_enabled(),
                     "hf": hf_enabled(),
                     "hf_auto": hf_auto_enabled(),
