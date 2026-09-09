@@ -81,9 +81,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   namngivna konversationer**.
 - **Webbsök i chatten** (webbversionen) – när modellen är osäker eller saknar aktuell info kan
   den automatiskt **söka på nätet** (DuckDuckGo, ingen API-nyckel) och besvara frågan utifrån
-  träffarna. Svaret märks tydligt sist med *"togs fram efter en webbsökning"* och en **källista**.
-  Slås av/på under **⚙ Inställningar** i chatten, eller helt med `OLLAMA_STUDIO_WEBSEARCH=0`.
-  Kräver att servern har internetåtkomst.
+  träffarna. Servern **läser dessutom innehållet på de bästa träffarna** och matar in texten,
+  så modellen kan svara på sådant som bara står inne på sidan (resultat, ledare, priser) i
+  stället för att bara sammanfatta rubriker. Svaret märks tydligt sist med *"togs fram efter en
+  webbsökning"* och en **källista**. Slås av/på under **⚙ Inställningar** i chatten, eller helt
+  med `OLLAMA_STUDIO_WEBSEARCH=0`. Kräver att servern har internetåtkomst.
 - **Delat långtidsminne (Mem0)** (webbversionen) – chatten kan komma ihåg fakta om dig mellan
   konversationer via **[Mem0](https://mem0.ai)**. Relevanta minnen hämtas och matas in i modellen,
   och nya fakta sparas efter varje svar. Pekar du på **samma Mem0 och samma `MEM0_USER_ID`** som en
@@ -194,6 +196,7 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_CHAT_TIME` | `1` (på) | Skickar med serverns datum och tid till modellen i chatten, så den kan svara på "vilken dag är det?" och slutar gissa om pågående händelser. Sätt `0` för att stänga av. |
 | `TZ` | *(systemets)* | Tidszon för datum/tid i chatten, t.ex. `Europe/Stockholm`. Sätts i systemd-tjänsten. Serverns klocka visas i ⚙ Inställningar → Chatt. |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
+| `OLLAMA_STUDIO_WEBSEARCH_PAGES` | `3` | Hur många av sökträffarna vars sidinnehåll servern läser och matar in i modellen (0–5). `0` = bara rubrik och utdrag, som förut. Fler = bättre svar men långsammare. |
 | `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: träffar i sökningen och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
 | `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
 | `HF_TOKEN` | *(tomt)* | Valfri Hugging Face-token. Används **bara för sökningen** (högre kvot, egna privata repon) – nedladdningen gör Ollama själv. Kan också sättas i ⚙ Inställningar. |
@@ -466,7 +469,15 @@ frågor som "vilken dag är det?", "hur många dagar kvar till jul?" eller "hur 
 född 1985?" fungerar. Den får samtidigt veta att dess egen kunskap är äldre än så, vilket gör
 att den säger *"jag har inte aktuell information"* i stället för att svara om pågående
 tävlingar och nyheter som om året vore ett annat – slå på **🌐 Webbsök** för att låta den ta
-reda på svaret i stället. Stäng av med kryssrutan **🕒 Låt modellen veta datum och tid** i
+reda på svaret i stället.
+
+**Vad webbsöket gör.** Modellen skriver först en sökfråga (på det språk där svaret troligast
+finns), servern söker på DuckDuckGo och **hämtar sedan sidorna bakom de bästa träffarna** och
+plockar ut texten. Modellen får både utdragen och sidinnehållet, med instruktionen att svara
+med namn och siffror från källan snarare än ur minnet. Antalet sidor som läses styrs i
+⚙ Inställningar (0–5). Servern hämtar bara vanliga webbsidor över http/https och vägrar
+adresser i det egna nätet, så en manipulerad sökträff inte kan användas för att nå interna
+tjänster. Stäng av med kryssrutan **🕒 Låt modellen veta datum och tid** i
 ⚙ Inställningar, där serverns klocka också visas. Visar den fel tid: sätt tidszonen på
 servern, t.ex. `Environment=TZ=Europe/Stockholm` i systemd-tjänsten.
 
