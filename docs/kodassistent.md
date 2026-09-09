@@ -83,6 +83,13 @@ bekräftelse. Raderingen sker bara inuti `OLLAMA_STUDIO_REPOS_DIR` – aldrig en
 pekat ut själv, och aldrig en mapp som inte är ett git-repo. Pekade arbetsytan på det som
 raderades nollställs `code_workspace`.
 
+Knappen visas bara när det valda repot ligger på disken, så valet i rullmenyn måste
+överleva ett vybyte. Listan cachas mellan vybyten, och andra gången Codex öppnades
+anropades `renderRepos()` utan sökväg – valet nollställdes och knappen försvann fast
+repot låg kvar. Förvalet faller därför tillbaka på `cfg.code_ws_path`. Codex-knappen
+intill modellväljaren heter **🧹 Töm loggen** (inte 🗑): den rensar bara loggen och
+konversationen, aldrig filer.
+
 **Hämta repo från UI:t (v2):** rullmenyn högst upp i Codex-vyn listar repon som
 GitHub-token ger tillgång till (`GET /api/github/repos`). Vid **⬇ Hämta & arbeta här**
 (`POST /api/github/fetch`) klonas repot till `OLLAMA_STUDIO_REPOS_DIR`
