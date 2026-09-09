@@ -8,6 +8,7 @@ import sys
 import json
 import time
 import shutil
+import subprocess
 import tempfile
 import socket
 import threading
@@ -225,7 +226,8 @@ class _DBTest(unittest.TestCase):
         for k in ("OLLAMA_STUDIO_WEBSEARCH", "OLLAMA_STUDIO_MEM0", "OLLAMA_STUDIO_CODE",
                   "OLLAMA_STUDIO_CODE_RUN", "OLLAMA_STUDIO_WORKSPACE", "MEM0_API_KEY",
                   "OLLAMA_STUDIO_HF", "OLLAMA_STUDIO_HF_AUTO", "HF_TOKEN",
-                  "OLLAMA_STUDIO_TRAIN", "OLLAMA_STUDIO_TRAIN_DIR", "OLLAMA_STUDIO_SOUP_BIN"):
+                  "OLLAMA_STUDIO_TRAIN", "OLLAMA_STUDIO_TRAIN_DIR", "OLLAMA_STUDIO_SOUP_BIN",
+                  "GITHUB_TOKEN", "OLLAMA_STUDIO_REPOS_DIR"):
             os.environ.pop(k, None)
         w.db_init()
 
@@ -1043,6 +1045,151 @@ class _FakeHandler:
 
     def _send_json(self, obj, status=200):     # metoderna returnerar sitt svar
         return obj
+
+
+class TestGithubRepoFetch(_DBTest):
+    """Välj repo i listan → klona hem → arbeta → pusha tillbaka."""
+
+    REPOS_JSON = [
+        {"full_name": "anders/ollamastudio", "private": False, "default_branch": "main",
+         "description": "Webb-GUI", "pushed_at": "2026-09-09"},
+        {"full_name": "anders/healthchat", "private": True, "default_branch": "main",
+         "description": None, "pushed_at": "2026-09-08"},
+        {"trasig": "utan full_name"},              # hoppas över
+    ]
+
+    class _Api(BaseHTTPRequestHandler):
+        payload = b"[]"
+        status = 200
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            self.send_response(self.__class__.status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(self.__class__.payload)))
+            self.end_headers()
+            self.wfile.write(self.__class__.payload)
+
+    def setUp(self):
+        super().setUp()
+        self._Api.payload = json.dumps(self.REPOS_JSON).encode()
+        self._Api.status = 200
+        self.api = ThreadingHTTPServer(("127.0.0.1", 0), self._Api)
+        threading.Thread(target=self.api.serve_forever,
+                         kwargs={"poll_interval": 0.02}, daemon=True).start()
+        self._old_api, self._old_auth = w.GITHUB_API, w._authed_push_url
+        w.GITHUB_API = "http://127.0.0.1:%d" % self.api.server_address[1]
+        w._repos_cache.update({"at": 0, "items": []})
+        # Ett riktigt litet git-repo att klona ifrån (i stället för github.com)
+        self.origin = os.path.join(self.tmp, "fjärr")
+        os.makedirs(self.origin)
+        self._git(["init", "-q", "-b", "main"])
+        with open(os.path.join(self.origin, "README.md"), "w") as fh:
+            fh.write("# test\n")
+        self._git(["add", "-A"])
+        self._git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-qm", "start"])
+        w._authed_push_url = lambda owner, repo, token: self.origin
+        w.settings_set({"code_enabled": True, "github_token": "ghp_test",
+                        "code_repos_dir": os.path.join(self.tmp, "hämtade")})
+
+    def tearDown(self):
+        w.GITHUB_API, w._authed_push_url = self._old_api, self._old_auth
+        w._repos_cache.update({"at": 0, "items": []})
+        self.api.shutdown()
+        self.api.server_close()
+        super().tearDown()
+
+    def _git(self, args):
+        return subprocess.run(["git"] + args, cwd=self.origin, capture_output=True, text=True)
+
+    # ---- listan ----
+    def test_list_repos(self):
+        items, err = w.github_list_repos()
+        self.assertIsNone(err)
+        self.assertEqual([r["slug"] for r in items], ["anders/ollamastudio", "anders/healthchat"])
+        self.assertTrue(items[1]["private"])
+        self.assertEqual(items[1]["desc"], "")          # None → tom sträng, inte krasch
+
+    def test_list_requires_token(self):
+        w.settings_set({"github_token": None})
+        items, err = w.github_list_repos()
+        self.assertEqual(items, [])
+        self.assertIn("token", err)
+
+    def test_list_reports_http_error(self):
+        self._Api.status, self._Api.payload = 401, b"{}"
+        items, err = w.github_list_repos()
+        self.assertEqual(items, [])
+        self.assertIn("401", err)
+        self.assertIn("repo", err)                      # tipsar om rättigheten
+
+    def test_list_is_cached(self):
+        first, _ = w.github_list_repos()
+        self._Api.status = 500                          # nästa riktiga anrop skulle faila
+        second, err = w.github_list_repos()
+        self.assertIsNone(err)
+        self.assertEqual(first, second)
+
+    # ---- hämtningen ----
+    def test_fetch_clones_and_cleans_the_remote(self):
+        ok, message, path = w.github_fetch_repo("anders/ollamastudio")
+        self.assertTrue(ok, message)
+        self.assertTrue(os.path.isfile(os.path.join(path, "README.md")))
+        self.assertEqual(os.path.basename(path), "anders__ollamastudio")
+        with open(os.path.join(path, ".git", "config")) as fh:
+            config = fh.read()
+        self.assertNotIn("ghp_test", config)            # token hamnar aldrig på disk
+        self.assertIn("https://github.com/anders/ollamastudio.git", config)
+
+    def test_fetched_repo_works_as_workspace(self):
+        _ok, _msg, path = w.github_fetch_repo("anders/ollamastudio")
+        w.settings_set({"code_workspace": path})
+        self.assertEqual(w.code_workspace_root(), path)
+        status = w.git_status_info()
+        self.assertTrue(status["repo"])
+        self.assertEqual((status["owner"], status["repo_name"]), ("anders", "ollamastudio"))
+        # ...och hela vägen till en commit
+        with open(os.path.join(path, "ny.txt"), "w") as fh:
+            fh.write("hej\n")
+        self.assertEqual(w.git_status_info()["changed"], 1)
+        self.assertTrue(w.git_create_branch("claude/test")[0])
+        self.assertTrue(w.git_commit_all("Ändring")[0])
+        self.assertEqual(w.git_status_info()["branch"], "claude/test")
+
+    def test_second_fetch_updates_instead_of_recloning(self):
+        _ok, _msg, first = w.github_fetch_repo("anders/ollamastudio")
+        ok, message, second = w.github_fetch_repo("anders/ollamastudio")
+        self.assertTrue(ok)
+        self.assertEqual(first, second)
+        self.assertIn("uppdaterad", message)
+
+    def test_fetch_never_touches_uncommitted_work(self):
+        _ok, _msg, path = w.github_fetch_repo("anders/ollamastudio")
+        with open(os.path.join(path, "pågående.txt"), "w") as fh:
+            fh.write("halvfärdigt\n")
+        ok, message, _p = w.github_fetch_repo("anders/ollamastudio")
+        self.assertTrue(ok)
+        self.assertIn("osparade ändringar", message)
+        self.assertTrue(os.path.isfile(os.path.join(path, "pågående.txt")))
+
+    def test_bad_slugs_are_refused(self):
+        for bad in ("", "utan-snedstreck", "a/b/c", "../../etc", "a b/c", "-flagga/x"):
+            ok, message, path = w.github_fetch_repo(bad)
+            self.assertFalse(ok, bad)
+            self.assertEqual(path, "")
+            self.assertIn("Ogiltigt", message)
+
+    def test_fetch_requires_token(self):
+        w.settings_set({"github_token": None})
+        ok, message, _p = w.github_fetch_repo("anders/ollamastudio")
+        self.assertFalse(ok)
+        self.assertIn("token", message)
+
+    def test_repo_dir_name_is_flat_and_safe(self):
+        self.assertEqual(w.repo_dir_name("anders/ollamastudio"), "anders__ollamastudio")
+        self.assertNotIn("/", w.repo_dir_name("a/b"))
 
 
 class TestSelfUpdate(_DBTest):

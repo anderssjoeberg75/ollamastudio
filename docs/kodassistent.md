@@ -64,6 +64,14 @@ Webb-UI (ny vy "Kod")  ──►  /api/agent (server)  ──►  Agent-loop
 | `github_open_pr(...)` | Öppna en PR via GitHub REST (kräver token) |
 | `github_clone(repo)` | Klona ett repo till arbetsytan |
 
+**Hämta repo från UI:t (v2):** rullmenyn högst upp i Codex-vyn listar repon som
+GitHub-token ger tillgång till (`GET /api/github/repos`). Vid **⬇ Hämta & arbeta här**
+(`POST /api/github/fetch`) klonas repot till `OLLAMA_STUDIO_REPOS_DIR`
+(standard `~/ollama-studio-repos/ägare__namn`) och `code_workspace` pekas om dit.
+Kloningen sker via en autentiserad URL, men `origin` sätts därefter till den rena
+https-adressen – token hamnar aldrig i `.git/config`. Är repot redan hämtat görs
+`fetch` + `merge --ff-only`, och har arbetsträdet osparade ändringar rörs det inte alls.
+
 ## UI-flöde (ny vy "Kod")
 
 - **Arbetsyta-väljare** högst upp (vilken mapp / vilket repo).
