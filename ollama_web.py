@@ -73,6 +73,7 @@ DB_PATH = os.environ.get(
 # Kända inställningar: nyckel -> (env-namn, standard, typ, hemlig?)
 SETTINGS_SPEC = {
     "websearch":        ("OLLAMA_STUDIO_WEBSEARCH", "1", "bool", False),
+    "chat_time":        ("OLLAMA_STUDIO_CHAT_TIME", "1", "bool", False),
     "hf_enabled":       ("OLLAMA_STUDIO_HF", "1", "bool", False),
     "hf_auto":          ("OLLAMA_STUDIO_HF_AUTO", "1", "bool", False),
     "hf_token":         ("HF_TOKEN", "", "str", True),
@@ -206,6 +207,7 @@ def settings_public():
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
     out["code_run_active"] = code_run_enabled()
+    out["server_time"] = format_now()          # så man ser om serverns klocka/TZ är fel
     out["train_module"] = TRAIN is not None    # ligger soup_train.py bredvid appen?
     out["train_active"] = train_toggle_on()
     out["train_workspace_path"] = train_workspace_root() or ""
@@ -270,6 +272,11 @@ def settings_set(values):
 # --- Bekväma getters (dynamiska: läser aktuella inställningar) ---
 def websearch_enabled():
     return setting_bool("websearch")
+
+
+def chat_time_enabled():
+    """Skicka med datum och tid som systemmeddelande i chatten."""
+    return setting_bool("chat_time")
 
 
 def hf_enabled():
@@ -577,6 +584,41 @@ def gather_system():
 # --------------------------------------------------------------------------
 # Webbsökning (DuckDuckGo, nyckelfri) – används av chattens auto-sök
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Aktuell tid – modeller vet inte vilken dag det är. Utan den här kontexten
+# svarar de utifrån träningsdatan ("vem leder Vuelta a España?") som om den
+# vore aktuell. Vi skickar med datum och tid som ett systemmeddelande, och
+# säger uttryckligen att allt färskare än kunskapsgränsen ska sökas upp.
+# Serverns lokala tid används (sätt TZ i tjänstefilen om den ligger fel).
+# --------------------------------------------------------------------------
+SWEDISH_WEEKDAYS = ("måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag")
+SWEDISH_MONTHS = ("januari", "februari", "mars", "april", "maj", "juni",
+                  "juli", "augusti", "september", "oktober", "november", "december")
+
+
+def format_now(ts=None):
+    """Svensk datum- och tidssträng, t.ex. "onsdag 9 september 2026, klockan 14:32"."""
+    t = time.localtime(time.time() if ts is None else ts)
+    return "%s %d %s %d, klockan %02d:%02d" % (
+        SWEDISH_WEEKDAYS[t.tm_wday], t.tm_mday, SWEDISH_MONTHS[t.tm_mon - 1],
+        t.tm_year, t.tm_hour, t.tm_min)
+
+
+def now_context(ts=None):
+    """Systemmeddelandet som talar om för modellen vad klockan är."""
+    zone = time.strftime("%Z", time.localtime(time.time() if ts is None else ts)).strip()
+    return (
+        "Just nu är det %s%s. Utgå från det när användaren frågar om datum, tid, "
+        "veckodag, årtal, ålder eller hur långt det är kvar till något – räkna ut "
+        "svaret i stället för att säga att du inte vet vilken dag det är.\n"
+        "Din träningsdata är äldre än dagens datum. Gäller frågan pågående "
+        "tävlingar, nyheter, priser, väder, resultat eller vem som innehar en "
+        "position just nu: gissa aldrig utifrån minnet. Säg att du inte har "
+        "aktuell information (eller sök på nätet om det är påslaget), och blanda "
+        "inte ihop årets upplaga med en tidigare."
+        % (format_now(ts), (" (%s)" % zone) if zone else ""))
+
+
 # Marker som modellen ombeds skriva när den vill söka. Måste börja en rad.
 WEBSEARCH_MARKER = "SÖK:"
 
@@ -591,6 +633,11 @@ WEBSEARCH_INSTRUCTION = (
     "Exempel: " + WEBSEARCH_MARKER + " Sveriges folkmängd 2025"
 )
 
+
+def websearch_instruction():
+    """Steg 1-instruktionen med dagens datum, så sökfrågan blir rätt årtal."""
+    return WEBSEARCH_INSTRUCTION + " " + now_context()
+
 # System-instruktion i steg 2: svara utifrån sökträffarna.
 WEBSEARCH_ANSWER_INSTRUCTION = (
     "Du är en hjälpsam assistent. Besvara användarens senaste fråga med hjälp av "
@@ -598,6 +645,11 @@ WEBSEARCH_ANSWER_INSTRUCTION = (
     "källorna som [1], [2] osv där det passar. Om resultaten inte räcker för att svara "
     "säkert, säg det ärligt."
 )
+
+
+def websearch_answer_instruction():
+    """Steg 2-instruktionen med dagens datum, så "i år" och "nu" tolkas rätt."""
+    return WEBSEARCH_ANSWER_INSTRUCTION + " " + now_context()
 
 # Primär endpoint (html.duckduckgo.com/html/): resultat i <a class="result__a">.
 _DDG_LINK_RE = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
@@ -2791,6 +2843,11 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
           <label class="set-check"><input id="stWebsearch" type="checkbox">
             <span>🌐 Webbsök när modellen är osäker
               <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
+          <label class="set-check"><input id="stChatTime" type="checkbox">
+            <span>🕒 Låt modellen veta datum och tid
+              <span class="hint">(annars svarar den utifrån sin träningsdata och tror att det är
+              ett annat år)</span></span></label>
+          <div id="stTimeState" class="hint"></div>
         </div>
 
         <div class="set-card">
@@ -4572,6 +4629,12 @@ async function loadSettingsForm(){
   const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.value = (v==null?'':v); };
   const chk = (id, v)=>{ const el=document.getElementById(id); if(el) el.checked = !!v; };
   chk('stWebsearch', s.websearch);
+  chk('stChatTime', s.chat_time);
+  const timeState = document.getElementById('stTimeState');
+  if(timeState) timeState.textContent = s.server_time
+    ? ('Serverns klocka: ' + s.server_time + ' – ligger den fel, sätt rätt tidszon på servern '
+       + '(t.ex. Environment=TZ=Europe/Stockholm i systemd-tjänsten).')
+    : '';
   chk('stMem0Enabled', s.mem0_enabled);
   set('stMem0User', s.mem0_user_id);
   set('stMem0Base', s.mem0_base_url);
@@ -4680,6 +4743,7 @@ function collectSettings(){
   const val = id => (document.getElementById(id).value||'').trim();
   const body = {
     websearch: document.getElementById('stWebsearch').checked,
+    chat_time: document.getElementById('stChatTime').checked,
     mem0_enabled: document.getElementById('stMem0Enabled').checked,
     mem0_user_id: val('stMem0User'),
     mem0_base_url: val('stMem0Base'),
@@ -5534,6 +5598,7 @@ class Handler(BaseHTTPRequestHandler):
                     "multi": MULTI_BACKEND,
                     "auth": bool(TOKEN),
                     "websearch": websearch_enabled(),
+                    "chat_time": chat_time_enabled(),
                     "memory": mem0_enabled(),
                     "code": code_toggle_on(),
                     "code_ready": code_toggle_on(),   # vyn funkar (skisslage utan arbetsyta)
@@ -5833,6 +5898,10 @@ class Handler(BaseHTTPRequestHandler):
             opts = opts if isinstance(opts, dict) and opts else None
             # Välj backend (GPU-instans) att köra chatten på
             base = backend_url(data.get("backend"))
+            # Vad är klockan? Modellen vet inte – tala om det (först i listan, så
+            # den ligger kvar även när minne och sökträffar läggs till).
+            if chat_time_enabled():
+                messages = [{"role": "system", "content": now_context()}] + messages
             # Delat minne (Mem0): hämta relevanta minnen och injicera som system-text
             if mem0_enabled() and data.get("memory"):
                 # Kort timeout i chattvägen – blockera aldrig svaret länge (board #20).
@@ -5882,7 +5951,7 @@ class Handler(BaseHTTPRequestHandler):
         """Tvåstegs-chatt: (1) modellen svarar direkt eller ber om sökning via markören,
         (2) vid sökning matas träffarna in och svaret strömmas med en källfotnot sist.
         För direktsvar streamas svaret som vanligt (markören hålls bara kvar tills vi vet)."""
-        step1 = [{"role": "system", "content": WEBSEARCH_INSTRUCTION}] + messages
+        step1 = [{"role": "system", "content": websearch_instruction()}] + messages
         try:
             up1 = self._open_chat_stream(step1, model, opts, base)
         except Exception as e:
@@ -5950,7 +6019,7 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             results = []
 
-        step2 = ([{"role": "system", "content": WEBSEARCH_ANSWER_INSTRUCTION}]
+        step2 = ([{"role": "system", "content": websearch_answer_instruction()}]
                  + messages
                  + [{"role": "system", "content": format_search_context(results)}])
         try:

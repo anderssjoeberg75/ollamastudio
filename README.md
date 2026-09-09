@@ -64,6 +64,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   **Varianter** för att välja kvantisering själv (Q4_K_M, Q8_0 …). Skriver du ett namn som
   inte finns i Ollamas bibliotek söks det dessutom upp automatiskt och laddas ner därifrån.
   Se [Hugging Face-modeller](#-hugging-face-modeller).
+- **🕒 Vet vad klockan är** – chatten skickar med dagens datum och tid till modellen, så den
+  kan räkna ut veckodagar och åldrar, och slutar svara som om året vore det år den tränades.
+  Frågor om pågående händelser hänvisas till webbsök i stället för gissningar.
 - **Nedladdning i realtid** – progressbar med procent, storlek och status medan modellen
   laddas ner. Går att avbryta.
 - **Aktiv modell** – se vilken modell som just nu är inläst i minnet ("körs nu"), inklusive
@@ -188,6 +191,8 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
+| `OLLAMA_STUDIO_CHAT_TIME` | `1` (på) | Skickar med serverns datum och tid till modellen i chatten, så den kan svara på "vilken dag är det?" och slutar gissa om pågående händelser. Sätt `0` för att stänga av. |
+| `TZ` | *(systemets)* | Tidszon för datum/tid i chatten, t.ex. `Europe/Stockholm`. Sätts i systemd-tjänsten. Serverns klocka visas i ⚙ Inställningar → Chatt. |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
 | `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: träffar i sökningen och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
 | `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
@@ -455,6 +460,15 @@ Klicka **⚙ Inställningar** i chatten för att sätta en **systemprompt** (ge 
 t.ex. "Du är en hjälpsam assistent som svarar kortfattat på svenska"), **temperatur** (lägre
 = mer fokuserat/förutsägbart) och **kontextlängd** (`num_ctx`). Inställningarna sparas i
 webbläsaren och skickas med som Ollama-`options` vid varje meddelande.
+
+**Datum och tid.** Modellen får med sig serverns datum, tid och veckodag i varje samtal, så
+frågor som "vilken dag är det?", "hur många dagar kvar till jul?" eller "hur gammal är någon
+född 1985?" fungerar. Den får samtidigt veta att dess egen kunskap är äldre än så, vilket gör
+att den säger *"jag har inte aktuell information"* i stället för att svara om pågående
+tävlingar och nyheter som om året vore ett annat – slå på **🌐 Webbsök** för att låta den ta
+reda på svaret i stället. Stäng av med kryssrutan **🕒 Låt modellen veta datum och tid** i
+⚙ Inställningar, där serverns klocka också visas. Visar den fel tid: sätt tidszonen på
+servern, t.ex. `Environment=TZ=Europe/Stockholm` i systemd-tjänsten.
 
 Kör du flera GPU:er visas en **VRAM-varning** ovanför chatten: grön om modellen får plats
 på det valda kortet, gul om det är ont om ledigt VRAM just nu, och röd om modellen är för

@@ -30,6 +30,10 @@ Environment=OLLAMA_URL=http://localhost:11434
 # OBS: citattecken runt HELA raden krävs eftersom värdet innehåller mellanslag.
 # Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1"
 
+# Tidszon: chatten skickar med serverns datum och tid till modellen. Ligger klockan
+# fel i chattsvaren är det den här som saknas (syns i ⚙ Inställningar → Chatt).
+Environment=TZ=Europe/Stockholm
+
 # Hugging Face: appen söker efter GGUF-modeller där när ett modellnamn inte finns i
 # Ollamas bibliotek. Avstängning / bara-förslag / valfri token för sökningen:
 # Environment=OLLAMA_STUDIO_HF=0
