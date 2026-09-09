@@ -506,6 +506,7 @@ class TestPageReading(unittest.TestCase):
             self.wfile.write(body)
 
     def setUp(self):
+        w._page_cache.clear()
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), self._Page)
         threading.Thread(target=self.srv.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
@@ -603,6 +604,76 @@ class TestPageReading(unittest.TestCase):
 
     def test_context_without_results(self):
         self.assertIn("Inga användbara webbträffar", w.format_search_context([]))
+
+
+class TestExcerptAndCache(unittest.TestCase):
+    """Snabbare svar: bara relevanta stycken matas in, och sökningar cachas."""
+
+    TEXT = ("Meny Start Sport Om oss Kontakt Prenumerera på nyhetsbrevet redan idag\n"
+            "Cookies används på den här webbplatsen för att förbättra upplevelsen\n"
+            "Efter etapp 12 leder Juan Ayuso sammanställningen, 47 sekunder före tvåan\n"
+            "Vingegaard ligger tvåa i sammanställningen efter dagens bergsetapp\n"
+            "Läs också: så bygger du en bra cykelform inför vintersäsongen\n")
+
+    def setUp(self):
+        w._search_cache.clear()
+        w._page_cache.clear()
+
+    def test_excerpt_picks_matching_paragraphs(self):
+        out = w.relevant_excerpt(self.TEXT, "vem leder sammanställningen Vuelta")
+        self.assertIn("Juan Ayuso", out)
+        self.assertNotIn("Cookies", out)          # brus sållas bort
+        self.assertNotIn("nyhetsbrevet", out)
+
+    def test_excerpt_keeps_page_order(self):
+        out = w.relevant_excerpt(self.TEXT, "sammanställningen")
+        self.assertLess(out.index("Juan Ayuso"), out.index("Vingegaard"))
+
+    def test_excerpt_respects_cap(self):
+        self.assertLessEqual(len(w.relevant_excerpt(self.TEXT, "sammanställningen", cap=60)), 60)
+
+    def test_excerpt_falls_back_when_nothing_matches(self):
+        out = w.relevant_excerpt(self.TEXT, "kvantfysik neutriner", cap=50)
+        self.assertEqual(out, self.TEXT[:50])     # hellre början än ingenting
+        self.assertEqual(w.relevant_excerpt("", "fråga"), "")
+        self.assertEqual(w.relevant_excerpt(None, None), "")
+
+    def test_excerpt_shrinks_the_prompt(self):
+        # Poängen med hela övningen: färre tecken till modellen = snabbare svar.
+        self.assertLess(len(w.relevant_excerpt(self.TEXT, "sammanställningen")),
+                        len(self.TEXT))
+
+    def test_search_is_cached(self):
+        calls = []
+        real = w._ddg_fetch
+        w._ddg_fetch = lambda url, timeout: calls.append(url) or (
+            '<a class="result__a" href="https://x.se">Titel</a>')
+        try:
+            first = w.web_search("vuelta 2026")
+            second = w.web_search("  VUELTA 2026  ")      # samma fråga, annan skiftning
+            self.assertEqual(first, second)
+            self.assertEqual(len(calls), 1)               # bara ett nätanrop
+        finally:
+            w._ddg_fetch = real
+
+    def test_expired_cache_is_refetched(self):
+        w._cache_put(w._search_cache, "x", [{"title": "gammal"}])
+        self.assertIsNotNone(w._cache_get(w._search_cache, "x"))
+        self.assertIsNone(w._cache_get(w._search_cache, "x", ttl=0))   # för gammal
+
+    def test_cache_does_not_grow_forever(self):
+        for i in range(w.CACHE_MAX_ENTRIES + 5):
+            w._cache_put(w._search_cache, "q%d" % i, [])
+        self.assertLessEqual(len(w._search_cache), w.CACHE_MAX_ENTRIES)
+
+
+class TestKeepAlive(_DBTest):
+    def test_default_and_override(self):
+        self.assertEqual(w.keep_alive_value(), "30m")
+        w.settings_set({"keep_alive": ""})
+        self.assertEqual(w.keep_alive_value(), "")      # tomt = Ollamas standard
+        w.settings_set({"keep_alive": "2h"})
+        self.assertEqual(w.keep_alive_value(), "2h")
 
 
 class TestSearchPagesSetting(_DBTest):

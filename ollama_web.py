@@ -76,6 +76,7 @@ SETTINGS_SPEC = {
     "websearch":        ("OLLAMA_STUDIO_WEBSEARCH", "1", "bool", False),
     "chat_time":        ("OLLAMA_STUDIO_CHAT_TIME", "1", "bool", False),
     "websearch_pages":  ("OLLAMA_STUDIO_WEBSEARCH_PAGES", "3", "str", False),
+    "keep_alive":       ("OLLAMA_STUDIO_KEEP_ALIVE", "30m", "str", False),
     "hf_enabled":       ("OLLAMA_STUDIO_HF", "1", "bool", False),
     "hf_auto":          ("OLLAMA_STUDIO_HF_AUTO", "1", "bool", False),
     "hf_token":         ("HF_TOKEN", "", "str", True),
@@ -282,6 +283,15 @@ def websearch_pages():
         return max(0, min(5, int(setting_str("websearch_pages") or 3)))
     except ValueError:
         return 3
+
+
+def keep_alive_value():
+    """Hur länge Ollama ska hålla modellen i minnet mellan meddelanden.
+
+    Standard är 5 minuter i Ollama; efter det tar nästa fråga flera sekunder
+    extra medan modellen läses in igen. Tomt värde = låt Ollama bestämma.
+    """
+    return setting_str("keep_alive").strip()
 
 
 def chat_time_enabled():
@@ -744,16 +754,23 @@ def web_search(query, max_results=5, timeout=12):
     {title, url, snippet}. Provar html-endpointen först och faller tillbaka på
     lite-endpointen om den blockeras/ger noll träffar (board #21).
     Kastar undantag bara om även fallbacken misslyckas på nätverksnivå."""
+    cached = _cache_get(_search_cache, (query or "").strip().lower())
+    if cached is not None:
+        return cached
     q = urllib.parse.urlencode({"q": query, "kl": "wt-wt"})
     try:
         page = _ddg_fetch("https://html.duckduckgo.com/html/?" + q, timeout)
         results = _parse_ddg_html(page, max_results)
         if results:
+            _cache_put(_search_cache, (query or "").strip().lower(), results)
             return results
     except Exception:
         pass   # nätverksfel/blockering – prova fallbacken nedan
     page = _ddg_fetch("https://lite.duckduckgo.com/lite/?" + q, timeout)
-    return _parse_ddg_lite(page, max_results)
+    results = _parse_ddg_lite(page, max_results)
+    if results:
+        _cache_put(_search_cache, (query or "").strip().lower(), results)
+    return results
 
 
 def extract_search_query(text):
@@ -770,8 +787,33 @@ def extract_search_query(text):
 # men inte för "vem leder tävlingen just nu" – svaret står inne på sidan. Vi
 # hämtar därför de bästa träffarna, plockar ut texten och matar in den.
 # --------------------------------------------------------------------------
+# Cache: en följdfråga i samma ämne ger ofta identisk sökning. Att slippa både
+# DuckDuckGo och sidhämtningen tar bort ett par sekunder ur svarstiden.
+SEARCH_CACHE_TTL = 600             # sekunder
+CACHE_MAX_ENTRIES = 64
+_search_cache = {}                 # sökfråga -> (tidpunkt, träffar)
+_page_cache = {}                   # url -> (tidpunkt, sidtext)
+_cache_lock = threading.Lock()
+
+
+def _cache_get(store, key, ttl=SEARCH_CACHE_TTL):
+    with _cache_lock:
+        hit = store.get(key)
+    if hit and (time.time() - hit[0]) < ttl:
+        return hit[1]
+    return None
+
+
+def _cache_put(store, key, value):
+    with _cache_lock:
+        if len(store) >= CACHE_MAX_ENTRIES:
+            store.clear()          # enkel och förutsägbar – cachen är bara en genväg
+        store[key] = (time.time(), value)
+
+
 PAGE_DOWNLOAD_CAP = 400 * 1024     # max bytes vi laddar ner per sida
-PAGE_TEXT_CAP = 2500               # tecken text per sida som matas till modellen
+PAGE_RAW_CAP = 20000               # tecken vi behåller ur sidan för urvalet nedan
+PAGE_TEXT_CAP = 1500               # tecken per sida som faktiskt matas till modellen
 PAGE_FETCH_TIMEOUT = 8
 
 # Filändelser som aldrig är läsbar text
@@ -829,12 +871,46 @@ def html_to_text(html):
     return "\n".join(line for line in lines if line)
 
 
-def fetch_page_text(url, timeout=PAGE_FETCH_TIMEOUT, cap=PAGE_TEXT_CAP):
+def relevant_excerpt(text, query, cap=PAGE_TEXT_CAP):
+    """Plocka de stycken som bäst svarar mot sökfrågan.
+
+    Halva en webbsida är meny, cookiebanner och relaterade artiklar. Att bara
+    skicka de matchande styckena gör svaret både snabbare (färre tokens att
+    processa) och träffsäkrare (mindre brus att gissa utifrån).
+    """
+    text = text or ""
+    words = {w for w in re.split(r"\W+", (query or "").lower()) if len(w) > 2}
+    paragraphs = [p for p in text.split("\n") if len(p) >= 40]
+    if not words or not paragraphs:
+        return text[:cap]
+    scored = []
+    for index, para in enumerate(paragraphs):
+        low = para.lower()
+        score = sum(1 for w in words if w in low)
+        if score:
+            scored.append((-score, index, para))
+    if not scored:
+        return text[:cap]
+    scored.sort()
+    picked, total = [], 0
+    for _score, index, para in scored:
+        if total + len(para) > cap and picked:
+            break
+        picked.append((index, para))
+        total += len(para)
+    picked.sort()                          # tillbaka till sidans egen ordning
+    return "\n".join(p for _i, p in picked)[:cap]
+
+
+def fetch_page_text(url, timeout=PAGE_FETCH_TIMEOUT, cap=PAGE_RAW_CAP):
     """Hämta en sida och returnera dess text. Tom sträng vid minsta problem."""
     if not url or url.lower().split("?")[0].endswith(_BINARY_EXT):
         return ""
     if not url_is_public(url):
         return ""
+    cached = _cache_get(_page_cache, url)
+    if cached is not None:
+        return cached[:cap]
     try:
         opener = urllib.request.build_opener(_SafeRedirect)
         req = urllib.request.Request(url, headers={
@@ -850,14 +926,20 @@ def fetch_page_text(url, timeout=PAGE_FETCH_TIMEOUT, cap=PAGE_TEXT_CAP):
         m = re.search(r"charset=([\w-]+)", ctype)
         if m:
             charset = m.group(1)
-        text = html_to_text(raw.decode(charset, errors="replace"))
+        text = html_to_text(raw.decode(charset, errors="replace"))[:PAGE_RAW_CAP]
     except Exception:
         return ""
+    _cache_put(_page_cache, url, text)
     return text[:cap]
 
 
-def enrich_results(results, pages=3, timeout=PAGE_FETCH_TIMEOUT):
-    """Hämta sidtexten för de `pages` första träffarna – parallellt."""
+def enrich_results(results, pages=3, query="", timeout=PAGE_FETCH_TIMEOUT,
+                   per_page=PAGE_TEXT_CAP):
+    """Hämta sidtexten för de `pages` första träffarna – parallellt.
+
+    Bara de stycken som matchar sökfrågan skickas vidare (se relevant_excerpt),
+    så modellen får kort och relevant text i stället för hela sidan.
+    """
     targets = [r for r in (results or []) if r.get("url")][:max(0, int(pages or 0))]
     if not targets:
         return results
@@ -869,7 +951,7 @@ def enrich_results(results, pages=3, timeout=PAGE_FETCH_TIMEOUT):
             except Exception:
                 text = ""
             if text:
-                futures[future]["text"] = text
+                futures[future]["text"] = relevant_excerpt(text, query, per_page)
     return results
 
 
@@ -2969,6 +3051,17 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
             <span>🌐 Webbsök när modellen är osäker
               <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
           <div class="set-row" style="max-width:320px;margin-top:10px">
+            <label>Håll modellen laddad
+              <span class="hint">(annars läses den in på nytt efter en stunds tystnad,
+              vilket kostar sekunder)</span></label>
+            <select id="stKeepAlive">
+              <option value="">Ollamas standard (5 min)</option>
+              <option value="30m">30 minuter</option>
+              <option value="2h">2 timmar</option>
+              <option value="-1">Tills servern startas om</option>
+            </select>
+          </div>
+          <div class="set-row" style="max-width:320px;margin-top:10px">
             <label>Läs innehållet på sökträffarna
               <span class="hint">(annars ser modellen bara rubrik och utdrag)</span></label>
             <select id="stSearchPages">
@@ -4772,6 +4865,7 @@ async function loadSettingsForm(){
   chk('stWebsearch', s.websearch);
   chk('stChatTime', s.chat_time);
   set('stSearchPages', s.websearch_pages);
+  set('stKeepAlive', s.keep_alive);
   const timeState = document.getElementById('stTimeState');
   if(timeState) timeState.textContent = s.server_time
     ? ('Serverns klocka: ' + s.server_time + ' – ligger den fel, sätt rätt tidszon på servern '
@@ -4887,6 +4981,7 @@ function collectSettings(){
     websearch: document.getElementById('stWebsearch').checked,
     chat_time: document.getElementById('stChatTime').checked,
     websearch_pages: val('stSearchPages'),
+    keep_alive: val('stKeepAlive'),
     mem0_enabled: document.getElementById('stMem0Enabled').checked,
     mem0_user_id: val('stMem0User'),
     mem0_base_url: val('stMem0Base'),
@@ -6057,6 +6152,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = {"model": model, "messages": messages, "stream": True}
             if opts:
                 payload["options"] = opts   # t.ex. temperature, num_ctx
+            if keep_alive_value():
+                payload["keep_alive"] = keep_alive_value()   # slipp omladdning
             return self._proxy_stream("/api/chat", payload, base=base)
 
         return self._send_json({"error": "not found"}, 404)
@@ -6076,6 +6173,8 @@ class Handler(BaseHTTPRequestHandler):
         payload = {"model": model, "messages": messages, "stream": True}
         if opts:
             payload["options"] = opts
+        if keep_alive_value():
+            payload["keep_alive"] = keep_alive_value()
         body = json.dumps(payload).encode()
         req = urllib.request.Request((base or PRIMARY["url"]) + "/api/chat", data=body,
                                      method="POST",
@@ -6094,11 +6193,14 @@ class Handler(BaseHTTPRequestHandler):
         """Tvåstegs-chatt: (1) modellen svarar direkt eller ber om sökning via markören,
         (2) vid sökning matas träffarna in och svaret strömmas med en källfotnot sist.
         För direktsvar streamas svaret som vanligt (markören hålls bara kvar tills vi vet)."""
-        step1 = [{"role": "system", "content": websearch_instruction()}] + messages
+        # Samma tidsstämpel i båda stegen (annars byter prompten prefix mitt i)
+        now = now_context()
+        step1 = [{"role": "system", "content": WEBSEARCH_INSTRUCTION + " " + now}] + messages
         try:
             up1 = self._open_chat_stream(step1, model, opts, base)
         except Exception as e:
             return self._send_json({"error": str(e)}, 502)
+
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -6170,11 +6272,11 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 return
             try:
-                results = enrich_results(results, pages)
+                results = enrich_results(results, pages, query)
             except Exception:
                 pass
 
-        step2 = ([{"role": "system", "content": websearch_answer_instruction()}]
+        step2 = ([{"role": "system", "content": WEBSEARCH_ANSWER_INSTRUCTION + " " + now}]
                  + messages
                  + [{"role": "system", "content": format_search_context(results)}])
         try:

@@ -196,6 +196,7 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_CHAT_TIME` | `1` (på) | Skickar med serverns datum och tid till modellen i chatten, så den kan svara på "vilken dag är det?" och slutar gissa om pågående händelser. Sätt `0` för att stänga av. |
 | `TZ` | *(systemets)* | Tidszon för datum/tid i chatten, t.ex. `Europe/Stockholm`. Sätts i systemd-tjänsten. Serverns klocka visas i ⚙ Inställningar → Chatt. |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
+| `OLLAMA_STUDIO_KEEP_ALIVE` | `30m` | Hur länge Ollama håller modellen i minnet mellan meddelanden. Ollamas eget standardvärde är 5 minuter, och då tar första frågan efter en paus flera sekunder extra medan modellen läses in igen. `-1` = tills servern startas om, tomt = låt Ollama bestämma. |
 | `OLLAMA_STUDIO_WEBSEARCH_PAGES` | `3` | Hur många av sökträffarna vars sidinnehåll servern läser och matar in i modellen (0–5). `0` = bara rubrik och utdrag, som förut. Fler = bättre svar men långsammare. |
 | `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: träffar i sökningen och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
 | `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
@@ -473,13 +474,30 @@ reda på svaret i stället.
 
 **Vad webbsöket gör.** Modellen skriver först en sökfråga (på det språk där svaret troligast
 finns), servern söker på DuckDuckGo och **hämtar sedan sidorna bakom de bästa träffarna** och
-plockar ut texten. Modellen får både utdragen och sidinnehållet, med instruktionen att svara
+plockar ut texten. Av sidan skickas bara de **stycken som matchar sökfrågan** vidare – meny,
+cookierutor och "läs också"-block sållas bort, vilket både snabbar upp svaret och gör det mer
+träffsäkert. Sökningar och hämtade sidor cachas i tio minuter, så följdfrågor i samma ämne
+går direkt. Modellen får både utdragen och sidinnehållet, med instruktionen att svara
 med namn och siffror från källan snarare än ur minnet. Antalet sidor som läses styrs i
 ⚙ Inställningar (0–5). Servern hämtar bara vanliga webbsidor över http/https och vägrar
 adresser i det egna nätet, så en manipulerad sökträff inte kan användas för att nå interna
 tjänster. Stäng av med kryssrutan **🕒 Låt modellen veta datum och tid** i
 ⚙ Inställningar, där serverns klocka också visas. Visar den fel tid: sätt tidszonen på
 servern, t.ex. `Environment=TZ=Europe/Stockholm` i systemd-tjänsten.
+
+### Snabbare svar
+
+Går svaren långsamt är det oftast något av det här:
+
+| Vad | Gör så här |
+| --- | --- |
+| **Modellen laddas in på nytt** efter en stunds tystnad | ⚙ Inställningar → *Håll modellen laddad* (30 min som standard). Sparar flera sekunder på första frågan efter en paus. |
+| **Modellen är för stor för GPU:n** | Kolla VRAM-varningen ovanför chatten och märkningen i Upptäck / Installera. Spiller modellen över till CPU blir den flera gånger långsammare – välj en mindre eller mer kvantiserad variant. |
+| **För lång kontext** | `num_ctx` i chattens ⚙ Inställningar styr hur stor kontext som allokeras. 4096 räcker för de flesta samtal; 16384 kostar minne och tid i varje svar. |
+| **Lång konversation** | Hela tråden skickas med varje gång. Starta en **＋ Ny** konversation när ämnet byts. |
+| **Webbsöket** | Varje söksvar är två modellanrop plus sökning och sidhämtning. Sänk *Läs innehållet på sökträffarna* till 2 – eller stäng av webbsöket för frågor som inte behöver aktuell information. |
+
+---
 
 Kör du flera GPU:er visas en **VRAM-varning** ovanför chatten: grön om modellen får plats
 på det valda kortet, gul om det är ont om ledigt VRAM just nu, och röd om modellen är för
