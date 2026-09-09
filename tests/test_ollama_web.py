@@ -1187,6 +1187,71 @@ class TestGithubRepoFetch(_DBTest):
         self.assertFalse(ok)
         self.assertIn("token", message)
 
+    # ---- radera hämtat repo ----
+    def test_local_repos_reports_state(self):
+        _ok, _msg, path = w.github_fetch_repo("anders/ollamastudio")
+        local = w.local_repos()
+        self.assertEqual([r["slug"] for r in local], ["anders/ollamastudio"])
+        self.assertEqual((local[0]["dirty"], local[0]["ahead"]), (0, 0))
+        # osparad fil + lokal commit ska räknas – det är varningens underlag
+        with open(os.path.join(path, "ny.txt"), "w") as fh:
+            fh.write("x\n")
+        subprocess.run(["git", "add", "-A"], cwd=path, capture_output=True)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=T",
+                        "commit", "-qm", "lokal"], cwd=path, capture_output=True)
+        with open(os.path.join(path, "osparat.txt"), "w") as fh:
+            fh.write("y\n")
+        local = w.local_repos()[0]
+        self.assertEqual(local["dirty"], 1)
+        self.assertEqual(local["ahead"], 1)
+
+    def test_ahead_is_none_on_branch_without_remote(self):
+        _ok, _msg, path = w.github_fetch_repo("anders/ollamastudio")
+        subprocess.run(["git", "checkout", "-q", "-b", "claude/ny"], cwd=path,
+                       capture_output=True)
+        self.assertIsNone(w.local_repos()[0]["ahead"])   # allt i grenen är opushat
+
+    def test_remove_deletes_only_inside_the_repos_dir(self):
+        _ok, _msg, path = w.github_fetch_repo("anders/ollamastudio")
+        ok, message = w.remove_local_repo("anders/ollamastudio")
+        self.assertTrue(ok, message)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(w.local_repos(), [])
+        # fjärr-repot (utanför mappen) är orört
+        self.assertTrue(os.path.isfile(os.path.join(self.origin, "README.md")))
+
+    def test_remove_releases_the_workspace(self):
+        _ok, _msg, path = w.github_fetch_repo("anders/ollamastudio")
+        w.settings_set({"code_workspace": path})
+        w.remove_local_repo("anders/ollamastudio")
+        self.assertEqual(w.setting_str("code_workspace"), "")   # inget spöke kvar
+        self.assertIsNone(w.code_workspace_root())
+
+    def test_remove_keeps_a_workspace_it_did_not_delete(self):
+        other = os.path.join(self.tmp, "eget-projekt")
+        os.makedirs(other)
+        w.settings_set({"code_workspace": other})
+        w.github_fetch_repo("anders/ollamastudio")
+        w.remove_local_repo("anders/ollamastudio")
+        self.assertEqual(w.setting_str("code_workspace"), other)
+
+    def test_remove_refuses_bad_targets(self):
+        cases = {"../../etc": "Ogiltigt", "utan-snedstreck": "Ogiltigt",
+                 "anders/finns-inte": "inte hämtat"}
+        for slug, expect in cases.items():
+            ok, message = w.remove_local_repo(slug)
+            self.assertFalse(ok, slug)
+            self.assertIn(expect, message)
+
+    def test_remove_refuses_a_folder_that_is_not_a_repo(self):
+        # En mapp som inte är ett git-repo raderas inte, även om namnet stämmer
+        root = w.code_repos_root(create=True)
+        os.makedirs(os.path.join(root, "anders__lurig"))
+        ok, message = w.remove_local_repo("anders/lurig")
+        self.assertFalse(ok)
+        self.assertIn("git-repo", message)
+        self.assertTrue(os.path.isdir(os.path.join(root, "anders__lurig")))
+
     def test_repo_dir_name_is_flat_and_safe(self):
         self.assertEqual(w.repo_dir_name("anders/ollamastudio"), "anders__ollamastudio")
         self.assertNotIn("/", w.repo_dir_name("a/b"))
