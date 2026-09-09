@@ -38,6 +38,7 @@ import html as _html
 import shlex
 import socket
 import shutil
+import ipaddress
 import difflib
 import sqlite3
 import threading
@@ -74,6 +75,7 @@ DB_PATH = os.environ.get(
 SETTINGS_SPEC = {
     "websearch":        ("OLLAMA_STUDIO_WEBSEARCH", "1", "bool", False),
     "chat_time":        ("OLLAMA_STUDIO_CHAT_TIME", "1", "bool", False),
+    "websearch_pages":  ("OLLAMA_STUDIO_WEBSEARCH_PAGES", "3", "str", False),
     "hf_enabled":       ("OLLAMA_STUDIO_HF", "1", "bool", False),
     "hf_auto":          ("OLLAMA_STUDIO_HF_AUTO", "1", "bool", False),
     "hf_token":         ("HF_TOKEN", "", "str", True),
@@ -272,6 +274,14 @@ def settings_set(values):
 # --- Bekväma getters (dynamiska: läser aktuella inställningar) ---
 def websearch_enabled():
     return setting_bool("websearch")
+
+
+def websearch_pages():
+    """Hur många träffar vars sidinnehåll ska läsas (0 = bara utdragen)."""
+    try:
+        return max(0, min(5, int(setting_str("websearch_pages") or 3)))
+    except ValueError:
+        return 3
 
 
 def chat_time_enabled():
@@ -630,6 +640,8 @@ WEBSEARCH_INSTRUCTION = (
     "väder, sport, personer eller händelser som kan ha ändrats efter din kunskapsgräns: "
     "svara då med EXAKT en enda rad som börjar med \"" + WEBSEARCH_MARKER + " \" följt av "
     "en kort, effektiv sökfråga – och skriv absolut inget annat. "
+    "Skriv sökfrågan på det språk där svaret troligast finns – ofta engelska för "
+    "sport, teknik och internationella nyheter. "
     "Exempel: " + WEBSEARCH_MARKER + " Sveriges folkmängd 2025"
 )
 
@@ -642,8 +654,10 @@ def websearch_instruction():
 WEBSEARCH_ANSWER_INSTRUCTION = (
     "Du är en hjälpsam assistent. Besvara användarens senaste fråga med hjälp av "
     "webbsökresultaten nedan. Sammanfatta med egna ord på svenska och hänvisa till "
-    "källorna som [1], [2] osv där det passar. Om resultaten inte räcker för att svara "
-    "säkert, säg det ärligt."
+    "källorna som [1], [2] osv där det passar. Texten under \"Från sidan\" är hämtad "
+    "direkt från källan – läs den noga och svara med namn och siffror därifrån, även "
+    "om de skiljer sig från vad du minns. Står svaret inte i materialet, säg det "
+    "ärligt och gissa inte."
 )
 
 
@@ -751,17 +765,128 @@ def extract_search_query(text):
     return q[:200]
 
 
+# --------------------------------------------------------------------------
+# Läs sidorna, inte bara träfflistan. DuckDuckGos utdrag räcker för "vad är X",
+# men inte för "vem leder tävlingen just nu" – svaret står inne på sidan. Vi
+# hämtar därför de bästa träffarna, plockar ut texten och matar in den.
+# --------------------------------------------------------------------------
+PAGE_DOWNLOAD_CAP = 400 * 1024     # max bytes vi laddar ner per sida
+PAGE_TEXT_CAP = 2500               # tecken text per sida som matas till modellen
+PAGE_FETCH_TIMEOUT = 8
+
+# Filändelser som aldrig är läsbar text
+_BINARY_EXT = (".pdf", ".zip", ".mp4", ".mp3", ".jpg", ".jpeg", ".png", ".gif",
+               ".webp", ".svg", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx")
+_DROP_BLOCK_RE = re.compile(r"<(script|style|noscript|svg|template|iframe)[^>]*>.*?</\1>",
+                            re.S | re.I)
+_BLOCK_END_RE = re.compile(r"</(p|div|li|tr|h[1-6]|section|article|table)\s*>|<br\s*/?>",
+                           re.I)
+
+
+def url_is_public(url):
+    """True om URL:en är http(s) mot en publik adress.
+
+    Sökträffar är utomstående indata – utan den här kontrollen hade en träff
+    kunnat peka servern mot 127.0.0.1 eller ett internt nät (SSRF).
+    """
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except Exception:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parts.hostname, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    """Följ omdirigeringar bara till publika adresser (samma skäl som ovan)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not url_is_public(newurl):
+            return None
+        return urllib.request.HTTPRedirectHandler.redirect_request(
+            self, req, fp, code, msg, headers, newurl)
+
+
+def html_to_text(html):
+    """Grov men robust textutvinning ur HTML – bara standardbiblioteket."""
+    html = _DROP_BLOCK_RE.sub(" ", html or "")
+    html = _BLOCK_END_RE.sub("\n", html)
+    text = _html.unescape(_TAG_RE.sub(" ", html))
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def fetch_page_text(url, timeout=PAGE_FETCH_TIMEOUT, cap=PAGE_TEXT_CAP):
+    """Hämta en sida och returnera dess text. Tom sträng vid minsta problem."""
+    if not url or url.lower().split("?")[0].endswith(_BINARY_EXT):
+        return ""
+    if not url_is_public(url):
+        return ""
+    try:
+        opener = urllib.request.build_opener(_SafeRedirect)
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; OllamaStudio/1.0)",
+            "Accept": "text/html,text/plain;q=0.9",
+            "Accept-Language": "sv,en;q=0.8"})
+        with opener.open(req, timeout=timeout) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            if "html" not in ctype and "text/plain" not in ctype:
+                return ""
+            raw = resp.read(PAGE_DOWNLOAD_CAP)
+        charset = "utf-8"
+        m = re.search(r"charset=([\w-]+)", ctype)
+        if m:
+            charset = m.group(1)
+        text = html_to_text(raw.decode(charset, errors="replace"))
+    except Exception:
+        return ""
+    return text[:cap]
+
+
+def enrich_results(results, pages=3, timeout=PAGE_FETCH_TIMEOUT):
+    """Hämta sidtexten för de `pages` första träffarna – parallellt."""
+    targets = [r for r in (results or []) if r.get("url")][:max(0, int(pages or 0))]
+    if not targets:
+        return results
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
+        futures = {pool.submit(fetch_page_text, r["url"], timeout): r for r in targets}
+        for future in concurrent.futures.as_completed(futures, timeout=timeout + 4):
+            try:
+                text = future.result()
+            except Exception:
+                text = ""
+            if text:
+                futures[future]["text"] = text
+    return results
+
+
 def format_search_context(results):
     """Bygg system-texten med sökträffar som matas in i modellen (steg 2)."""
     if not results:
         return ("Inga användbara webbträffar hittades. Säg ärligt att du inte kunde "
                 "hitta aktuell information om detta.")
-    lines = ["Webbsökresultat:"]
+    lines = ["Webbsökresultat. Där det står \"Från sidan\" är texten hämtad direkt "
+             "från källan – använd den i första hand, och citera siffror och namn "
+             "därifrån i stället för att minnas dem."]
     for i, r in enumerate(results, 1):
-        block = "[%d] %s" % (i, r["title"])
+        block = "[%d] %s\n%s" % (i, r["title"], r["url"])
         if r.get("snippet"):
             block += "\n" + r["snippet"]
-        block += "\n" + r["url"]
+        if r.get("text"):
+            block += "\nFrån sidan:\n" + r["text"]
         lines.append(block)
     return "\n\n".join(lines)
 
@@ -2843,6 +2968,16 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
           <label class="set-check"><input id="stWebsearch" type="checkbox">
             <span>🌐 Webbsök när modellen är osäker
               <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
+          <div class="set-row" style="max-width:320px;margin-top:10px">
+            <label>Läs innehållet på sökträffarna
+              <span class="hint">(annars ser modellen bara rubrik och utdrag)</span></label>
+            <select id="stSearchPages">
+              <option value="0">Nej – bara träfflistan</option>
+              <option value="2">De 2 bästa träffarna</option>
+              <option value="3">De 3 bästa träffarna</option>
+              <option value="5">De 5 bästa träffarna (långsammast)</option>
+            </select>
+          </div>
           <label class="set-check"><input id="stChatTime" type="checkbox">
             <span>🕒 Låt modellen veta datum och tid
               <span class="hint">(annars svarar den utifrån sin träningsdata och tror att det är
@@ -4287,6 +4422,12 @@ async function sendChat(){
             box.scrollTop = box.scrollHeight;
             continue;
           }
+          if(msg.status === 'reading'){
+            if(box.lastChild) box.lastChild.textContent = '📄 Läser '
+              + (msg.count || '') + ' sidor…';
+            box.scrollTop = box.scrollHeight;
+            continue;
+          }
           if(msg.message && msg.message.content){
             chatMessages[idx].content += msg.message.content;
             if(box.lastChild) box.lastChild.textContent = chatMessages[idx].content;
@@ -4630,6 +4771,7 @@ async function loadSettingsForm(){
   const chk = (id, v)=>{ const el=document.getElementById(id); if(el) el.checked = !!v; };
   chk('stWebsearch', s.websearch);
   chk('stChatTime', s.chat_time);
+  set('stSearchPages', s.websearch_pages);
   const timeState = document.getElementById('stTimeState');
   if(timeState) timeState.textContent = s.server_time
     ? ('Serverns klocka: ' + s.server_time + ' – ligger den fel, sätt rätt tidszon på servern '
@@ -4744,6 +4886,7 @@ function collectSettings(){
   const body = {
     websearch: document.getElementById('stWebsearch').checked,
     chat_time: document.getElementById('stChatTime').checked,
+    websearch_pages: val('stSearchPages'),
     mem0_enabled: document.getElementById('stMem0Enabled').checked,
     mem0_user_id: val('stMem0User'),
     mem0_base_url: val('stMem0Base'),
@@ -6018,6 +6161,18 @@ class Handler(BaseHTTPRequestHandler):
             results = web_search(query) if query else []
         except Exception:
             results = []
+        # Läs sidorna bakom de bästa träffarna – utdragen räcker sällan för
+        # frågor om nuläget (resultat, ledare, priser).
+        pages = websearch_pages()
+        if results and pages:
+            try:
+                self._emit({"status": "reading", "count": min(pages, len(results))})
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            try:
+                results = enrich_results(results, pages)
+            except Exception:
+                pass
 
         step2 = ([{"role": "system", "content": websearch_answer_instruction()}]
                  + messages

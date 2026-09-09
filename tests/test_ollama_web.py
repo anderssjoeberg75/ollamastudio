@@ -9,6 +9,7 @@ import json
 import time
 import shutil
 import tempfile
+import socket
 import threading
 import unittest
 import urllib.request
@@ -390,12 +391,14 @@ class TestPullFallback(_DBTest):
         self._old_log = w.Handler.log_message
         w.Handler.log_message = lambda *a, **k: None      # tyst åtkomstlogg i testerna
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._FakeOllama)
-        threading.Thread(target=self.ollama.serve_forever, daemon=True).start()
+        threading.Thread(target=self.ollama.serve_forever,
+                 kwargs={"poll_interval": 0.02}, daemon=True).start()
         self._old_primary = w.PRIMARY
         w.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
-        threading.Thread(target=self.studio.serve_forever, daemon=True).start()
+        threading.Thread(target=self.studio.serve_forever,
+                 kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.studio.server_address[1]
         self._old_search, self._old_files = w.HF.search_models, w.HF.list_gguf_files
         w.HF.search_models = lambda q, limit=8, token=None, timeout=12: \
@@ -479,6 +482,137 @@ class TestPullFallback(_DBTest):
         self.assertEqual(data["quants"][1]["pull"], "hf.co/bartowski/Viking-7B-GGUF:Q8_0")
 
 
+class TestPageReading(unittest.TestCase):
+    """Webbsöket ska läsa sidorna, inte bara DuckDuckGos utdrag."""
+
+    HTML = ("<html><head><title>T</title><style>.x{color:red}</style>"
+            "<script>var a=1;</script></head><body>"
+            "<h1>Rubrik</h1><p>F&ouml;rsta stycket.</p>"
+            "<ul><li>1. Etta</li><li>2. Tv&aring;a</li></ul></body></html>")
+
+    class _Page(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path == "/bild":
+                body, ctype = b"\x89PNG", "image/png"
+            else:
+                body, ctype = TestPageReading.HTML.encode(), "text/html; charset=utf-8"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def setUp(self):
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), self._Page)
+        threading.Thread(target=self.srv.serve_forever,
+                 kwargs={"poll_interval": 0.02}, daemon=True).start()
+        self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
+        self._old_check = w.url_is_public
+
+    def tearDown(self):
+        w.url_is_public = self._old_check
+        self.srv.shutdown()
+        self.srv.server_close()
+
+    def _allow_local(self):
+        w.url_is_public = lambda url: url.startswith("http")
+
+    # ---- textutvinning ----
+    def test_html_to_text(self):
+        text = w.html_to_text(self.HTML)
+        self.assertIn("Första stycket.", text)          # entiteter avkodas
+        self.assertIn("1. Etta", text)
+        self.assertNotIn("var a=1", text)               # skript bort
+        self.assertNotIn("color:red", text)             # stilar bort
+        self.assertNotIn("<", text)
+        self.assertGreater(len(text.splitlines()), 2)   # blocktaggar blir radbrytningar
+
+    def test_html_to_text_handles_junk(self):
+        self.assertEqual(w.html_to_text(""), "")
+        self.assertEqual(w.html_to_text(None), "")
+
+    # ---- SSRF-skyddet ----
+    def test_url_is_public_blocks_internal_targets(self):
+        for url in ("http://127.0.0.1/x", "http://localhost/x", "http://192.168.1.5/x",
+                    "http://10.0.0.1/", "http://169.254.169.254/latest/meta-data/",
+                    "file:///etc/passwd", "ftp://example.com/x", "http://[::1]/",
+                    "", "inte-en-url"):
+            self.assertFalse(w.url_is_public(url), url)
+
+    def test_url_is_public_allows_normal_sites(self):
+        # Ingen riktig DNS i testerna – låtsas att namnet pekar på en publik adress.
+        real = socket.getaddrinfo
+        socket.getaddrinfo = lambda host, port, *a, **k: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+        try:
+            self.assertTrue(w.url_is_public("https://example.com/sida"))
+        finally:
+            socket.getaddrinfo = real
+
+    def test_fetch_refuses_internal_url(self):
+        self.assertEqual(w.fetch_page_text(self.base + "/"), "")   # loopback
+
+    def test_fetch_skips_binaries(self):
+        self._allow_local()
+        self.assertEqual(w.fetch_page_text(self.base + "/rapport.pdf"), "")  # på ändelsen
+        self.assertEqual(w.fetch_page_text(self.base + "/bild"), "")         # på content-type
+
+    def test_fetch_reads_page(self):
+        self._allow_local()
+        text = w.fetch_page_text(self.base + "/")
+        self.assertIn("Första stycket.", text)
+
+    def test_fetch_respects_cap(self):
+        self._allow_local()
+        self.assertLessEqual(len(w.fetch_page_text(self.base + "/", cap=12)), 12)
+
+    def test_fetch_survives_dead_host(self):
+        self._allow_local()
+        self.assertEqual(w.fetch_page_text("http://127.0.0.1:1/"), "")
+
+    # ---- enrich_results ----
+    def test_enrich_adds_text_to_top_results(self):
+        self._allow_local()
+        results = [{"title": "A", "url": self.base + "/", "snippet": "a"},
+                   {"title": "B", "url": self.base + "/b", "snippet": "b"},
+                   {"title": "C", "url": self.base + "/c", "snippet": "c"}]
+        w.enrich_results(results, pages=2)
+        self.assertIn("Första stycket.", results[0]["text"])
+        self.assertIn("text", results[1])
+        self.assertNotIn("text", results[2])            # bara de två första
+
+    def test_enrich_with_zero_pages_is_a_noop(self):
+        results = [{"title": "A", "url": self.base + "/", "snippet": "a"}]
+        w.enrich_results(results, pages=0)
+        self.assertNotIn("text", results[0])
+
+    def test_enrich_handles_empty_input(self):
+        self.assertEqual(w.enrich_results([], pages=3), [])
+        self.assertIsNone(w.enrich_results(None, pages=3))
+
+    # ---- kontexten till modellen ----
+    def test_context_marks_page_text(self):
+        ctx = w.format_search_context([{"title": "T", "url": "https://x.se",
+                                        "snippet": "utdrag", "text": "sidans text"}])
+        self.assertIn("Från sidan:", ctx)
+        self.assertIn("sidans text", ctx)
+        self.assertIn("https://x.se", ctx)
+
+    def test_context_without_results(self):
+        self.assertIn("Inga användbara webbträffar", w.format_search_context([]))
+
+
+class TestSearchPagesSetting(_DBTest):
+    def test_default_and_clamping(self):
+        self.assertEqual(w.websearch_pages(), 3)
+        for value, want in (("0", 0), ("5", 5), ("9", 5), ("-2", 0), ("skräp", 3), ("", 3)):
+            w.settings_set({"websearch_pages": value})
+            self.assertEqual(w.websearch_pages(), want, value)
+
+
 class TestClockContext(unittest.TestCase):
     """Modellen ska veta vilken dag det är – annars svarar den från träningsdatan."""
 
@@ -549,14 +683,16 @@ class TestChatClock(_DBTest):
         self._old_log = w.Handler.log_message
         w.Handler.log_message = lambda *a, **k: None
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._EchoOllama)
-        threading.Thread(target=self.ollama.serve_forever, daemon=True).start()
+        threading.Thread(target=self.ollama.serve_forever,
+                 kwargs={"poll_interval": 0.02}, daemon=True).start()
         self._old_primary = w.PRIMARY
         w.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
         self._old_backends = w.BACKENDS
         w.BACKENDS = [w.PRIMARY]
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
-        threading.Thread(target=self.studio.serve_forever, daemon=True).start()
+        threading.Thread(target=self.studio.serve_forever,
+                 kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.studio.server_address[1]
 
     def tearDown(self):
