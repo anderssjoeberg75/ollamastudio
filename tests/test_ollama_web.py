@@ -1952,6 +1952,25 @@ class TestCodexUiGuards(unittest.TestCase):
         self.assertIn("filerna i arbetsytan rörs inte", markup)
         self.assertNotIn("🗑", markup)      # papperskorgen betyder radera filer
 
+    def test_saved_reply_is_the_final_answer_not_every_step(self):
+        """Konversationen ska spara modellens SLUTSVAR, inte varje stegs råtext.
+
+        Förut lades varje delta på i samma sträng utan avskiljare, så det som
+        sparades blev 'TOOL list_dir {...}TOOL read_file {...}…' på EN rad. Det
+        gick inte att städa bort, syntes i loggen efter omladdning, och skickades
+        tillbaka till modellen som historik – varpå den härmade formatet och
+        upprepade samma verktygsanrop.
+        """
+        js = w._asset("app.js")
+        # Rådeltan får inte längre ackumuleras till det som sparas.
+        self.assertNotIn("assistantFull += ev.text", js)
+        # Slutsvaret (message-händelsen) är det som fångas...
+        self.assertIn("finalMessage = ev.text", js)
+        # ...och det är finalMessage som sparas i konversationen.
+        self.assertIn("codeMessages.push({role:'assistant', content:saved})", js)
+        # Reservvägen måste skilja stegen åt, annars går TOOL-raderna inte att städa.
+        self.assertIn("stepTexts.join('\\n\\n')", js)
+
     def test_repo_preselect_falls_back_to_the_workspace(self):
         # Listan cachas: andra gången man öppnar Codex anropas renderRepos() utan
         # argument. Utan reserven tappades valet – och därmed "Ta bort lokalt".
