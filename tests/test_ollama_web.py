@@ -14,6 +14,7 @@ import socket
 import threading
 import unittest
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Peka inställnings-DB:n till en temp-fil INNAN modulen importeras (DB_PATH sätts vid import).
@@ -561,7 +562,8 @@ class TestCodexAgentLoop(_DBTest):
             f.write("def hej():\n    return 1\n")
         w.settings_set({"code_enabled": True, "code_workspace": self.ws,
                         "code_run_enabled": True,
-                        "code_run_allowlist": shlex_quote_prefix()})
+                        # allowlist som släpper igenom testets egna python -c-kommandon
+                        "code_run_allowlist": sys.executable + " -c"})
         self._old_log = w.Handler.log_message
         w.Handler.log_message = lambda *a, **k: None
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._ScriptedOllama)
@@ -725,11 +727,6 @@ class TestCodexAgentLoop(_DBTest):
             urllib.request.urlopen(req, timeout=10)
         self.assertEqual(cm.exception.code, 400)
         self.assertEqual(w.code_mode(), "full")      # oförändrat
-
-
-def shlex_quote_prefix():
-    """Allowlist som släpper igenom testets egna python -c-kommandon."""
-    return sys.executable + " -c"
 
 
 class TestPullFallback(_DBTest):
