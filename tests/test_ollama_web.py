@@ -719,6 +719,38 @@ class TestCodeAssistant(_DBTest):
         self.assertNotIn("rad 1\n", r["content"])          # bara fönstret
         self.assertLess(len(r["content"]), 2000)
 
+    def test_search_offers_a_way_forward_instead_of_a_dead_end(self):
+        """En sökning utan träff ska ge nästa anrop, inte en återvändsgränd.
+
+        Rapporterat: en fråga om ett menyval, skrivet med andra versaler och utan
+        mellanrummet koden har. Tre exakta sökningar gav noll, och agenten svarade
+        att texten inte fanns – fast den fanns, i UI-filen.
+        """
+        w.ws_write_file("sida.html", '<span class="label">System / GPU</span>\n')
+        w.ws_write_file("las.md", "# App\nEn meny med flera vyer.\n")
+
+        # 1. En glob som inte matchar NÅGON fil är något annat än "inga träffar".
+        txt, _ = w.agent_tool_exec("search", {"query": "System / GPU", "glob": ".html"})
+        self.assertIn("matchade INGA filer", txt)
+        self.assertIn("med stjärna", txt)                  # säger hur man rättar det
+
+        # 2. Fel versaler → förslag med ignore_case
+        txt, _ = w.agent_tool_exec("search", {"query": "SYSTEM / GPU"})
+        self.assertIn("versaler", txt)
+        self.assertIn('"ignore_case": true', txt)
+        self.assertIn("sida.html", txt)                    # och var det finns
+
+        # 3. Fel mellanrum → förslag med ett mönster som tål skiljetecken
+        txt, _ = w.agent_tool_exec("search", {"query": "system /gpu"})
+        self.assertIn("skiljetecken och mellanrum", txt)
+        self.assertIn('"regex": true', txt)
+        self.assertIn("sida.html", txt)
+
+        # 4. Finns det verkligen inte får man råd, inte ett tomt besked.
+        txt, _ = w.agent_tool_exec("search", {"query": "finns-inte-nånstans-alls"})
+        self.assertIn("sökte i", txt)
+        self.assertIn("tree", txt)
+
     def test_search_reports_what_it_skipped(self):
         r = w.ws_search("nånting")
         self.assertEqual(r["skipped"], [])                  # inget hoppas över tyst
