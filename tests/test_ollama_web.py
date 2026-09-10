@@ -2028,6 +2028,112 @@ class TestGithubRepoFetch(_DBTest):
         self.assertNotIn("/", w.repo_dir_name("a/b"))
 
 
+class _UnloadFake(BaseHTTPRequestHandler):
+    """Falsk Ollama-instans: svarar på /api/ps och släpper modeller vid keep_alive 0.
+
+    Ligger på modulnivå med flit – en klass inne i testklassen kan inte nå sina
+    egna klassattribut via self (self är hanteraren, inte testet)."""
+
+    loaded = {}          # port -> [modellnamn]
+    calls = []           # (port, modell) för varje urladdning
+
+    def log_message(self, *a):
+        pass
+
+    def _port(self):
+        return self.server.server_address[1]
+
+    def do_GET(self):
+        names = _UnloadFake.loaded.get(self._port(), [])
+        body = {"models": [{"name": n, "size_vram": 8 * 1024 ** 3} for n in names]}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(body).encode())
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        if payload.get("keep_alive") == 0:
+            port = self._port()
+            _UnloadFake.calls.append((port, payload.get("model")))
+            _UnloadFake.loaded[port] = [m for m in _UnloadFake.loaded.get(port, [])
+                                        if m != payload.get("model")]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+
+class TestGpuUnload(_DBTest):
+    """Ladda ur-knappen: frigör VRAM genom att be Ollama släppa modellen."""
+
+    def setUp(self):
+        super().setUp()
+        _UnloadFake.loaded, _UnloadFake.calls = {}, []
+        self.srv = []
+        for _ in range(2):
+            s = ThreadingHTTPServer(("127.0.0.1", 0), _UnloadFake)
+            threading.Thread(target=s.serve_forever,
+                             kwargs={"poll_interval": 0.02}, daemon=True).start()
+            self.srv.append(s)
+        self.ports = [s.server_address[1] for s in self.srv]
+        _UnloadFake.loaded = {self.ports[0]: ["stor:20b"], self.ports[1]: ["liten:7b"]}
+        self._old = be_mod.BACKENDS
+        be_mod.BACKENDS = [
+            {"label": "GPU 0", "url": "http://127.0.0.1:%d" % self.ports[0], "gpu": "0"},
+            {"label": "GPU 1", "url": "http://127.0.0.1:%d" % self.ports[1], "gpu": "1"}]
+
+    def tearDown(self):
+        be_mod.BACKENDS = self._old
+        for s in self.srv:
+            s.shutdown()
+            s.server_close()
+        super().tearDown()
+
+    def test_unload_hits_only_the_chosen_gpu(self):
+        ok, info = w.unload_gpu(1)
+        self.assertTrue(ok, info)
+        self.assertEqual(info["unloaded"], ["liten:7b"])
+        self.assertFalse(info["all_gpus"])
+        # Rätt instans träffades, och den andra rördes inte.
+        self.assertEqual(_UnloadFake.calls, [(self.ports[1], "liten:7b")])
+        self.assertEqual(_UnloadFake.loaded[self.ports[0]], ["stor:20b"])
+        self.assertEqual(_UnloadFake.loaded[self.ports[1]], [])
+        self.assertEqual(info["freed_bytes"], 8 * 1024 ** 3)
+
+    def test_unloading_an_empty_gpu_is_not_an_error(self):
+        w.unload_gpu(0)
+        ok, info = w.unload_gpu(0)          # redan tom
+        self.assertTrue(ok)
+        self.assertEqual(info["unloaded"], [])
+
+    def test_a_gpu_without_its_own_instance_is_reported_honestly(self):
+        # EN instans för alla kort: urladdningen kan inte skilja korten åt.
+        be_mod.BACKENDS = [{"label": "Ollama",
+                            "url": "http://127.0.0.1:%d" % self.ports[0], "gpu": None}]
+        ok, info = w.unload_gpu(1)
+        self.assertTrue(ok)
+        self.assertTrue(info["all_gpus"])    # UI:t varnar utifrån den här flaggan
+        self.assertEqual(info["unloaded"], ["stor:20b"])
+
+    def test_several_gpus_without_mapping_refuses_instead_of_guessing(self):
+        be_mod.BACKENDS = [
+            {"label": "A", "url": "http://127.0.0.1:%d" % self.ports[0], "gpu": None},
+            {"label": "B", "url": "http://127.0.0.1:%d" % self.ports[1], "gpu": None}]
+        ok, info = w.unload_gpu(1)
+        self.assertFalse(ok)                 # gissa inte vilken instans som menas
+        self.assertIn("OLLAMA_STUDIO_BACKENDS", info["error"])
+        self.assertEqual(_UnloadFake.calls, [])
+
+    def test_the_button_is_in_the_view_and_the_label_is_not_doubled(self):
+        js = w._asset("app.js")
+        self.assertIn("gpu-unload", js)
+        self.assertIn("/api/gpu/unload", js)
+        # Heter backenden samma som indexbrickan ska texten inte stå två gånger.
+        self.assertIn("bl.trim() !== gidx", js)
+
+
 class TestCodexUiGuards(unittest.TestCase):
     """Två detaljer i gränssnittet som gick att missförstå som radering."""
 

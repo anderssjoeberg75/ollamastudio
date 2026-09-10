@@ -3074,9 +3074,19 @@ function renderSystem(s){
     for(const g of s.gpus){
       const memFrac = g.mem_total_mb ? g.mem_used_mb/g.mem_total_mb : 0;
       const utilFrac = g.util!=null ? g.util/100 : 0;
-      let title = '<div class="title"><span class="gidx">GPU '+g.index+'</span>'
+      const gidx = 'GPU '+g.index;
+      let title = '<div class="title"><span class="gidx">'+gidx+'</span>'
                 + '<span class="gname">'+esc(g.name||'')+'</span>';
-      for(const bl of (g.backends||[])) title += '<span class="badge">'+esc(bl)+'</span>';
+      // Heter backenden samma som indexbrickan blir det bara samma text två gånger.
+      for(const bl of (g.backends||[])){
+        if(bl.trim() !== gidx) title += '<span class="badge">'+esc(bl)+'</span>';
+      }
+      const busy = (g.procs||[]).some(p=>p.is_ollama) || (g.mem_used_mb||0) > 400;
+      title += '<button class="btn ghost small gpu-unload" data-gpu="'+g.index+'"'
+             + (busy ? '' : ' disabled')
+             + ' title="'+(busy ? 'Ladda ur modellen så VRAM:et blir ledigt'
+                                : 'Ingen modell ligger laddad på det här kortet')+'">'
+             + '⏏ Ladda ur</button>';
       title += '</div>';
       const hd = (t,v)=>'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--subtle);margin-bottom:6px"><span>'+t+'</span><span>'+v+'</span></div>';
       const metrics = '<div class="gpu-metrics">'
@@ -3103,6 +3113,38 @@ function renderSystem(s){
     }
   }
   document.getElementById('systemBody').innerHTML = html;
+  document.querySelectorAll('#systemBody .gpu-unload').forEach(btn=>{
+    btn.onclick = ()=>unloadGpu(parseInt(btn.dataset.gpu, 10), btn);
+  });
+}
+/* Ladda ur modellerna som ligger på en GPU, så kortet blir ledigt. */
+async function unloadGpu(index, btn){
+  const card = btn.closest('.gpu-card');
+  const name = card ? (card.querySelector('.gname')||{}).textContent : '';
+  // Är inget kort låst till just den här GPU:n träffar urladdningen allt som
+  // instansen håller. Säg det INNAN, inte efteråt.
+  const multi = (cfg.backends||[]).some(b=>b.gpu!==null && b.gpu!==undefined && b.gpu!=='');
+  const warn = multi ? '' :
+    '\n\nOBS: Ollama kör som EN instans för alla kort här, så alla laddade '
+    + 'modeller laddas ur – inte bara den på GPU '+index+'.';
+  if(!confirm('Ladda ur modellen på GPU '+index+(name?' ('+name+')':'')+'?\n\n'
+      + 'VRAM:et frigörs. Nästa fråga får ladda modellen igen, vilket tar några '
+      + 'sekunder.' + warn)) return;
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Laddar ur…';
+  try{
+    const r = await api('/api/gpu/unload', {method:'POST', headers:headers(true),
+      body: JSON.stringify({index})});
+    const d = await r.json();
+    if(!d.ok) throw new Error((d.failed&&d.failed[0]&&d.failed[0].error) || d.error || 'kunde inte ladda ur');
+    if(!d.unloaded.length) toast('Ingen modell låg laddad på GPU '+index);
+    else toast('Laddade ur ' + d.unloaded.join(', ')
+               + (d.freed_bytes ? ' · ' + humanSize(d.freed_bytes) + ' frigjort' : ''));
+    refresh();                                   // visa det tomma kortet direkt
+  }catch(e){
+    toast('Kunde inte ladda ur: '+e.message, true);
+    btn.disabled = false; btn.textContent = old;
+  }
 }
 
 loadConfig();

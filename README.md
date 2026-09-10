@@ -142,7 +142,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   (`OLLAMA_STUDIO_CODE=1` + arbetsyta). Eftersom den kan skriva till disk och köra kommandon:
   **kör bakom en token** om servern nås av andra. Se [`docs/kodassistent.md`](docs/kodassistent.md).
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
-  temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU.
+  temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU. Varje kort har en
+  **⏏ Ladda ur**-knapp som ber Ollama släppa modellen så VRAM:et blir ledigt (`keep_alive: 0`).
+  Kör du **en instans per GPU** (`OLLAMA_STUDIO_BACKENDS`) träffar den exakt det kortet; kör du
+  en enda instans för alla kort går de inte att skilja åt, och dialogen säger det innan du
+  bekräftar.
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
   vilken GPU en modell ska köras på.
 - **VRAM-varning** (webbversionen) – i chatten visas grönt/gult/rött om den valda modellen
