@@ -29,6 +29,7 @@ from .routes_train import TRAIN_DATASET_READ_CAP, TrainRoutes
 from http.server import ThreadingHTTPServer
 from studio import backends as _backends
 from studio.backends import backend_url
+from studio.codex.analyze import analyze, summary_line
 from studio.codex.commands import (
     code_run_allowlist, code_run_enabled, run_command)
 from studio.codex.github import (
@@ -392,6 +393,16 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             ok, msg = undo_file(data.get("path", ""))
             return self._send_json({"ok": ok, "message": msg}, 200 if ok else 400)
 
+        if path == "/api/agent/analyze":
+            # Läs igenom arbetsytan och bygg projektöversikt + symbolindex.
+            # Görs när en arbetsyta väljs, så agenten vet vad den jobbar med.
+            if not code_enabled():
+                return self._send_json({"ok": False, "error": "Ingen arbetsyta"}, 400)
+            info = analyze(force=bool(data.get("force", True)))
+            return self._send_json({"ok": bool(info), "summary": summary_line(info),
+                                    "files": (info or {}).get("files", 0),
+                                    "symbols": (info or {}).get("symbol_count", 0)})
+
         if path == "/api/agent/mode":
             # Byt behörighetsläge direkt från Codex-vyn (samma inställning som i ⚙).
             mode = str(data.get("mode") or "").lower()
@@ -408,9 +419,17 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"ok": False, "error": "Codex är av"}, 400)
             ok, message, target = github_fetch_repo(data.get("repo", ""),
                                                     data.get("branch", ""))
+            analysis = ""
             if ok and target:
                 settings_set({"code_workspace": target})   # peka om Codex hit
+                # Läs igenom repot direkt. Tar bråkdelen av en sekund för ett
+                # normalt projekt, och gör att första frågan slipper börja blint.
+                try:
+                    analysis = summary_line(analyze(force=True))
+                except Exception as e:                        # analysen får aldrig
+                    analysis = "kunde inte analyseras: %s" % e  # sänka hämtningen
             return self._send_json({"ok": ok, "message": message, "path": target,
+                                    "analysis": analysis,
                                     "status": git_status_info() if ok else {"repo": False}},
                                    200 if ok else 400)
 
