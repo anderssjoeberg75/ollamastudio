@@ -202,6 +202,41 @@ class TestWebSearchParsing(unittest.TestCase):
         self.assertEqual(r[0]["snippet"], "Snippet två text")
         self.assertEqual(w._parse_ddg_lite("<html>inget</html>"), [])
 
+    def test_gpu_query_attaches_backends_and_does_not_crash(self):
+        """Hela nvidia-smi-vägen, med en påhittad drivrutin.
+
+        Den här vägen kördes aldrig av testerna – utvecklingsmaskinen har inget
+        NVIDIA-kort, så felet syntes först i GPU-vyn hos användaren: raden som
+        kopplar Studio-backends till varje GPU läste namnet BACKENDS, som efter
+        uppdelningen inte fanns i sysinfo. Undantaget fångades och blev en text
+        i vyn i stället för en krasch, vilket gjorde det ännu lättare att missa.
+        """
+        # index, uuid, namn, util, mem_used, mem_total, temp, effekt, effekttak
+        gpu_csv = "0, GPU-abc, RTX 4060, 37, 1200, 8188, 52, 65, 115\n"
+
+        class _Res:
+            def __init__(self, out):
+                self.stdout, self.stderr, self.returncode = out, "", 0
+
+        old_which, old_run = sys_mod.shutil.which, sys_mod.subprocess.run
+        sys_mod.shutil.which = lambda name: "/usr/bin/nvidia-smi"
+        sys_mod.subprocess.run = lambda *a, **k: _Res(
+            gpu_csv if "--query-gpu" in " ".join(a[0]) else "")
+        old_backends = be_mod.BACKENDS
+        be_mod.BACKENDS = [{"label": "GPU 0", "url": "http://x", "gpu": "0"},
+                           {"label": "GPU 1", "url": "http://y", "gpu": "1"}]
+        try:
+            gpus, err = sys_mod._nvidia_gpus_query()
+            self.assertIsNone(err, err)                  # inget undantag på vägen
+            self.assertEqual(gpus[0]["name"], "RTX 4060")
+            self.assertEqual(gpus[0]["util"], 37)          # kolumnordningen stämmer
+            self.assertEqual(gpus[0]["mem_total_mb"], 8188)
+            # …och backends kopplas till rätt GPU-index
+            self.assertEqual(gpus[0]["backends"], ["GPU 0"])
+        finally:
+            sys_mod.shutil.which, sys_mod.subprocess.run = old_which, old_run
+            be_mod.BACKENDS = old_backends
+
     def test_gpu_cache(self):
         # Två snabba anrop ska ge SAMMA cachade objekt (ingen ny subprocess) – board #11.
         sys_mod._GPU_CACHE = None
