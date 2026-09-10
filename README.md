@@ -121,12 +121,18 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   **Varje skrivning går att ångra** (↩ Ångra på ändringen, eller *Ångra senaste*). Agenten har
   verktygen `read_file`, `search`, `tree`, `list_dir`, `edit_file` (byter ut en exakt textbit –
   därför funkar även stora filer), `write_file`, `run_command`, `git_status`, `git_diff`,
-  `git_branch`, `git_commit` och `todo` (visar en plan/checklista som uppdateras i vyn).
+  `git_branch`, `git_commit`, `find_symbol` (var något definieras) och `todo` (visar en
+  plan/checklista som uppdateras i vyn).
   `search` klarar `glob` (`"*.py"`), `regex` och skiftlägesokänslig sökning; `read_file` ger
   400 rader åt gången så att en stor fil inte äter upp hela modellens kontext. Både `read_file`
   och `search` läser radvis, så **filstorlek spelar ingen roll** – Codex kan arbeta i filer på
   hundratals kB. Knapparna **Ny gren →
   Committa → Push → Skapa PR** tar ändringarna hela vägen till GitHub (kräver en GitHub-token).
+
+  **När du väljer ett repo läses projektet igenom** – vyn visar *"🔎 Analyserar repot…"* och
+  sedan vad som hittades. Codex får en kort översikt (språk, nyckelfiler, var koden ligger) i
+  sin systemprompt, och ett symbolindex den kan slå upp i, så den vet vad ni arbetar med i
+  stället för att leta sig fram.
 
   Utan arbetsyta fungerar Codex som en **kod-chatt** (skriver kod du kopierar). Du kan också öppna
   en **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser och skriver Codex

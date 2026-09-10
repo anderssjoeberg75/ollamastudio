@@ -108,7 +108,7 @@ function showView(v){
       populateCodeModels();
       loadRepos();
       if(localDir) loadLocalTree();
-      else if(cfg.code_ws){ loadTree(); gitStatus(); }
+      else if(cfg.code_ws){ loadTree(); gitStatus(); analyzeWorkspace(false); }
       const rb=document.getElementById('codeRunBar'); if(rb) rb.style.display = cfg.code_run ? 'flex' : 'none';
       setTimeout(()=>{ const ci=document.getElementById('codeInput'); if(ci) ci.focus(); }, 0);
     }
@@ -1963,6 +1963,42 @@ function askAboutFile(path){
   inp.value = 'Förklara vad '+path+' gör.';
   inp.focus();
 }
+/* ---- Analys av arbetsytan ----
+   Läser igenom projektet så Codex vet vad den jobbar med och var funktionerna
+   bor, i stället för att börja blint och bränna steg på att leta. Körs när en
+   arbetsyta väljs; resultatet cachas på servern. */
+let analyzedPath = null;          // vilken arbetsyta som redan analyserats
+function analyzeNote(html, kind){
+  const el = document.getElementById('codeAnalyzeNote');
+  if(!el) return;
+  el.style.display = html ? 'block' : 'none';
+  el.className = 'chatwarn ' + (kind || 'ok');
+  el.innerHTML = html || '';
+}
+async function analyzeWorkspace(force){
+  if(!cfg.code_ws) return;                        // inget att analysera
+  const path = cfg.code_ws_path || '';
+  if(!force && analyzedPath === path) return;     // redan gjord för den här ytan
+  analyzeNote('🔎 <b>Analyserar repot…</b> läser igenom filerna för att se vad '
+    + 'projektet innehåller och var funktionerna finns. Det tar oftast bara någon '
+    + 'sekund – du kan börja skriva under tiden.', 'warn');
+  try{
+    const r = await api('/api/agent/analyze', {method:'POST', headers:headers(true),
+      body: JSON.stringify({force: !!force})});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte analysera');
+    analyzedPath = path;
+    analyzeNote('✓ <b>Repot är analyserat.</b> ' + esc(d.summary)
+      + ' — Codex vet nu vad projektet innehåller och kan slå upp var något '
+      + 'definieras i stället för att leta.', 'ok');
+    // Låt beskedet stå en stund och tona sedan bort; det är information, inte en varning.
+    setTimeout(()=>{ if(analyzedPath === path) analyzeNote(''); }, 12000);
+  }catch(e){
+    analyzeNote('⚠ Kunde inte analysera repot: ' + esc(e.message)
+      + '. Codex fungerar ändå, men får leta sig fram.', 'warn');
+  }
+}
+
 /* ---- Behörighetsläge: fråga om lov, skriv själv, eller fria händer ---- */
 const CODE_MODE_HINTS = {
   ask: 'Codex frågar innan den skriver en fil, kör ett kommando eller rör git. Tryggast.',
@@ -2836,6 +2872,7 @@ async function fetchRepo(){
   const hint = document.getElementById('codeRepoHint');
   btn.disabled = true;
   hint.textContent = 'Hämtar ' + slug + '… (första gången kan ta en stund)';
+  analyzeNote('⬇ <b>Hämtar ' + esc(slug) + '…</b> repot analyseras så fort det är nere.', 'warn');
   try{
     const r = await api('/api/github/fetch', {method:'POST', headers:headers(true),
       body: JSON.stringify({repo: slug})});
@@ -2849,6 +2886,11 @@ async function fetchRepo(){
     // Arbetsytan bytte på servern – hämta om konfig, filträd och git-status
     try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
     updateCodeView(); loadTree(); gitStatus();
+    // Repot är nytt – servern har redan analyserat det vid hämtningen.
+    analyzedPath = cfg.code_ws_path || '';
+    if(d.analysis) analyzeNote('✓ <b>Repot är analyserat.</b> ' + esc(d.analysis)
+      + ' — Codex vet nu vad projektet innehåller och var funktionerna finns.', 'ok');
+    else analyzeWorkspace(true);
   }catch(e){
     hint.textContent = '✕ ' + e.message;
     toast('Kunde inte hämta repot: '+e.message, true);

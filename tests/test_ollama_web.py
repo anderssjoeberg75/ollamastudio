@@ -782,6 +782,64 @@ class TestCodeAssistant(_DBTest):
         # Argument som inte går att serialisera får inte spräcka vakten.
         self.assertEqual(g.see("x", {"o": object()}), "ok")
 
+    def test_workspace_analysis_maps_the_project(self):
+        """Analysen ska veta vad projektet är och var funktionerna bor."""
+        from studio.codex import analyze as az
+        w.ws_write_file("src/betalning.py",
+                        "def berakna_moms(b):\n    return b * 0.25\n\n\n"
+                        "class Faktura:\n    def summa(self):\n        return 0\n")
+        w.ws_write_file("src/app.js", "function starta(){ return 1; }\n")
+        w.ws_write_file("README.md", "# Demo\n")
+        info = az.analyze(force=True)
+        self.assertEqual(info["langs"]["Python"], 2)      # app.py från setUp + betalning.py
+        self.assertEqual(info["langs"]["JavaScript"], 1)
+        self.assertIn("README.md", info["key_files"])
+
+        # Python tolkas med ast: funktion, klass och metod
+        syms = {(n, k) for n, k, _ln in info["symbols"]["src/betalning.py"]}
+        self.assertIn(("berakna_moms", "function"), syms)
+        self.assertIn(("Faktura", "class"), syms)
+        self.assertIn(("Faktura.summa", "method"), syms)
+        # Andra språk med mönster
+        self.assertIn(("starta", "function"),
+                      {(n, k) for n, k, _ln in info["symbols"]["src/app.js"]})
+
+    def test_find_symbol_points_at_the_definition(self):
+        w.ws_write_file("src/betalning.py", "def berakna_moms(b):\n    return b\n")
+        txt, meta = w.agent_tool_exec("find_symbol", {"name": "berakna_moms"})
+        self.assertIn("src/betalning.py:1", txt)
+        self.assertEqual(meta["summary"], "1 träffar")
+        # Delsträng fungerar också
+        txt, _ = w.agent_tool_exec("find_symbol", {"name": "moms"})
+        self.assertIn("berakna_moms", txt)
+        # Och ett ärligt besked när det inte finns
+        txt, _ = w.agent_tool_exec("find_symbol", {"name": "finns_inte_alls"})
+        self.assertIn("Hittade ingen definition", txt)
+        self.assertIn("search", txt)                       # säger vad man gör i stället
+
+    def test_project_brief_is_small_enough_for_the_context(self):
+        """Översikten får inte äta upp fönstret – då är den värre än ingen alls."""
+        from studio.codex import analyze as az
+        for i in range(40):
+            w.ws_write_file("mod%d.py" % i,
+                            "".join("def f%d_%d():\n    pass\n\n\n" % (i, j)
+                                    for j in range(20)))
+        brief = az.project_brief()
+        self.assertTrue(brief.startswith("PROJEKTET"))
+        self.assertLessEqual(len(brief), 1400)
+        self.assertIn("find_symbol", brief)                # pekar mot uppslaget
+        # …men indexet självt är stort, och ligger UTANFÖR prompten
+        self.assertGreater(az.analyze()["symbol_count"], 500)
+
+    def test_analysis_is_redone_after_a_write(self):
+        w.ws_write_file("ny.py", "def foo():\n    pass\n")
+        self.assertTrue(w.agent_tool_exec("find_symbol", {"name": "foo"})[1]["summary"]
+                        .startswith("1"))
+        w.ws_write_file("ny.py", "def bar():\n    pass\n")
+        txt, _ = w.agent_tool_exec("find_symbol", {"name": "foo"})
+        self.assertIn("Hittade ingen definition", txt)     # cachen släpptes
+        self.assertIn("bar", w.agent_tool_exec("find_symbol", {"name": "bar"})[0])
+
     def test_run_allowlist(self):
         w.settings_set({"code_run_enabled": True,
                         "code_run_allowlist": "python -c\npytest"})

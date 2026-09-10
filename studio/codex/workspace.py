@@ -189,6 +189,7 @@ def ws_write_file(rel, content):
         f.write(content)
     rel_path = _ws_rel(full)
     undo_push(rel_path, old if existed else None)
+    _analysis_changed(rel_path)
     return {"path": rel_path, "created": not existed,
             "diff": ws_diff(old, content, rel_path)}
 
@@ -220,6 +221,7 @@ def ws_edit_file(rel, old_text, new_text):
         f.write(updated)
     rel_path = _ws_rel(full)
     undo_push(rel_path, cur)
+    _analysis_changed(rel_path)
     return {"path": rel_path, "created": False,
             "diff": ws_diff(cur, updated, rel_path)}
 
@@ -230,6 +232,15 @@ def ws_edit_file(rel, old_text, new_text):
 CODE_UNDO_MAX = 50
 _undo_stack = []            # [{"path": rel, "before": text | None}] – senaste sist
 _undo_lock = threading.Lock()
+
+
+def _analysis_changed(rel):
+    """Filen ändrades – symbolindexet och projektöversikten är inte längre sanna."""
+    try:
+        from .analyze import invalidate
+        invalidate(code_workspace_root())
+    except Exception:
+        pass
 
 
 def undo_push(rel, before):

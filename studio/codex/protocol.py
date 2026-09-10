@@ -9,6 +9,7 @@ import re
 
 from ..config import CODE_MODES, code_mode
 from .commands import code_run_allowed, code_run_enabled, run_command
+from .analyze import analyze, find_symbol, project_brief
 from .context import cap_tool_result
 from .gitops import (git_commit_all, git_create_branch, git_diff_text,
                      git_status_info)
@@ -38,6 +39,7 @@ AGENT_TOOLS_TEXT = (
     "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1}   (ett radfönster i taget)\n"
     "  TOOL search {\"query\": \"text\", \"glob\": \"*.py\", \"regex\": false, "
     "\"ignore_case\": false}\n"
+    "  TOOL find_symbol {\"name\": \"funktionsnamn\"}   (var något definieras)\n"
     "  TOOL edit_file {\"path\": \"fil.py\", \"old_text\": \"exakt text som finns\", "
     "\"new_text\": \"det den ska bli\"}\n"
     "  TOOL write_file {\"path\": \"ny.py\", \"content\": \"hela filens innehåll\"}\n"
@@ -53,7 +55,11 @@ AGENT_TOOLS_TEXT = (
 def agent_system_prompt(mode=None):
     """Systemprompt för agentläget – beror på hur självständig agenten får vara."""
     mode = mode if mode in CODE_MODES else code_mode()
+    # Projektöversikten läggs FÖRST: vet agenten vad det är för projekt slipper den
+    # bränna steg på att lista mappar, och svaren blir konkreta från början.
+    brief = project_brief()
     return (
+        (brief + "\n\n" if brief else "") +
         "Du är Codex, en kodagent som arbetar i en avgränsad projektmapp (arbetsytan). "
         "Svara på svenska.\n\n"
         "ARBETSSÄTT (följ ordningen):\n"
@@ -107,7 +113,8 @@ AGENT_SYSTEM_SCRATCH = (
 _TOOL_HEAD_RE = re.compile(r'(?:^|\n)[ \t>*-]*TOOL[:\s]+([A-Za-z_]\w*)[ \t]*')
 _EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)',
                       re.MULTILINE | re.DOTALL)
-AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "edit_file", "write_file",
+AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "find_symbol",
+                    "edit_file", "write_file",
                     "run_command", "git_status", "git_diff", "git_branch", "git_commit",
                     "todo"}
 
@@ -322,6 +329,20 @@ def agent_tool_exec(name, args, ctx=None):
             return ("Sökträffar för %r:\n%s%s" % (r["query"],
                     "\n".join(lines) or "(inga)", tail),
                     {"summary": "%d träffar" % len(r["hits"])})
+
+        if name == "find_symbol":
+            q = (args.get("name") or args.get("symbol") or args.get("query") or "").strip()
+            if not q:
+                return "FEL: name saknas", {"summary": "fel: name saknas"}
+            hits = find_symbol(q)
+            if not hits:
+                return ("Hittade ingen definition av %r. Prova search, eller en del av "
+                        "namnet – uppslaget täcker toppnivåns funktioner och klasser."
+                        % q, {"summary": "0 träffar"})
+            lines = ["%s:%d  %s (%s)" % (h["path"], h["line"], h["name"], h["kind"])
+                     for h in hits]
+            return ("%r definieras här:\n%s" % (q, "\n".join(lines)),
+                    {"summary": "%d träffar" % len(hits)})
 
         if name == "git_status":
             info = git_status_info()

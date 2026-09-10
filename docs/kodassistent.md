@@ -113,6 +113,32 @@ Varje skrivning sparar det gamla innehållet. Klicka **↩ Ångra** på ändring
 **↩ Ångra senaste** i behörighetsraden. En fil agenten *skapade* tas bort igen. Stacken håller de
 50 senaste ändringarna, ligger i minnet (försvinner vid omstart) och töms när du byter arbetsyta.
 
+## Analys av arbetsytan
+
+När du väljer en arbetsyta – hämtar ett repo, eller öppnar Codex mot en ny mapp – läses
+projektet igenom en gång. Vyn visar vad som händer (*"🔎 Analyserar repot…"*) och vad som
+hittades när det är klart. Ett normalt projekt tar bråkdelen av en sekund.
+
+Analysen ger två saker, med flit åtskilda:
+
+**En kort projektöversikt** som läggs först i systemprompten – språk, storlek, nyckelfiler,
+toppnivåns mappar, och vilka filer som innehåller mest kod. Den är hårt begränsad (~1400
+tecken). Frestelsen är att lägga hela kartan här; då tar den plats från det agenten faktiskt
+behöver läsa under körningen, och kontextbudgeten är hela poängen.
+
+**Ett symbolindex** som ligger utanför prompten. Agenten slår upp i det med
+`TOOL find_symbol {"name": "..."}` när den behöver veta var något definieras, i stället för
+att leta igenom filer:
+
+```
+find_symbol {"name": "berakna_moms"}
+  → src/betalning.py:1  berakna_moms (function)
+```
+
+Python tolkas med `ast` (funktioner, klasser och metoder); övriga språk med enkla mönster
+som hittar definitioner på radens början. Indexet görs om när något skrivs i arbetsytan –
+annars skulle det peka fel efter en ändring.
+
 ## Kontextfönstret – den tystaste fallgropen
 
 Ollama kör med **sitt eget standardfönster** (ofta 2048 token) om ingen `num_ctx` skickas
