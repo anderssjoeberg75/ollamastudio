@@ -30,7 +30,7 @@ from http.server import ThreadingHTTPServer
 from studio import backends as _backends
 from studio.backends import backend_url
 from studio.codex.analyze import analyze, summary_line
-from studio.runtime import unload_gpu
+from studio.runtime import unload_backend, unload_gpu
 from studio.codex.commands import (
     code_run_allowlist, code_run_enabled, run_command)
 from studio.codex.github import (
@@ -396,11 +396,17 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
 
         if path == "/api/gpu/unload":
             # Ladda ur modellerna som ligger på en GPU, så VRAM:et blir ledigt.
-            try:
-                index = int(data.get("index"))
-            except (TypeError, ValueError):
-                return self._send_json({"ok": False, "error": "index krävs"}, 400)
-            ok, info = unload_gpu(index)
+            label = (data.get("backend") or "").strip()
+            if label:
+                # Modellen låg i en annan instans än kortets – töm den i stället.
+                ok, info = unload_backend(label)
+            else:
+                try:
+                    index = int(data.get("index"))
+                except (TypeError, ValueError):
+                    return self._send_json({"ok": False, "error": "index eller "
+                                            "backend krävs"}, 400)
+                ok, info = unload_gpu(index)
             info["ok"] = ok
             return self._send_json(info, 200 if ok else 400)
 
