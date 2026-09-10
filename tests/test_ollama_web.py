@@ -1785,6 +1785,26 @@ class TestGithubRepoFetch(_DBTest):
         self.assertNotIn("/", w.repo_dir_name("a/b"))
 
 
+class TestCodexUiGuards(unittest.TestCase):
+    """Två detaljer i gränssnittet som gick att missförstå som radering."""
+
+    def test_clear_button_says_it_only_clears_the_log(self):
+        # Knappen hette "🗑 Töm" och lästes som "töm arbetsytan". Den rör inga filer.
+        import re
+        button = re.search(r'<button[^>]*onclick="clearCode\(\)"[^>]*>[^<]*</button>',
+                           w.PAGE, re.S)
+        self.assertIsNotNone(button, "hittade inte Codex Töm-knappen")
+        markup = button.group(0)
+        self.assertIn("Töm loggen", markup)
+        self.assertIn("filerna i arbetsytan rörs inte", markup)
+        self.assertNotIn("🗑", markup)      # papperskorgen betyder radera filer
+
+    def test_repo_preselect_falls_back_to_the_workspace(self):
+        # Listan cachas: andra gången man öppnar Codex anropas renderRepos() utan
+        # argument. Utan reserven tappades valet – och därmed "Ta bort lokalt".
+        self.assertIn("currentPath || cfg.code_ws_path", w.PAGE)
+
+
 class TestSelfUpdate(_DBTest):
     """Självuppdatering (Uppdatera-knappen): git pull i appmappen + omstartsbeslut."""
 

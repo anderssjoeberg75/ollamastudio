@@ -3745,7 +3745,8 @@ PAGE = r"""<!doctype html>
           <div class="chatbar" style="margin-top:8px">
             <label style="color:var(--subtle);font-size:13px">Modell (Codex):</label>
             <select id="codeModel"></select>
-            <button class="btn ghost small" onclick="clearCode()" title="Töm Codex-loggen">🗑 Töm</button>
+            <button class="btn ghost small" onclick="clearCode()"
+                    title="Rensar bara loggen och konversationen – filerna i arbetsytan rörs inte">🧹 Töm loggen</button>
             <span class="hint" style="color:var(--faint);font-size:12px">egen · oberoende av chatten</span>
           </div>
           <div id="codeLocalBar" class="chatbar" style="display:none">
@@ -6898,6 +6899,7 @@ function gitMsg(text, err){
 /* ---- GitHub-repo: välj i listan, hämta hem, arbeta, pusha tillbaka ---- */
 let repoList = [];
 let localRepos = [];        // repon som redan ligger på serverns disk
+let repoDir = '';           // mappen på servern där hämtade repon hamnar
 async function loadRepos(force){
   const sel = document.getElementById('codeRepoSelect');
   const hint = document.getElementById('codeRepoHint');
@@ -6915,7 +6917,7 @@ async function loadRepos(force){
         + 'return false" style="color:var(--accent-hov)">Inställningar</a> för att kunna välja repo.';
       return;
     }
-    hint.textContent = d.dir ? ('Hämtas till ' + d.dir) : '';
+    repoDir = d.dir || '';
     renderRepos(d.current);
   }catch(e){
     sel.innerHTML = '<option value="">Kunde inte hämta listan</option>';
@@ -6931,8 +6933,11 @@ function renderRepos(currentPath){
   sel.innerHTML = '<option value="">Välj ett repo…</option>' + repoList.map(r=>
     '<option value="'+esc(r.slug)+'">'+esc(r.slug)+(r.private?'  🔒':'')
     + (r.desc ? '  –  '+esc(r.desc) : '')+'</option>').join('');
-  // Är arbetsytan redan ett hämtat repo? Förvälj det.
-  const mine = (currentPath||'').split('/').pop();
+  // Är arbetsytan redan ett hämtat repo? Förvälj det. cfg.code_ws_path är med
+  // därför att listan cachas: nästa gång man öppnar Codex anropas renderRepos()
+  // utan currentPath, och utan reserven tappades valet – och med det knappen
+  // "Ta bort lokalt" – trots att repot fortfarande låg kvar på disken.
+  const mine = (currentPath || cfg.code_ws_path || '').split('/').pop();
   const match = repoList.find(r=>mine && mine === r.slug.replace('/','__'));
   if(match) sel.value = match.slug;
   // Utan det här står valet kvar men knapparna vet inte om det: "Ta bort lokalt"
@@ -6954,13 +6959,24 @@ function onRepoPick(){
     rm.title = local ? ('Radera ' + local.path + ' från serverns disk') : '';
   }
   const hint = document.getElementById('codeRepoHint');
-  if(hint && local){
+  if(!hint) return;
+  if(local){
     const bits = ['📁 hämtat: ' + local.path, 'gren ' + (local.branch||'?')];
     if(local.dirty) bits.push(local.dirty + (local.dirty === 1
       ? ' osparad ändring' : ' osparade ändringar'));
     if(local.ahead) bits.push(local.ahead + (local.ahead === 1
       ? ' opushad commit' : ' opushade commits'));
     hint.textContent = bits.join(' · ');
+  }else if(slug){
+    hint.textContent = 'Inte hämtat än – klicka "⬇ Hämta & arbeta här".';
+  }else{
+    // Inget valt: låt inte förra repots text stå kvar och se aktuell ut.
+    const fetched = localRepos.length;
+    hint.textContent = fetched
+      ? ('Välj ett repo i listan. ' + fetched + (fetched === 1
+          ? ' repo ligger hämtat på servern' : ' repon ligger hämtade på servern')
+        + ' – välj det för att arbeta vidare eller ta bort det.')
+      : (repoDir ? ('Hämtas till ' + repoDir) : '');
   }
 }
 async function removeRepo(){
