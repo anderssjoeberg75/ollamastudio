@@ -1515,7 +1515,8 @@ class TestModelSearch(_DBTest):
 
     def test_model_search_survives_dead_network(self):
         old_lib, old_hf = models_mod.ollama_library_search, w.HF.search_models
-        w.ollama_library_search = lambda *a, **k: []        # som vid nätverksfel
+        # Patcha i modulen som äger namnet – model_search slår upp det där.
+        models_mod.ollama_library_search = lambda *a, **k: []   # som vid nätverksfel
         def boom(*a, **k):
             raise OSError("nätet nere")
         w.HF.search_models = boom
