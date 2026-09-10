@@ -2126,6 +2126,104 @@ class TestGpuUnload(_DBTest):
         self.assertIn("OLLAMA_STUDIO_BACKENDS", info["error"])
         self.assertEqual(_UnloadFake.calls, [])
 
+    def test_an_unreachable_instance_is_not_reported_as_an_empty_card(self):
+        """Rapporterat: "ingen modell låg laddad" fast kortet hade 9,7 GB.
+
+        running_on svalde alla fel och returnerade tom lista, så "instansen
+        svarar inte" såg exakt likadan ut som "inget är laddat" – och man letade
+        efter fel sak."""
+        be_mod.BACKENDS = [
+            {"label": "GPU 0", "url": "http://127.0.0.1:%d" % self.ports[0], "gpu": "0"},
+            {"label": "GPU 1", "url": "http://127.0.0.1:9", "gpu": "1"}]   # port 9 = död
+        ok, info = w.unload_gpu(1)
+        self.assertIn("Kunde inte fråga GPU 1", info["message"])
+        self.assertIn("kan mycket väl ha en modell laddad", info["message"])
+        self.assertFalse(info["checked"][0]["reachable"])
+        self.assertTrue(info["checked"][0]["error"])
+
+    def test_a_model_on_another_instance_is_found_and_offered(self):
+        # GPU 1-instansen är tom, men modellen ligger i GPU 0-instansen.
+        _UnloadFake.loaded = {self.ports[0]: ["stor:20b"], self.ports[1]: []}
+        ok, info = w.unload_gpu(1)
+        self.assertEqual(info["unloaded"], [])
+        self.assertEqual([e["model"] for e in info["elsewhere"]], ["stor:20b"])
+        self.assertEqual(info["elsewhere"][0]["backend"], "GPU 0")
+        self.assertIn("Däremot ligger stor:20b i GPU 0", info["message"])
+        # …och den går att ladda ur där den faktiskt ligger.
+        ok2, info2 = w.unload_backend("GPU 0")
+        self.assertTrue(ok2, info2)
+        self.assertEqual(info2["unloaded"], ["stor:20b"])
+        self.assertEqual(_UnloadFake.loaded[self.ports[0]], [])
+
+    def test_a_truly_empty_card_says_so_plainly(self):
+        _UnloadFake.loaded = {self.ports[0]: [], self.ports[1]: []}
+        ok, info = w.unload_gpu(1)
+        self.assertTrue(ok)
+        self.assertEqual(info["message"], "Ingen modell är laddad i GPU 1 just nu.")
+        self.assertEqual(info["elsewhere"], [])
+
+    def test_unload_backend_reports_an_unknown_name(self):
+        ok, info = w.unload_backend("finns-inte")
+        self.assertFalse(ok)
+        self.assertIn("Ingen backend heter", info["error"])
+
+    def test_the_label_can_lie_about_which_card_is_used(self):
+        """Rapporterat: Mina modeller sa GPU 0, System/GPU sa GPU 1 – samma modell.
+
+        gpu-fältet i OLLAMA_STUDIO_BACKENDS är en ETIKETT, inte en bindning.
+        Pinnas inte instansen väljer Ollama kort själv. Vi matchar därför modellens
+        VRAM mot processerna per kort och litar på det."""
+        gpus = [{"index": 0, "procs": [{"is_ollama": True, "mem_mb": 17}]},
+                {"index": 1, "procs": [{"is_ollama": True, "mem_mb": 9700}]}]
+        model = {"name": "stor:20b", "size_vram": 9700 * 1024 ** 2}
+        self.assertEqual(w.actual_gpu(model, gpus), 1)          # inte etikettens 0
+
+        # Passar ingen process påstår vi ingenting hellre än fel sak.
+        self.assertIsNone(w.actual_gpu({"size_vram": 3 * 1024 ** 3}, gpus))
+        self.assertIsNone(w.actual_gpu({"size_vram": 0}, gpus))
+        # Två lika stora processer på olika kort är tvetydigt – då tiger vi.
+        tie = [{"index": 0, "procs": [{"is_ollama": True, "mem_mb": 9700}]},
+               {"index": 1, "procs": [{"is_ollama": True, "mem_mb": 9700}]}]
+        self.assertIsNone(w.actual_gpu(model, tie))
+        # Processer som inte är Ollama räknas inte.
+        other = [{"index": 1, "procs": [{"is_ollama": False, "mem_mb": 9700}]}]
+        self.assertIsNone(w.actual_gpu(model, other))
+
+    def test_unload_follows_the_model_not_the_label(self):
+        """Klickar man på GPU 1 ska modellen laddas ur även om den ligger i den
+        instans som HETER GPU 0 – det var därför knappen inte gjorde något."""
+        _UnloadFake.loaded = {self.ports[0]: ["stor:20b"], self.ports[1]: []}
+        gpus = [{"index": 0, "procs": []},
+                {"index": 1, "procs": [{"is_ollama": True, "mem_mb": 8 * 1024}]}]
+        old = sys_mod.nvidia_gpus
+        sys_mod.nvidia_gpus = lambda: (gpus, None)
+        try:
+            ok, info = w.unload_gpu(1)
+        finally:
+            sys_mod.nvidia_gpus = old
+        self.assertTrue(ok, info)
+        self.assertEqual(info["unloaded"], ["stor:20b"])
+        self.assertEqual(_UnloadFake.calls, [(self.ports[0], "stor:20b")])
+
+    def test_ambiguous_physical_match_falls_back_to_the_label(self):
+        """Två lika stora modeller passar lika bra mot samma process.
+
+        Då är matchningen en gissning, och att ta båda skulle tömma ett kort
+        användaren inte klickade på. Etiketten är det minst dåliga svaret."""
+        _UnloadFake.loaded = {self.ports[0]: ["a:20b"], self.ports[1]: ["b:20b"]}
+        gpus = [{"index": 0, "procs": []},
+                {"index": 1, "procs": [{"is_ollama": True, "mem_mb": 8 * 1024}]}]
+        old = sys_mod.nvidia_gpus
+        sys_mod.nvidia_gpus = lambda: (gpus, None)
+        try:
+            ok, info = w.unload_gpu(1)
+        finally:
+            sys_mod.nvidia_gpus = old
+        self.assertTrue(ok, info)
+        # Bara instansen som HETER GPU 1 rördes – inte båda.
+        self.assertEqual(info["unloaded"], ["b:20b"])
+        self.assertEqual(_UnloadFake.loaded[self.ports[0]], ["a:20b"])
+
     def test_the_button_is_in_the_view_and_the_label_is_not_doubled(self):
         js = w._asset("app.js")
         self.assertIn("gpu-unload", js)

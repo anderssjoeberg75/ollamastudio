@@ -57,9 +57,24 @@ function runSig(map){
   return arr.sort().join(',');
 }
 function gpuLabel(e){
+  // gpu_actual = där modellen FAKTISKT ligger (matchat mot nvidia-smi).
+  // e.gpu är bara backendens etikett, och den binder inte Ollama till kortet –
+  // därför kunde den här vyn säga GPU 0 medan System / GPU visade GPU 1.
+  if(e.gpu_actual !== null && e.gpu_actual !== undefined) return 'GPU '+e.gpu_actual;
   if(e.gpu !== null && e.gpu !== undefined && e.gpu !== '') return 'GPU '+e.gpu;
   if(cfg.multi && e.backend) return e.backend;
   return '';
+}
+/* Säger etiketten och verkligheten olika saker? Då är instansen inte låst till
+   sitt kort, och det är värt att veta – annars letar man efter fel fel. */
+function gpuMismatch(e){
+  return (e.gpu_actual !== null && e.gpu_actual !== undefined
+          && e.gpu !== null && e.gpu !== undefined && e.gpu !== ''
+          && String(e.gpu_actual) !== String(e.gpu))
+    ? ('Ligger på GPU ' + e.gpu_actual + ', men instansen heter "' + (e.backend||'')
+       + '". Instansen är inte låst till sitt kort – sätt CUDA_VISIBLE_DEVICES '
+       + 'om du vill styra vilken GPU som används.')
+    : '';
 }
 
 function headers(json){
@@ -209,8 +224,9 @@ async function refresh(){
 function runMeta(r){
   // Beskriv var (GPU) en inläst modell körs, hur den använder minne + när den frigörs
   const parts = [];
+  const warn = gpuMismatch(r);      // etikett och verklighet säger olika
   const gl = gpuLabel(r);
-  if(gl) parts.push(gl);
+  if(gl) parts.push(gl + (gpuMismatch(r) ? ' ⚠' : ''));
   const vram = Number(r.size_vram)||0, size = Number(r.size)||0;
   if(vram <= 0) parts.push('körs på CPU/RAM');
   else if(vram >= size) parts.push('helt på GPU · '+humanSize(vram)+' VRAM');
@@ -219,7 +235,9 @@ function runMeta(r){
     const d = new Date(r.expires_at);
     if(!isNaN(d)) parts.push('frigörs '+d.toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'}));
   }
-  return parts.join(' · ');
+  const text = parts.join(' · ');
+  // Varningen som en tooltip: den behöver inte skrika, men den ska gå att läsa.
+  return warn ? '<span title="'+esc(warn)+'">'+esc(text)+'</span>' : esc(text);
 }
 function renderModels(models){
   const box = document.getElementById('modelsList');
@@ -258,7 +276,7 @@ function renderModels(models){
     if(r){
       const gpus = r.map(gpuLabel).filter(Boolean);
       liveChip = '<span class="chip live">● Körs nu'+(gpus.length ? ' · '+esc(gpus.join(', ')) : '')+'</span>';
-      liveMeta = r.map(e=>'<div class="meta live">'+esc(runMeta(e))+'</div>').join('');
+      liveMeta = r.map(e=>'<div class="meta live">'+runMeta(e)+'</div>').join('');
     }
     return '<div class="card hoverable"><div class="top"><div>'
       + '<h3>'+esc(m.name)+liveChip+'</h3><div class="meta">'+bits+'</div>'+liveMeta+'</div>'
@@ -3137,9 +3155,24 @@ async function unloadGpu(index, btn){
       body: JSON.stringify({index})});
     const d = await r.json();
     if(!d.ok) throw new Error((d.failed&&d.failed[0]&&d.failed[0].error) || d.error || 'kunde inte ladda ur');
-    if(!d.unloaded.length) toast('Ingen modell låg laddad på GPU '+index);
-    else toast('Laddade ur ' + d.unloaded.join(', ')
-               + (d.freed_bytes ? ' · ' + humanSize(d.freed_bytes) + ' frigjort' : ''));
+    if(d.unloaded.length){
+      toast('Laddade ur ' + d.unloaded.join(', ')
+            + (d.freed_bytes ? ' · ' + humanSize(d.freed_bytes) + ' frigjort' : ''));
+    } else {
+      // Inget laddades ur. Servern säger varför – visa DET, inte ett tomt besked.
+      alert(d.message || ('Ingen modell låg laddad på GPU ' + index));
+      // Ligger modellen i en annan instans? Erbjud att tömma den i stället.
+      const other = (d.elsewhere||[])[0];
+      if(other && confirm('Ladda ur ' + other.model + ' i ' + other.backend + ' i stället?\n\n'
+          + 'Det frigör VRAM:et, men gäller hela den instansen.')){
+        const r2 = await api('/api/gpu/unload', {method:'POST', headers:headers(true),
+          body: JSON.stringify({backend: other.backend})});
+        const d2 = await r2.json();
+        if(!d2.ok) throw new Error(d2.error || 'kunde inte ladda ur');
+        toast('Laddade ur ' + d2.unloaded.join(', ')
+              + (d2.freed_bytes ? ' · ' + humanSize(d2.freed_bytes) + ' frigjort' : ''));
+      }
+    }
     refresh();                                   // visa det tomma kortet direkt
   }catch(e){
     toast('Kunde inte ladda ur: '+e.message, true);

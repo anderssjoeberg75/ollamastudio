@@ -10,6 +10,8 @@ import urllib.request
 
 from .base import BaseHandler
 from studio import backends as _backends
+from studio.runtime import actual_gpu
+from studio.sysinfo import nvidia_gpus
 from studio.config import hf_auto_enabled, hf_enabled, hf_token
 from studio.huggingface_bridge import HF, HF_FALLBACK_LIMIT, _pull_error_text
 
@@ -41,8 +43,19 @@ class ModelRoutes(BaseHandler):
             for m in data.get("models", []):
                 m = dict(m)
                 m["backend"] = b["label"]
-                m["gpu"] = b.get("gpu")
+                m["gpu"] = b.get("gpu")          # etiketten ur konfigurationen
                 models.append(m)
+        # Var ligger de FYSISKT? Etiketten binder inte Ollama till ett kort, så
+        # den kan peka på GPU 0 medan processen syns på GPU 1 i System-vyn. Ta
+        # reda på det när det går, i stället för att låta vyerna säga olika.
+        try:
+            gpus, _err = nvidia_gpus()
+            for m in models:
+                found = actual_gpu(m, gpus)
+                if found is not None:
+                    m["gpu_actual"] = found
+        except Exception:
+            pass
         return {"models": models}
 
     def _stream_pull(self, name):

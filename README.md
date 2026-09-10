@@ -144,9 +144,12 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
   temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU. Varje kort har en
   **⏏ Ladda ur**-knapp som ber Ollama släppa modellen så VRAM:et blir ledigt (`keep_alive: 0`).
-  Kör du **en instans per GPU** (`OLLAMA_STUDIO_BACKENDS`) träffar den exakt det kortet; kör du
-  en enda instans för alla kort går de inte att skilja åt, och dialogen säger det innan du
-  bekräftar.
+  Knappen följer **var modellen faktiskt ligger**, inte vad instansen heter: `gpu`-fältet i
+  `OLLAMA_STUDIO_BACKENDS` är en etikett, och binder inte Ollama till kortet. Pinnar du inte
+  instansen med `CUDA_VISIBLE_DEVICES` kan en instans som heter "GPU 0" mycket väl köra på
+  kort 1 – då visar **Mina modeller** det riktiga kortet med ett ⚠ och förklarar varför.
+  Hittas inget att ladda ur säger svaret **varför**: att instansen inte svarade, eller att
+  modellen ligger i en annan instans (och erbjuder att tömma den i stället).
 - **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
   vilken GPU en modell ska köras på.
 - **VRAM-varning** (webbversionen) – i chatten visas grönt/gult/rött om den valda modellen
