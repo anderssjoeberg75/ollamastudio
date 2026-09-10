@@ -22,7 +22,8 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 > uppdelad per ansvarsområde – `config.py` (inställningar), `backends.py`, `sysinfo.py`,
 > `websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `codex/` för
 > kodagenten (arbetsyta, behörigheter, protokoll, kommandon, git, GitHub) och `web/` för
-> HTTP-hanteraren och sidan (`web/assets/` = HTML, CSS, JavaScript). Webbläsaren laddar
+> webblagret – routingtabellen i `server.py`, arbetet i `routes_*.py`, och sidan i
+> `web/assets/` (HTML, CSS, JavaScript). Webbläsaren laddar
 > fortfarande inga externa filer: allt bakas in i sidan vid start. Se
 > [`docs/kodassistent.md`](docs/kodassistent.md) för hela kartan.
 

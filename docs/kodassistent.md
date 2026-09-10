@@ -32,11 +32,27 @@ studio/
     gitops.py            git mot arbetsytan
     github.py            repo-listning, hämta hem, pull requests
   web/
-    server.py            HTTP-hanteraren, all routing, sidan och main()
+    server.py            routingtabellen (varje /api/...-väg) + main()
+    base.py              åtkomst, JSON-svar, strömning uppströms
+    page.py              sidan och den publika inställningsvyn
+    routes_models.py     modeller: lista, vad som körs, hämta hem
+    routes_chat.py       chatt med webbsök och minne
+    routes_codex.py      Codex agent-loop
+    routes_train.py      AI-träning
     assets/page.html     sidans stomme
     assets/styles.css    all CSS
     assets/app.js        all JavaScript
 ```
+
+`Handler` byggs av rutt-modulerna som mixins:
+
+```python
+class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
+```
+
+Routingen står kvar samlad i `server.py` – `do_GET` och `do_POST` är kartan över hela
+API:t, och det är en fördel att kunna läsa den på ett ställe. Själva arbetet ligger i
+den rutt-modul som äger området.
 
 Webbläsaren laddar fortfarande inga externa filer – `build_page()` bakar in CSS och JS
 i sidan vid start. Sidan som skickas ut är tecken för tecken densamma som före
