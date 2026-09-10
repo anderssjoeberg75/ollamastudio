@@ -75,7 +75,13 @@ def agent_system_prompt(mode=None):
         "- read_file ger " + str(CODE_READ_LINES) + " rader åt gången. Behöver du mer, läs "
         "vidare med \"start\" – läs inte om samma rader.\n"
         "- search: smalna av med \"glob\" (t.ex. \"*.py\") när träffarna blir för många, och "
-        "sätt \"regex\": true för mönster.\n"
+        "sätt \"regex\": true för mönster. Börja BRETT – en glob som inte matchar något ser "
+        "likadan ut som noll träffar.\n"
+        "- Hittar du inte en text: den kan stavas med andra versaler eller mellanrum än "
+        "användaren skrev. Sökverktyget föreslår ett nytt anrop när det händer – följ det "
+        "i stället för att svara att texten inte finns.\n"
+        "- Frågor om hur APPEN beter sig (en knapp, en vy, ett menyval) besvaras i koden, "
+        "inte i dokumentationen. Sök i källfiler först; .md-filer beskriver bara.\n"
         "- Kontexten är begränsad. Läs det du behöver, inte hela projektet.\n"
         "- Du har gott om steg – ta dem du behöver för att bli KLAR. Men upprepa aldrig ett "
         "verktygsanrop du redan fått svar på; resultatet blir detsamma.\n"
@@ -203,6 +209,49 @@ def strip_edits(text):
     return out.strip()
 
 
+def _search_dead_end(query, glob, result, was_regex, was_ci):
+    """Ge en väg vidare när en sökning inte gav något.
+
+    Bakgrund: en användare frågade om ett menyval och skrev det med andra
+    versaler och utan mellanrummet som koden har. Den exakta sökningen gav noll
+    – tre gånger i rad – och agenten drog slutsatsen att texten inte fanns.
+    Skiljetecknen var hela skillnaden. Ett verktyg som bara säger "inga träffar"
+    lämnar agenten i en återvändsgränd; här får den nästa anrop att göra i
+    stället. (Undviker med flit att citera exempelsträngen – annars skulle en
+    sökning efter den hitta den här kommentaren.)
+    """
+    # En glob som inte matchar NÅGON fil är något helt annat än "inga träffar".
+    if glob and not result.get("scanned"):
+        return ("\n(Globen %r matchade INGA filer alls – sök om utan \"glob\", eller "
+                "kontrollera mönstret: \"*.py\" med stjärna, inte \".py\".)" % glob)
+
+    tries = []
+    if not was_ci:
+        tries.append(("versaler", {"query": query, "ignore_case": True},
+                      dict(regex=was_regex, ignore_case=True)))
+    if not was_regex:
+        words = re.findall(r"\w+", query, re.UNICODE)
+        if len(words) > 1:
+            loose = r"\W+".join(re.escape(w) for w in words)
+            tries.append(("skiljetecken och mellanrum",
+                          {"query": loose, "regex": True, "ignore_case": True},
+                          dict(regex=True, ignore_case=True, _query=loose)))
+    for why, suggest, kw in tries:
+        q2 = kw.pop("_query", query)
+        try:
+            alt = ws_search(q2, **kw)
+        except ValueError:
+            continue
+        if alt["hits"]:
+            where = ", ".join(sorted({h["path"] for h in alt["hits"]})[:4])
+            return ("\n(Inga exakta träffar – men %d rader matchar om %s inte spelar roll, "
+                    "i %s. Kör: TOOL search %s)"
+                    % (len(alt["hits"]), why, where,
+                       json.dumps(suggest, ensure_ascii=False)))
+    return ("\n(sökte i %d filer. Prova färre ord, \"ignore_case\": true, eller "
+            "TOOL tree {} för att se vad som finns.)" % result.get("scanned", 0))
+
+
 def _denied(what):
     return ("NEKAT: användaren sa nej till %s. Gör inte om samma sak – föreslå ett annat "
             "sätt, eller fråga användaren vad hen vill i stället." % what)
@@ -266,7 +315,10 @@ def agent_tool_exec(name, args, ctx=None):
                 tail = ("\n… (taket på %d träffar nåddes – sök smalare, t.ex. med "
                         "\"glob\": \"*.py\")" % len(r["hits"]))
             elif not r["hits"]:
-                tail = "\n(sökte i %d filer)" % r.get("scanned", 0)
+                tail = _search_dead_end(args.get("query", ""),
+                                        args.get("glob") or args.get("path"), r,
+                                        bool(args.get("regex")),
+                                        bool(args.get("ignore_case")))
             return ("Sökträffar för %r:\n%s%s" % (r["query"],
                     "\n".join(lines) or "(inga)", tail),
                     {"summary": "%d träffar" % len(r["hits"])})
