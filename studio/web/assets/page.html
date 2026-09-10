@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ollama Studio</title>
+<style>__STYLES__</style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="logo">
+      <div class="row"><span class="diamond">◆</span><span class="txt">Ollama</span></div>
+      <div class="sub txt">S T U D I O</div>
+    </div>
+    <div class="nav">
+      <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">Mina modeller</span></a>
+      <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Upptäck / Installera</span></a>
+      <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chatta</span></a>
+      <a id="nav-code" onclick="showView('code')"><span class="dot">●</span><span class="label">Codex</span></a>
+      <a id="nav-train" onclick="showView('train')"><span class="dot">●</span><span class="label">AI-träning</span></a>
+      <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
+      <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Inställningar</span></a>
+    </div>
+    <div class="status"><span class="dot" id="statusDot">●</span><span id="statusText">Kontrollerar…</span></div>
+  </div>
+
+  <div class="content">
+    <div class="header">
+      <h1 id="title">Mina modeller</h1>
+      <div class="right">
+        <span id="summary"></span>
+        <button class="btn ghost small" onclick="updateApp()" title="Hämtar senaste kod från GitHub, startar om servern och uppdaterar sedan vyn">↻ Uppdatera</button>
+      </div>
+    </div>
+
+    <div id="view-models" class="view"><div id="modelsList"></div></div>
+
+    <div id="view-discover" class="view hidden">
+      <div class="install-box">
+        <h2>Installera valfri modell</h2>
+        <p id="customHint">Sök på modellnamn – träffar visas nedan. Skriver du ett exakt
+          namn kan du ladda ner direkt med knappen.</p>
+        <div class="install-row">
+          <input id="customName" placeholder="sök modell, t.ex. qwen, llama, mistral…"
+                 oninput="onSearchInput()" onkeydown="if(event.key==='Enter')pullCustom()">
+          <button class="btn accent" onclick="pullCustom()">↓ Ladda ner</button>
+        </div>
+        <div class="filter-row">
+          <label class="fit-check"><input id="fitOnly" type="checkbox" onchange="toggleFitFilter()">
+            <span>Dölj modeller som inte får plats på den här datorn</span></label>
+          <span class="hf-hint" id="fitHint"></span>
+        </div>
+        <div class="hf-hint" id="searchHint"></div>
+      </div>
+
+      <div id="catalogList"></div>
+      <div class="dl" id="dlPanel">
+        <div class="top">
+          <span class="title" id="dlTitle"></span>
+          <span class="pct" id="dlPct"></span>
+          <button class="btn ghost small" id="dlCancel" onclick="cancelPull()">Avbryt</button>
+        </div>
+        <div class="bar"><div id="dlBar"></div></div>
+        <div class="st" id="dlStatus"></div>
+        <div class="st" id="dlExtra"></div>
+      </div>
+    </div>
+
+    <div id="view-chat" class="view chat hidden">
+      <div class="convobar">
+        <label style="color:var(--subtle);font-size:13px">Konversation:</label>
+        <select id="convoSelect" onchange="onConvoSelect()"></select>
+        <button class="btn ghost small" onclick="newConversation()">＋ Ny</button>
+        <button class="btn ghost small" onclick="renameConversation()">Byt namn</button>
+        <button class="btn ghost small" onclick="clearChatConfirm()" title="Töm den här chatten">🗑 Töm</button>
+        <button class="btn ghost small" onclick="deleteConversation()">Radera</button>
+      </div>
+      <div class="chatbar">
+        <label style="color:var(--subtle);font-size:13px">Modell:</label>
+        <select id="chatModel"></select>
+        <label id="chatGpuLabel" style="color:var(--subtle);font-size:13px;display:none">GPU:</label>
+        <select id="chatBackend" style="display:none"></select>
+        <button class="btn ghost small" onclick="toggleChatSettings()">⚙ Inställningar</button>
+      </div>
+      <div id="chatSettings" class="chat-settings" style="display:none">
+        <label class="cs-row">
+          <span>Systemprompt (modellens roll/instruktion)</span>
+          <textarea id="csSystem" rows="2" placeholder="T.ex. Du är en hjälpsam assistent som svarar kortfattat på svenska."></textarea>
+        </label>
+        <div class="cs-grid">
+          <label class="cs-row">
+            <span>Temperatur: <b id="csTempVal">0.8</b> <span style="color:var(--faint)">(lägre = mer fokuserat)</span></span>
+            <input id="csTemp" type="range" min="0" max="2" step="0.1" value="0.8">
+          </label>
+          <label class="cs-row">
+            <span>Kontextlängd (num_ctx)</span>
+            <select id="csCtx">
+              <option value="">Standard</option>
+              <option value="2048">2048</option>
+              <option value="4096">4096</option>
+              <option value="8192">8192</option>
+              <option value="16384">16384</option>
+            </select>
+          </label>
+        </div>
+        <label class="cs-check" id="csWebsearchRow" style="display:none">
+          <input id="csWebsearch" type="checkbox">
+          <span>🌐 Sök på nätet när modellen är osäker
+            <span style="color:var(--faint)">(svaret märks med källor)</span></span>
+        </label>
+        <label class="cs-check" id="csMemoryRow" style="display:none">
+          <input id="csMemory" type="checkbox">
+          <span>🧠 Kom ihåg mig mellan konversationer
+            <span style="color:var(--faint)">(delat minne via Mem0)</span></span>
+        </label>
+        <div id="csMemoryTools" style="display:none;margin-top:8px">
+          <button class="btn ghost small" type="button" onclick="toggleMemoryPanel()">🧠 Visa minne</button>
+        </div>
+        <div id="memoryPanel" class="mem-panel" style="display:none">
+          <div class="mem-head">
+            <span>Sparade minnen <span id="memCount" style="color:var(--faint)"></span></span>
+            <div>
+              <button class="btn ghost small" type="button" onclick="loadMemories()">↻</button>
+              <button class="btn danger small" type="button" onclick="clearMemories()">Rensa alla</button>
+            </div>
+          </div>
+          <div class="mem-add">
+            <input id="memAddInput" placeholder="Lägg till något att komma ihåg…"
+                   onkeydown="if(event.key==='Enter')addMemory()">
+            <button class="btn accent small" type="button" onclick="addMemory()">Spara</button>
+          </div>
+          <div id="memList" class="mem-list"></div>
+        </div>
+      </div>
+      <div id="chatWarn" class="chatwarn"></div>
+      <div id="chatMessages" class="chat-messages"></div>
+      <div id="chatAttachments" class="chat-attach" style="display:none"></div>
+      <div class="chat-input">
+        <button class="btn ghost" id="chatAttachBtn" title="Bifoga bild (för vision-modeller som llava)"
+                onclick="document.getElementById('chatFile').click()">📎</button>
+        <input id="chatFile" type="file" accept="image/*" multiple style="display:none" onchange="onChatFiles(event)">
+        <textarea id="chatInput" rows="1" placeholder="Skriv ett meddelande…  (Enter skickar, Shift+Enter ny rad)"></textarea>
+        <button class="btn accent" id="chatSend">Skicka</button>
+      </div>
+    </div>
+
+    <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
+
+    <div id="view-code" class="view code hidden">
+      <div id="codeOff" class="empty" style="display:none;max-width:560px;margin:48px auto">
+        <h2>💻 Codex är avstängd</h2>
+        <p>Codex är en kodagent som läser en projektmapp, ändrar filer och kör tester –
+           med dina egna Ollama-modeller.<br>
+           Slå på den och välj en arbetsyta under Inställningar för att börja.</p>
+        <button class="btn accent" onclick="showView('settings')">Öppna Inställningar</button>
+      </div>
+      <div id="codeWrap" class="code-wrap">
+        <div class="code-tree">
+          <div class="code-tree-head">
+            <span>Arbetsyta</span>
+            <button class="btn ghost small" type="button" onclick="loadTree()">↻</button>
+          </div>
+          <div id="codeWsPath" class="hint" style="padding:0 10px 6px"></div>
+          <div id="codeTree" class="code-files"></div>
+        </div>
+        <div class="code-main">
+          <div id="codeRepoBar" class="code-repobar" style="display:none">
+            <label>GitHub-repo:</label>
+            <select id="codeRepoSelect" onchange="onRepoPick()">
+              <option value="">Laddar…</option>
+            </select>
+            <button class="btn accent small" id="codeRepoFetch" onclick="fetchRepo()">⬇ Hämta &amp; arbeta här</button>
+            <button class="btn ghost small" id="codeRepoRemove" onclick="removeRepo()"
+                    title="Radera det hämtade repot från serverns disk" style="display:none">🗑 Ta bort lokalt</button>
+            <button class="btn ghost small" onclick="loadRepos(true)" title="Uppdatera listan">↻</button>
+            <span class="hint" id="codeRepoHint"></span>
+          </div>
+          <div id="codeGit" class="code-git" style="display:none">
+            <span class="gi" id="codeGitInfo"></span>
+            <span class="gacts">
+              <button class="btn ghost small" onclick="gitBranch()">Ny gren</button>
+              <button class="btn ghost small" onclick="gitCommit()">Committa</button>
+              <button class="btn ghost small" onclick="gitPush()">Push</button>
+              <button class="btn accent small" onclick="githubPR()">Skapa PR</button>
+              <button class="btn ghost small" onclick="gitStatus()" title="Uppdatera">↻</button>
+            </span>
+          </div>
+          <div id="codeGitMsg" class="hint" style="margin:0 2px 6px"></div>
+          <div id="codeModeBar" class="code-modebar">
+            <label for="codeMode">Behörighet:</label>
+            <select id="codeMode" onchange="saveCodeMode()">
+              <option value="ask">🔒 Fråga om lov (varje steg)</option>
+              <option value="auto_edit">✍ Skriv filer själv (fråga om kommandon)</option>
+              <option value="full">⚡ Fria händer (gör allt utan att fråga)</option>
+            </select>
+            <span id="codeModeHint" class="mhint"></span>
+            <button class="btn ghost small" id="codeUndoBtn" onclick="undoLast()"
+                    title="Ångra den senast skrivna filen" style="display:none">↩ Ångra senaste</button>
+          </div>
+          <div id="codeNoWs" class="chatwarn warn" style="display:none">
+            💡 Skisslage – ingen arbetsyta vald. Codex skriver kod åt dig men kan inte läsa
+            projektet eller spara till disk. Kopiera koden, eller välj en arbetsyta i
+            <a href="#" onclick="showView('settings');return false">Inställningar</a> för att läsa/spara/köra.
+          </div>
+          <div id="codeRunBar" class="code-runbar" style="display:none">
+            <input id="codeRunInput" placeholder="Kör kommando (t.ex. pytest) …  – bara tillåtna kommandon"
+                   onkeydown="if(event.key==='Enter')runManual()">
+            <button class="btn ghost small" onclick="runManual()">▶ Kör</button>
+          </div>
+          <div id="codeLog" class="code-log">
+            <div class="chat-empty">Be Codex läsa koden, ändra en fil eller köra testerna –
+              t.ex. ”Lägg till en /health-endpoint och kör testerna”. Den arbetar bara i mappen
+              ovan, och <b>Behörighet</b> ovanför styr vad den får göra utan att fråga.</div>
+          </div>
+          <div class="chatbar" style="margin-top:8px">
+            <label style="color:var(--subtle);font-size:13px">Modell (Codex):</label>
+            <select id="codeModel"></select>
+            <button class="btn ghost small" onclick="clearCode()"
+                    title="Rensar bara loggen och konversationen – filerna i arbetsytan rörs inte">🧹 Töm loggen</button>
+            <span class="hint" style="color:var(--faint);font-size:12px">egen · oberoende av chatten</span>
+          </div>
+          <div id="codeLocalBar" class="chatbar" style="display:none">
+            <button class="btn ghost small" type="button" onclick="pickLocalDir()">📂 Öppna lokal mapp</button>
+            <span id="codeLocalInfo" class="hint" style="color:var(--accent-hov);font-size:12px"></span>
+            <button id="codeLocalClose" class="btn ghost small" type="button" onclick="closeLocalDir()" style="display:none">Stäng mapp</button>
+            <span class="hint" style="color:var(--faint);font-size:12px">arbetar mot en mapp på din dator (i webbläsaren) – funkar även om servern kör någon annanstans</span>
+          </div>
+          <div class="chat-input">
+            <textarea id="codeInput" rows="2" placeholder="T.ex. ”Förklara vad app.py gör” eller ”Lägg till en /health-endpoint”  (Enter skickar)"></textarea>
+            <button class="btn accent" id="codeSend">Skicka</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-train" class="view hidden">
+      <div id="trainOff" class="tr-off" style="display:none">
+        <h2 style="margin:0 0 8px">🎓 AI-träning är avstängd</h2>
+        <p>Slå på den under <b>⚙ Inställningar → AI-träning</b>. Då kan du finjustera en
+          egen modell på dina egna exempel och lägga in den i Ollama – utan att skriva
+          en enda rad kod.</p>
+      </div>
+
+      <div id="trainWrap" class="tr-wrap" style="display:none">
+        <div class="tr-bar-top">
+          <span class="tr-pill" id="trPillSoup">Kontrollerar…</span>
+          <span class="tr-pill" id="trPillGpu"></span>
+          <span class="tr-pill" id="trPillDir"></span>
+          <button class="btn ghost small" onclick="toggleTrainHelp()" id="trHelpBtn"
+                  style="margin-left:auto">📖 Instruktioner</button>
+        </div>
+
+        <div class="tr-help" id="trainHelp" style="display:none">
+          <h3>Så tränar du en egen modell – på fem minuter</h3>
+          <p>Att "träna" betyder här att du tar en färdig modell och visar den <b>dina egna
+            exempel</b>, så den svarar mer som du vill. Du behöver inte kunna programmera –
+            följ stegen nedan uppifrån och ner.</p>
+          <ol>
+            <li><b>Data.</b> Skriv 20–200 exempel på frågor och svar i tabellen (eller peka
+              ut en färdig <code>.jsonl</code>-fil). Klicka <b>Skapa exempeldata</b> om du
+              bara vill testa flödet först.</li>
+            <li><b>Modell &amp; metod.</b> Välj en basmodell (börja litet – 0.5B eller 1.5B)
+              och en hårdvaruprofil som matchar ditt grafikkort. Resten fylls i åt dig.</li>
+            <li><b>Träna.</b> Klicka <b>Starta träningen</b> och följ förloppet. Första
+              gången laddas basmodellen ner, vilket kan ta en stund.</li>
+            <li><b>Använd modellen.</b> Klicka <b>Lägg in i Ollama</b> när träningen är klar.
+              Modellen dyker då upp under <b>Mina modeller</b> och i chatten.</li>
+          </ol>
+
+          <h4>Vad kostar det i tid?</h4>
+          <ul>
+            <li>50–200 exempel + en 0.5–1.5B-modell på ett vanligt grafikkort: några minuter.</li>
+            <li>Samma data på en 7–8B-modell: en halvtimme till några timmar.</li>
+            <li>Bara CPU: räkna med timmar – välj då den minsta basmodellen och 1 epok.</li>
+          </ul>
+
+          <h4>Hur ska data se ut?</h4>
+          <p>Enklast är tabellen i steg 1: en rad per exempel med <b>fråga</b> och
+            <b>svar</b>. Den sparas som JSONL i formatet <code>alpaca</code>:</p>
+          <pre>{"instruction": "Vad heter Sveriges huvudstad?", "input": "", "output": "Stockholm."}</pre>
+          <p>Har du redan data går även dessa format bra (de känns igen automatiskt):</p>
+          <pre>chatml:   {"messages": [{"role": "user", "content": "Hej"}, {"role": "assistant", "content": "Hej!"}]}
+sharegpt: {"conversations": [{"from": "human", "value": "Hej"}, {"from": "gpt", "value": "Hej!"}]}
+dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected": "Vet inte"}</pre>
+
+          <h4>Tips för bra resultat</h4>
+          <ul>
+            <li><b>Kvalitet slår mängd.</b> 100 genomtänkta exempel är bättre än 1 000 slarviga.</li>
+            <li><b>Var konsekvent.</b> Skriv svaren i den stil och längd du faktiskt vill ha.</li>
+            <li><b>Börja litet.</b> Kör en liten modell först och se att flödet fungerar hela
+              vägen till Ollama, innan du drar igång en stor körning.</li>
+            <li><b>Fakta lärs bäst med många omskrivningar</b> – ställ samma fråga på flera sätt.</li>
+          </ul>
+
+          <h4>Om något går fel</h4>
+          <ul>
+            <li><b>Slut på GPU-minne:</b> välj en mindre basmodell, lägre kontextlängd eller
+              profilen för mindre GPU (4bit + lagerströmning).</li>
+            <li><b>"Gated repo" / 401:</b> basmodellen kräver godkännande på Hugging Face.
+              Godkänn där och lägg in en HF-token i ⚙ Inställningar – eller välj en öppen modell
+              (de utan ⚠ i listan).</li>
+            <li><b>Soup saknas:</b> klicka <b>Installera Soup</b> i statusraden, eller kör
+              <code>pip install "soup-cli[train]"</code> på servern.</li>
+          </ul>
+          <p style="margin-top:14px;color:var(--faint)">Träningen görs av
+            <a href="https://github.com/MakazhanAlpamys/Soup" target="_blank" rel="noopener"
+               style="color:var(--accent-hov)">Soup</a> (soup-cli), ett fristående open
+            source-verktyg. Ollama Studio sköter formulär, förlopp och installationen i Ollama.</p>
+        </div>
+
+        <div id="trainSetup"></div>
+
+        <!-- Steg 1: träningsdata -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum1">1</div>
+          <div class="tr-body">
+            <h2>Träningsdata</h2>
+            <p class="sub">Exemplen du vill att modellen ska lära sig av. Börja med 20–200 rader.</p>
+            <div class="tr-tabs">
+              <div class="tr-tab sel" id="trTabTable" onclick="trainDataTab('table')">✏️ Skriv i tabell</div>
+              <div class="tr-tab" id="trTabFile" onclick="trainDataTab('file')">📂 Välj fil på servern</div>
+              <div class="tr-tab" id="trTabPaste" onclick="trainDataTab('paste')">📋 Klistra in JSONL</div>
+            </div>
+
+            <div id="trDataTable">
+              <table class="tr-table">
+                <thead><tr><th style="width:38%">Fråga / instruktion</th>
+                  <th style="width:24%">Extra indata (valfritt)</th>
+                  <th style="width:38%">Så ska modellen svara</th><th></th></tr></thead>
+                <tbody id="trRows"></tbody>
+              </table>
+              <div class="tr-actions">
+                <button class="btn ghost small" onclick="trainAddRow()">＋ Lägg till rad</button>
+                <button class="btn ghost small" onclick="trainDemoData()">✨ Skapa exempeldata</button>
+                <span style="flex:1"></span>
+                <input id="trDataName" class="tr-name" placeholder="filnamn.jsonl"
+                       style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                              color:var(--text);padding:8px 10px;font-size:12.5px;width:180px">
+                <button class="btn accent small" onclick="trainSaveRows()">💾 Spara dataset</button>
+              </div>
+            </div>
+
+            <div id="trDataFile" style="display:none">
+              <div class="tr-field">
+                <label>Datafiler i träningsmappen</label>
+                <select id="trFileSelect" onchange="trainPickFile()"></select>
+              </div>
+              <p class="sub" id="trFileHint"></p>
+            </div>
+
+            <div id="trDataPaste" style="display:none">
+              <div class="tr-field">
+                <label>En JSON-rad per exempel (alpaca, chatml, sharegpt eller dpo)</label>
+                <textarea id="trPaste" rows="8" placeholder='{"instruction": "…", "input": "", "output": "…"}'></textarea>
+              </div>
+              <div class="tr-actions">
+                <input id="trPasteName" placeholder="filnamn.jsonl"
+                       style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                              color:var(--text);padding:8px 10px;font-size:12.5px;width:180px">
+                <button class="btn accent small" onclick="trainSavePaste()">💾 Spara dataset</button>
+              </div>
+            </div>
+
+            <div id="trDataInfo"></div>
+          </div>
+        </div>
+
+        <!-- Steg 2: modell och metod -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum2">2</div>
+          <div class="tr-body">
+            <h2>Modell &amp; metod</h2>
+            <p class="sub">Vilken modell du bygger vidare på, och hur mycket din dator klarar.</p>
+
+            <div class="tr-field">
+              <label>Namn på din modell <span style="color:var(--faint)">(används som mappnamn och i Ollama)</span></label>
+              <input id="trName" type="text" placeholder="min-modell" oninput="trainFormChanged()">
+            </div>
+
+            <label style="display:block;font-size:12.5px;color:var(--subtle);margin:14px 0 6px">Basmodell att träna vidare på</label>
+            <div class="tr-grid" id="trBases"></div>
+            <div class="tr-field" style="margin-top:10px">
+              <label>…eller skriv ett eget Hugging Face-namn</label>
+              <input id="trBaseCustom" type="text" placeholder="t.ex. Qwen/Qwen2.5-1.5B-Instruct"
+                     oninput="trainCustomBase()">
+            </div>
+
+            <label style="display:block;font-size:12.5px;color:var(--subtle);margin:16px 0 6px">Vad ska modellen lära sig?</label>
+            <div class="tr-grid" id="trTasks"></div>
+
+            <label style="display:block;font-size:12.5px;color:var(--subtle);margin:16px 0 6px">Hårdvara <span style="color:var(--faint)">(styr kvantisering, LoRA-storlek och kontextlängd)</span></label>
+            <div class="tr-grid" id="trProfiles"></div>
+
+            <div class="tr-two" style="margin-top:16px">
+              <div class="tr-field">
+                <label>Epoker <span style="color:var(--faint)">(hur många varv genom datan)</span></label>
+                <div class="tr-range"><input id="trEpochs" type="range" min="1" max="10" step="1" value="3"
+                  oninput="trainFormChanged()"><b id="trEpochsVal">3</b></div>
+              </div>
+              <div class="tr-field">
+                <label>Kontextlängd <span style="color:var(--faint)">(max tokens per exempel)</span></label>
+                <div class="tr-range"><input id="trMaxLen" type="range" min="256" max="8192" step="256" value="1024"
+                  oninput="trainFormChanged()"><b id="trMaxLenVal">1024</b></div>
+              </div>
+              <div class="tr-field">
+                <label>Inlärningstakt <span style="color:var(--faint)">(lägre = försiktigare)</span></label>
+                <select id="trLr" onchange="trainFormChanged()">
+                  <option value="1e-5">1e-5 – försiktig</option>
+                  <option value="2e-5" selected>2e-5 – standard</option>
+                  <option value="5e-5">5e-5 – snabbare</option>
+                  <option value="1e-4">1e-4 – aggressiv (små modeller)</option>
+                </select>
+              </div>
+              <div class="tr-field">
+                <label>LoRA-storlek (r) <span style="color:var(--faint)">(större = mer kapacitet, mer minne)</span></label>
+                <div class="tr-range"><input id="trLoraR" type="range" min="4" max="128" step="4" value="16"
+                  oninput="trainFormChanged()"><b id="trLoraRVal">16</b></div>
+              </div>
+            </div>
+
+            <div class="tr-actions">
+              <button class="btn ghost small" onclick="toggleYaml()" id="trYamlBtn">⚙ Visa konfigurationen (soup.yaml)</button>
+            </div>
+            <div id="trYamlBox" style="display:none">
+              <div class="tr-yaml" id="trYaml"></div>
+              <p class="sub" style="margin-top:8px">Det här är filen Soup får. Den sparas i
+                träningsmappen när du startar – du kan även köra den själv med
+                <code style="color:var(--accent-hov)">soup train --config soup.yaml</code>.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Steg 3: träna -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum3">3</div>
+          <div class="tr-body">
+            <h2>Träna</h2>
+            <p class="sub">Körningen sker på servern. Du kan lämna sidan – förloppet finns kvar när du kommer tillbaka.</p>
+            <div id="trStartBox" class="tr-actions">
+              <button class="btn accent" id="trStartBtn" onclick="trainStart()">▶ Starta träningen</button>
+              <button class="btn ghost small" id="trStopBtn" onclick="trainStop()" style="display:none">■ Avbryt</button>
+              <span id="trStartHint" class="sub" style="margin:0"></span>
+            </div>
+            <div id="trRunBox" style="display:none">
+              <div class="tr-run">
+                <div class="tr-stats" style="margin-bottom:2px">
+                  <span id="trJobLabel"><b>–</b></span>
+                  <span style="margin-left:auto" id="trJobPct"></span>
+                </div>
+                <div class="tr-progress" id="trProgress"><div id="trProgressBar"></div></div>
+                <div class="tr-stats" id="trStatsRow">
+                  <span>Steg: <b id="trStep">–</b></span>
+                  <span>Loss: <b id="trLoss">–</b></span>
+                  <span>Epok: <b id="trEpoch">–</b></span>
+                  <span>Tid: <b id="trElapsed">–</b></span>
+                  <span>Kvar: <b id="trEta">–</b></span>
+                </div>
+                <svg class="tr-chart" id="trChart" viewBox="0 0 600 110" preserveAspectRatio="none"></svg>
+                <div class="tr-actions">
+                  <button class="btn ghost small" onclick="toggleTrainLog()" id="trLogBtn">📜 Visa logg</button>
+                  <span id="trJobState" class="sub" style="margin:0"></span>
+                </div>
+                <div class="tr-log" id="trLog" style="display:none"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Steg 4: använd modellen -->
+        <div class="tr-step">
+          <div class="tr-num" id="trNum4">4</div>
+          <div class="tr-body">
+            <h2>Använd modellen</h2>
+            <p class="sub">Exportera den färdiga modellen till GGUF och lägg in den i Ollama –
+              sedan finns den under "Mina modeller" och i chatten.</p>
+            <div class="tr-runs" id="trRuns"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-settings" class="view hidden">
+      <div class="settings-wrap">
+        <div class="set-card">
+          <h2>Chatt</h2>
+          <label class="set-check"><input id="stWebsearch" type="checkbox">
+            <span>🌐 Webbsök när modellen är osäker
+              <span class="hint">(svaret märks med källor · kräver internet på servern)</span></span></label>
+          <div class="set-row" style="max-width:320px;margin-top:10px">
+            <label>Håll modellen laddad
+              <span class="hint">(annars läses den in på nytt efter en stunds tystnad,
+              vilket kostar sekunder)</span></label>
+            <select id="stKeepAlive">
+              <option value="">Ollamas standard (5 min)</option>
+              <option value="30m">30 minuter</option>
+              <option value="2h">2 timmar</option>
+              <option value="-1">Tills servern startas om</option>
+            </select>
+          </div>
+          <div class="set-row" style="max-width:320px;margin-top:10px">
+            <label>Läs innehållet på sökträffarna
+              <span class="hint">(annars ser modellen bara rubrik och utdrag)</span></label>
+            <select id="stSearchPages">
+              <option value="0">Nej – bara träfflistan</option>
+              <option value="2">De 2 bästa träffarna</option>
+              <option value="3">De 3 bästa träffarna</option>
+              <option value="5">De 5 bästa träffarna (långsammast)</option>
+            </select>
+          </div>
+          <label class="set-check"><input id="stChatTime" type="checkbox">
+            <span>🕒 Låt modellen veta datum och tid
+              <span class="hint">(annars svarar den utifrån sin träningsdata och tror att det är
+              ett annat år)</span></span></label>
+          <div id="stTimeState" class="hint"></div>
+        </div>
+
+        <div class="set-card">
+          <h2>🤗 Hugging Face</h2>
+          <p class="hint">Ollama kan hämta GGUF-modeller direkt från Hugging Face
+            (<code>hf.co/ägare/repo:kvantisering</code>). Med det här påslaget söker Ollama Studio
+            där när ett modellnamn inte finns i Ollamas eget bibliotek – och du får ett sökfält
+            under "Upptäck / Installera". Kräver internet på servern.</p>
+          <label class="set-check"><input id="stHfEnabled" type="checkbox">
+            <span>🤗 Slå på Hugging Face-stöd (sök + reserv)</span></label>
+          <label class="set-check"><input id="stHfAuto" type="checkbox">
+            <span>Ladda ner bästa träffen automatiskt
+              <span class="hint">(av: träffarna visas men du väljer själv)</span></span></label>
+          <div class="set-row">
+            <label>HF-token <span class="hint">(valfri – bara för sökningen, t.ex. egna repon)</span></label>
+            <input id="stHfToken" type="password" autocomplete="off" placeholder="hf_…">
+            <div class="set-keyrow">
+              <span id="stHfTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearHfToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div id="stHfState" class="hint"></div>
+        </div>
+
+        <div class="set-card">
+          <h2>Delat minne (Mem0)</h2>
+          <p class="hint">Peka på samma Mem0-konto och samma användar-ID som en annan assistent
+            (t.ex. Freja) så delar de minne. Sparas lokalt i databasen på servern.</p>
+          <label class="set-check"><input id="stMem0Enabled" type="checkbox">
+            <span>🧠 Slå på delat minne</span></label>
+          <div class="set-row">
+            <label>API-nyckel <span class="hint">(Mem0 Cloud)</span></label>
+            <input id="stMem0Key" type="password" autocomplete="off" placeholder="klistra in nyckel">
+            <div class="set-keyrow">
+              <span id="stMem0KeyState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearMem0Key()">Ta bort sparad nyckel</button>
+            </div>
+          </div>
+          <div class="set-grid">
+            <div class="set-row"><label>Användar-ID <span class="hint">(samma som Freja)</span></label>
+              <input id="stMem0User" placeholder="default_user"></div>
+            <div class="set-row"><label>Bas-URL</label>
+              <input id="stMem0Base" placeholder="https://api.mem0.ai"></div>
+            <div class="set-row"><label>API-version</label>
+              <input id="stMem0Ver" placeholder="v1"></div>
+            <div class="set-row"><label>Auth-schema</label>
+              <input id="stMem0Auth" placeholder="Token"></div>
+            <div class="set-row"><label>Org-ID <span class="hint">(valfritt)</span></label>
+              <input id="stMem0Org" placeholder=""></div>
+            <div class="set-row"><label>Projekt-ID <span class="hint">(valfritt)</span></label>
+              <input id="stMem0Proj" placeholder=""></div>
+          </div>
+          <div class="set-actions">
+            <button class="btn ghost small" type="button" onclick="testMem0()">Testa anslutning</button>
+            <span id="stMem0Test" class="hint"></span>
+          </div>
+        </div>
+
+        <div class="set-card">
+          <h2>🎓 AI-träning <span class="hint">(finjustera egna modeller)</span></h2>
+          <p class="hint">Fliken <b>AI-träning</b> låter dig träna en egen modell på dina egna
+            exempel och lägga in den i Ollama. Själva träningen görs av
+            <a href="https://github.com/MakazhanAlpamys/Soup" target="_blank" rel="noopener"
+               style="color:var(--accent-hov)">Soup</a> (<code>pip install "soup-cli[train]"</code>),
+            som installeras separat på servern – knappen finns i fliken.
+            <b>Kräver en åtkomsttoken om servern nås av andra</b> – träning skriver till disk
+            och startar processer.</p>
+          <label class="set-check"><input id="stTrainEnabled" type="checkbox">
+            <span>🎓 Slå på AI-träning</span></label>
+          <label class="set-check"><input id="stTrainMenu" type="checkbox">
+            <span>👁 Visa AI-träning i menyn
+              <span class="hint">(dold som standard – appen fokuserar på Codex)</span></span></label>
+          <div class="set-row">
+            <label>Träningsmapp <span class="hint">(konfig, dataset och tränade modeller)</span></label>
+            <input id="stTrainWs" placeholder="lämna tomt för ~/ollama-studio-training">
+            <span id="stTrainWsState" class="hint"></span>
+          </div>
+          <div class="set-row">
+            <label>Sökväg till <code>soup</code> <span class="hint">(valfritt – hittas normalt automatiskt)</span></label>
+            <input id="stTrainBin" placeholder="/usr/local/bin/soup">
+          </div>
+          <div id="stTrainState" class="hint"></div>
+        </div>
+
+        <div class="set-card">
+          <h2>Codex <span class="hint">(kodagent)</span></h2>
+          <p class="hint">En kodagent som läser en projektmapp, ändrar filer, kör tester och
+            jobbar mot git – driven av <b>dina egna Ollama-modeller</b>. Hur mycket den får göra
+            på egen hand bestämmer du med <b>Behörighet</b> nedan: fråga om lov varje gång,
+            skriva filer själv, eller fria händer. Varje skrivning går att ångra. Arbetar bara
+            inom den valda mappen. <b>Kräver en åtkomsttoken om servern nås av andra</b> – den
+            kan skriva till disk och köra kommandon.</p>
+          <label class="set-check"><input id="stCodeEnabled" type="checkbox">
+            <span>💻 Slå på Codex</span></label>
+          <div class="set-row">
+            <label>Arbetsyta (absolut sökväg till projektmappen på servern)</label>
+            <input id="stCodeWs" placeholder="/opt/mitt-projekt  eller  D:\\projekt\\mitt-repo">
+            <span id="stCodeWsState" class="hint"></span>
+          </div>
+          <div class="set-row">
+            <label>GitHub-token <span class="hint">(för push &amp; att öppna pull requests)</span></label>
+            <input id="stGhToken" type="password" autocomplete="off" placeholder="ghp_… eller github_pat_…">
+            <div class="set-keyrow">
+              <span id="stGhTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearGhToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div class="set-row" style="max-width:260px">
+            <label>Standard bas-gren för PR</label>
+            <input id="stGhBase" placeholder="main">
+          </div>
+          <div class="set-grid">
+            <div class="set-row">
+              <label>Behörighet <span class="hint">(hur mycket Codex får göra utan att fråga)</span></label>
+              <select id="stCodePerm" style="background:var(--bg);border:1px solid var(--border);
+                      border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px">
+                <option value="ask">🔒 Fråga om lov – varje skrivning, kommando och git</option>
+                <option value="auto_edit">✍ Skriv filer själv – fråga om kommandon och git</option>
+                <option value="full">⚡ Fria händer – gör allt utan att fråga</option>
+              </select>
+              <span id="stCodePermHint" class="hint"></span>
+            </div>
+            <div class="set-row">
+              <label>Max verktygssteg per körning</label>
+              <input id="stCodeSteps" placeholder="0 = obegränsat">
+              <span class="hint"><b>0 = obegränsat</b> (standard) – agenten håller på tills den
+                är klar. Det som skyddar mot en modell som kört fast är att Codex upptäcker
+                identiska verktygsanrop i rad och avbryter, plus <b>■ Stoppa</b>-knappen.
+                Sätt en siffra (1–1000) bara om du vill ha ett hårt tak.</span>
+            </div>
+            <div class="set-row">
+              <label>Kontextlängd (num_ctx)</label>
+              <input id="stCodeCtx" placeholder="8192">
+              <span class="hint"><b>Viktig.</b> Utan den kör Ollama på sin egen standard (ofta
+                2048 token) – då trillar instruktionerna ut ur fönstret efter ett par steg och
+                agenten slutar följa protokollet mitt i jobbet. 8192 räcker långt; höj om din
+                modell klarar mer och projektet är stort. 0 = låt Ollama bestämma.</span>
+            </div>
+            <div class="set-row">
+              <label>Temperatur</label>
+              <input id="stCodeTemp" placeholder="0.2">
+              <span class="hint">Lågt värde ger förutsägbar kod och stabila verktygsanrop.
+                0–2, standard 0.2.</span>
+            </div>
+          </div>
+          <label class="set-check" style="margin-top:14px"><input id="stRunEnabled" type="checkbox">
+            <span>▶ Tillåt kommandokörning
+              <span class="hint">(agenten kan köra tester/linters – bara kommandon på listan nedan)</span></span></label>
+          <div class="set-grid">
+            <div class="set-row"><label>Tillåtna kommandon (prefix, ett per rad)</label>
+              <textarea id="stRunAllow" rows="6" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace;resize:vertical"></textarea></div>
+            <div class="set-row"><label>Timeout (sekunder)</label>
+              <input id="stRunTimeout" placeholder="120">
+              <span class="hint">Ingen shell, ingen kedjning (<code>; &amp; |</code> blockeras), körs bara i arbetsytan.</span></div>
+          </div>
+          <div id="stCodeGit" class="hint" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"></div>
+        </div>
+
+        <div class="set-bar">
+          <span id="stDbPath" class="hint"></span>
+          <button class="btn accent" onclick="saveSettings()">Spara inställningar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <h3 id="mTitle"></h3><p id="mBody"></p>
+      <div class="row">
+        <button class="btn ghost" onclick="closeModal()">Avbryt</button>
+        <button class="btn danger" id="mConfirm">✕ Avinstallera</button>
+      </div>
+    </div>
+  </div>
+
+<script>__SCRIPT__</script>
+</body>
+</html>

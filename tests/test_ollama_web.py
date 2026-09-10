@@ -21,6 +21,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 os.environ.setdefault("OLLAMA_STUDIO_DB", os.path.join(tempfile.gettempdir(), "os_test_import.db"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ollama_web as w  # noqa: E402
+# Koden bor i studio/ – DB_PATH och APP_DIR ägs av studio.config, så det är DÄR
+# de ska patchas. ollama_web re-exporterar dem, men den kopian läses inte av
+# funktionerna själva.
+import studio.config as cfg  # noqa: E402
+import studio.codex.github as gh_mod  # noqa: E402
+import studio.codex.gitops as git_mod  # noqa: E402
 
 
 class TestHuggingFaceWiring(unittest.TestCase):
@@ -221,8 +227,8 @@ class _DBTest(unittest.TestCase):
     """Bas: färsk temp-databas per test (isolerad)."""
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self._old_db = w.DB_PATH
-        w.DB_PATH = os.path.join(self.tmp, "t.db")
+        self._old_db = cfg.DB_PATH
+        cfg.DB_PATH = w.DB_PATH = os.path.join(self.tmp, "t.db")
         # nollställ ev. env som annars kan störa default-assertions
         for k in ("OLLAMA_STUDIO_WEBSEARCH", "OLLAMA_STUDIO_MEM0", "OLLAMA_STUDIO_CODE",
                   "OLLAMA_STUDIO_CODE_RUN", "OLLAMA_STUDIO_WORKSPACE", "MEM0_API_KEY",
@@ -233,7 +239,7 @@ class _DBTest(unittest.TestCase):
         w.db_init()
 
     def tearDown(self):
-        w.DB_PATH = self._old_db
+        cfg.DB_PATH = w.DB_PATH = self._old_db
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
@@ -1714,9 +1720,9 @@ class TestGithubRepoFetch(_DBTest):
         self.api = ThreadingHTTPServer(("127.0.0.1", 0), self._Api)
         threading.Thread(target=self.api.serve_forever,
                          kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_api, self._old_auth = w.GITHUB_API, w._authed_push_url
-        w.GITHUB_API = "http://127.0.0.1:%d" % self.api.server_address[1]
-        w._repos_cache.update({"at": 0, "items": []})
+        self._old_api, self._old_auth = gh_mod.GITHUB_API, git_mod._authed_push_url
+        gh_mod.GITHUB_API = "http://127.0.0.1:%d" % self.api.server_address[1]
+        gh_mod._repos_cache.update({"at": 0, "items": []})
         # Ett riktigt litet git-repo att klona ifrån (i stället för github.com)
         self.origin = os.path.join(self.tmp, "fjärr")
         os.makedirs(self.origin)
@@ -1725,13 +1731,13 @@ class TestGithubRepoFetch(_DBTest):
             fh.write("# test\n")
         self._git(["add", "-A"])
         self._git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-qm", "start"])
-        w._authed_push_url = lambda owner, repo, token: self.origin
+        git_mod._authed_push_url = lambda owner, repo, token: self.origin
         w.settings_set({"code_enabled": True, "github_token": "ghp_test",
                         "code_repos_dir": os.path.join(self.tmp, "hämtade")})
 
     def tearDown(self):
-        w.GITHUB_API, w._authed_push_url = self._old_api, self._old_auth
-        w._repos_cache.update({"at": 0, "items": []})
+        gh_mod.GITHUB_API, git_mod._authed_push_url = self._old_api, self._old_auth
+        gh_mod._repos_cache.update({"at": 0, "items": []})
         self.api.shutdown()
         self.api.server_close()
         super().tearDown()

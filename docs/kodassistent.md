@@ -6,6 +6,41 @@
 > får göra på egen hand styr du med **Behörighet**: fråga om lov varje steg, skriva filer själv,
 > eller fria händer. Varje skrivning går att ångra.
 
+## Var koden bor
+
+`ollama_web.py` var 8 543 rader och 401 kB – halva filen var en enda sträng med hela
+webb-UI:t. Koden ligger nu uppdelad per ansvarsområde:
+
+```
+ollama_web.py          starten (python3 ollama_web.py) + HTTP-hanteraren
+studio/
+  config.py            inställningar, miljövariabler, alla getters
+  codex/
+    workspace.py       path-jail, läs/skriv/sök i projektmappen, ångra
+    permissions.py     godkännanden, loop-vakt, en körnings tillstånd
+    context.py         kontextbudget: kapa och beskär så fönstret räcker
+    protocol.py        systemprompt, tolkning av TOOL-rader, verktygen
+    commands.py        kommandokörning (allowlist, ingen shell)
+    gitops.py          git mot arbetsytan
+    github.py          repo-listning, hämta hem, pull requests
+  web/assets/
+    page.html          sidans stomme
+    styles.css         all CSS
+    app.js             all JavaScript
+```
+
+Webbläsaren laddar fortfarande inga externa filer – `build_page()` bakar in CSS och JS
+i sidan vid start, precis som förut. Sidan som skickas ut är tecken för tecken densamma.
+
+`ollama_web.py` är kvar som både startfil och det namn resten känner till: allt som fanns
+där förut går fortfarande att nå som `ollama_web.X`. Det som **inte** följer med är
+monkeypatchning – byter man ut en funktion ska det göras i modulen som äger den
+(`studio.codex.gitops._authed_push_url`, inte `ollama_web._authed_push_url`), för det är
+där den slås upp.
+
+`studio/config.py` importerar avsiktligt inget från de andra modulerna: den ligger underst
+så att inget blir cirkulärt.
+
 ## Behörighet – hur långt koppel agenten får
 
 Väljaren **Behörighet** ligger överst i Codex-vyn (och under ⚙ Inställningar → Codex).
