@@ -55,10 +55,11 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - **Hårdvarufilter** – varje modell märks med om den passar din GPU, körs delvis på CPU eller
   är för stor. Kryssrutan **"Dölj modeller som inte får plats på den här datorn"** filtrerar
   bort dem som inte kan köras alls. Se [Hårdvarufiltret](#hårdvarufiltret).
-- **🎓 AI-träning** – en egen flik (bredvid Chatta och Codex) där du finjusterar en modell på
-  dina egna exempel: skriv frågor och svar i en tabell, välj basmodell och hårdvaruprofil,
-  följ förloppet med progressbar och loss-kurva – och lägg in den färdiga modellen i Ollama
-  med ett klick. Instruktioner finns inbyggda i fliken. Se
+- **🎓 AI-träning** – finjustera en modell på dina egna exempel: skriv frågor och svar i en
+  tabell, välj basmodell och hårdvaruprofil, följ förloppet med progressbar och loss-kurva – och
+  lägg in den färdiga modellen i Ollama med ett klick. **Fliken är dold som standard** så att
+  menyn fokuserar på Codex; kryssa i **"Visa AI-träning i menyn"** under **⚙ Inställningar →
+  AI-träning** för att få fram den. Instruktioner finns inbyggda i fliken. Se
   [AI-träning](#-ai-träning--finjustera-en-egen-modell).
 - **🤗 Hugging Face** – GGUF-modeller därifrån visas i samma sökträfflista, med
   **Varianter** för att välja kvantisering själv (Q4_K_M, Q8_0 …). Skriver du ett namn som
@@ -99,16 +100,26 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   när du är klar tar knapparna **Ny gren → Committa → Push → Skapa PR** allt tillbaka till
   GitHub. Ingen sökväg att fylla i för hand. **🗑 Ta bort lokalt** raderar kopian från servern
   igen – med en varning som räknar upp osparade ändringar och opushade commits först.
-- **Codex – kodassistent (experimentell)** (webbversionen) – utan arbetsyta fungerar Codex som
-  en **kod-chatt** (skriver kod du kopierar, ingen GitHub eller mapp krävs). Du kan också öppna en
-  **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser/skriver Codex filerna
-  på **din egen dator**, även om servern kör på en annan maskin. Med en arbetsyta på servern blir
-  det en **Codex**-vy där en lokal modell
-  (t.ex. `qwen2.5-coder`) läser en projektmapp och **föreslår filändringar som diffar** – du
-  **godkänner varje ändring** innan något skrivs. Kan även arbeta mot **git/GitHub**: skapa
-  gren, committa, pusha och **öppna pull request** (kräver en GitHub-token), och **köra
-  tester/linters** via en **allowlist** (av som standard, ingen shell, körs bara i arbetsytan).
-  Agenten arbetar bara inom den valda arbetsytan. Slås på under **⚙ Inställningar**
+- **Codex – kodagent** (webbversionen) – en kodagent i samma anda som Claude Code eller
+  OpenAI Codex, men **modellen är din egen** (t.ex. `qwen2.5-coder` i din Ollama). Den läser
+  projektet, **ändrar filerna själv**, kör tester och arbetar mot git – i en loop tills den är
+  klar. **Du bestämmer hur lång koppel den får** med väljaren **Behörighet** överst i vyn:
+  - 🔒 **Fråga om lov** – varje skrivning, kommando och git-åtgärd stannar upp och visar en ruta
+    med diffen: *Tillåt · Tillåt alltid · Neka*.
+  - ✍ **Skriv filer själv** – ändrar filer direkt, men frågar innan den kör kommandon eller committar.
+  - ⚡ **Fria händer** – gör allt utan att fråga, även kommandon utanför allowlisten.
+
+  **Varje skrivning går att ångra** (↩ Ångra på ändringen, eller *Ångra senaste*). Agenten har
+  verktygen `read_file`, `search`, `tree`, `list_dir`, `edit_file` (byter ut en exakt textbit –
+  därför funkar även stora filer), `write_file`, `run_command`, `git_status`, `git_diff`,
+  `git_branch`, `git_commit` och `todo` (visar en plan/checklista i vyn). Knapparna **Ny gren →
+  Committa → Push → Skapa PR** tar ändringarna hela vägen till GitHub (kräver en GitHub-token).
+
+  Utan arbetsyta fungerar Codex som en **kod-chatt** (skriver kod du kopierar). Du kan också öppna
+  en **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser och skriver Codex
+  filerna på **din egen dator**, med samma behörighetslägen, även om servern kör på en annan maskin.
+
+  Agenten kommer aldrig utanför den valda arbetsytan. Slås på under **⚙ Inställningar**
   (`OLLAMA_STUDIO_CODE=1` + arbetsyta). Eftersom den kan skriva till disk och köra kommandon:
   **kör bakom en token** om servern nås av andra. Se [`docs/kodassistent.md`](docs/kodassistent.md).
 - **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
@@ -215,9 +226,12 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_REPOS_DIR` | `~/ollama-studio-repos` | Mappen där repon du hämtar från rullmenyn i Codex hamnar (en undermapp per repo, `ägare__namn`). |
 | `GITHUB_TOKEN` | *(tomt)* | GitHub-token för kodassistentens push och att öppna pull requests. Kan också sättas i ⚙ Inställningar (maskeras och sparas lokalt). |
 | `OLLAMA_STUDIO_GITHUB_BASE` | `main` | Standard bas-gren när kodassistenten öppnar en pull request. |
-| `OLLAMA_STUDIO_CODE_RUN` | `0` (av) | Sätt `1` för att låta kodassistenten köra kommandon (tester/linters) – bara de som matchar allowlisten. |
+| `OLLAMA_STUDIO_CODE_RUN` | `0` (av) | Sätt `1` för att låta kodassistenten köra kommandon (tester/linters). Huvudströmbrytaren: är den av kör Codex inga kommandon alls, oavsett behörighetsläge. Kommandon på allowlisten körs utan att fråga; övriga kräver ett godkännande (eller läget `full`). |
 | `OLLAMA_STUDIO_CODE_ALLOWLIST` | *(förinställd)* | Tillåtna kommando-prefix (ett per rad/komma), t.ex. `pytest`, `npm test`. Redigeras enklast i ⚙ Inställningar. |
 | `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Max körtid i sekunder per kommando (klamras 1–600). |
+| `OLLAMA_STUDIO_CODE_PERMISSION` | `ask` | Hur självständig Codex är: `ask` (fråga om lov före varje skrivning, kommando och git), `auto_edit` (skriver filer själv, frågar om kommandon/git) eller `full` (fria händer – gör allt utan att fråga, även kommandon utanför allowlisten). Byts enklast i väljaren **Behörighet** överst i Codex-vyn. |
+| `OLLAMA_STUDIO_CODE_STEPS` | `25` | Max antal verktygssteg agenten får ta per körning (klamras 1–100). |
+| `OLLAMA_STUDIO_TRAIN_MENU` | `0` (av) | Sätt `1` för att visa **🎓 AI-träning** i menyn. Dold som standard – appen fokuserar på Codex. |
 
 Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
 

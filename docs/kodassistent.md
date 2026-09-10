@@ -1,11 +1,79 @@
-# Skiss: Kodassistent i Ollama Studio ("Codex"-liknande)
+# Codex – kodagent i Ollama Studio
 
-> **Status:** **Fas 1–4 är byggd.** "Kod"-vyn kan läsa/söka i en arbetsyta, föreslå filändringar
-> som diffar du godkänner, arbeta mot **git/GitHub** (gren, commit, push, pull request), och
-> **köra kommandon** (tester/linters) via en **allowlist** – av som standard, jailad till
-> arbetsytan, ingen shell, timeout + utskriftstak. Agenten har verktygen `git_status`,
-> `git_diff` och `run_command`. Grundskissen nedan är alltså i allt väsentligt genomförd; den
-> kvarstår som referens och för vidare idéer.
+> **Status:** **Fas 1–5 är byggd.** Codex är en kodagent i samma anda som Claude Code eller
+> OpenAI Codex, men **modellen är din egen** (Ollama). Den läser projektet, **ändrar filerna
+> själv**, kör tester och arbetar mot git/GitHub – i en loop tills den är klar. Hur mycket den
+> får göra på egen hand styr du med **Behörighet**: fråga om lov varje steg, skriva filer själv,
+> eller fria händer. Varje skrivning går att ångra.
+
+## Behörighet – hur långt koppel agenten får
+
+Väljaren **Behörighet** ligger överst i Codex-vyn (och under ⚙ Inställningar → Codex).
+
+| Läge | Filändringar | Kommandon | Git (gren/commit) |
+| --- | --- | --- | --- |
+| 🔒 **Fråga om lov** (`ask`, standard) | frågar, visar diffen | frågar (utom de som står på allowlisten) | frågar |
+| ✍ **Skriv filer själv** (`auto_edit`) | skrivs direkt | frågar | frågar |
+| ⚡ **Fria händer** (`full`) | skrivs direkt | körs direkt, **även utanför allowlisten** | körs direkt |
+
+När agenten frågar dyker en ruta upp i loggen med vad den vill göra och en **diff** att granska:
+
+- **Tillåt** – kör bara den här gången.
+- **Tillåt alltid** – kör, och fråga inte om samma sak igen under resten av körningen.
+- **Neka** – agenten får ett `NEKAT`-svar och ska då hitta ett annat sätt (den gör inte om samma sak).
+
+En obesvarad fråga räknas som **nej** efter 10 minuter, så en glömd flik låser inget.
+
+**Det som gäller i alla lägen** (och som `full` alltså *inte* rör):
+
+- Agenten kommer aldrig utanför arbetsytan (path-jail).
+- Kommandon körs **aldrig via en shell** – ingen kedjning, pipe eller omdirigering
+  (`;` `&` `|` `<` `>` backtick),
+  alltid med arbetsytan som `cwd`, med timeout och utskriftstak.
+- Huvudströmbrytaren **Tillåt kommandokörning** (`OLLAMA_STUDIO_CODE_RUN`) är av som standard.
+  Är den av kör Codex inga kommandon alls, oavsett behörighetsläge.
+- **Push och pull request** görs bara av dina egna knappar – aldrig av agenten själv.
+
+## Ångra
+
+Varje skrivning sparar det gamla innehållet. Klicka **↩ Ångra** på ändringen i loggen, eller
+**↩ Ångra senaste** i behörighetsraden. En fil agenten *skapade* tas bort igen. Stacken håller de
+50 senaste ändringarna, ligger i minnet (försvinner vid omstart) och töms när du byter arbetsyta.
+
+## Verktyg agenten har
+
+| Verktyg | Vad | Kräver lov |
+| --- | --- | --- |
+| `list_dir`, `tree` | Lista mappar/filer | nej |
+| `read_file` | Läs en fil (radintervall stöds) | nej |
+| `search` | Sök i projektet | nej |
+| `git_status`, `git_diff` | Se ändringar | nej |
+| `todo` | Lägg upp en plan – visas som checklista i vyn | nej |
+| `edit_file` | **Byt ut en exakt textbit** i en fil | ja (utom `auto_edit`/`full`) |
+| `write_file` | Skapa/skriv en hel fil | ja (utom `auto_edit`/`full`) |
+| `run_command` | Kör tester/linters | ja, om kommandot inte står på allowlisten |
+| `git_branch`, `git_commit` | Skapa gren, committa | ja (utom `full`) |
+
+`edit_file` är det viktiga verktyget: modellen behöver inte skriva om hela filer, så **stora
+filer fungerar**. Texten i `old_text` måste finnas **exakt en gång** – annars får modellen ett
+fel som säger åt den att ta med fler omgivande rader.
+
+Agenten får som mest **25 verktygssteg** per körning (ändras under ⚙ Inställningar, 1–100).
+Räcker de inte säger den det rakt ut i stället för att låtsas vara klar.
+
+Modeller som struntar i verktygen och i stället skriver hela filer som `*** FIL: … *** SLUT`
+funkar fortfarande: i fråge-läget blir de förslag att godkänna, i de andra lägena skrivs de direkt.
+
+## Lokal mapp i webbläsaren
+
+Öppnar du en **lokal mapp** (Chrome/Edge, *File System Access*) kör hela agenten i webbläsaren mot
+din egen dator – med samma verktyg (`read_file`, `search`, `edit_file`, `write_file`, `todo`),
+samma frågerutor och samma ångra-knapp. Bara modellanropen går till servern. Kommandon och git
+finns inte i det läget (mappen ligger inte på servern).
+
+---
+
+*Skissen nedan är den ursprungliga planen. Den ligger kvar som referens och för vidare idéer.*
 
 ## Mål
 

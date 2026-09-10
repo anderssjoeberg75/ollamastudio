@@ -101,6 +101,13 @@ SETTINGS_SPEC = {
     "code_run_allowlist": ("OLLAMA_STUDIO_CODE_ALLOWLIST",
                            "pytest\npython -m pytest\npython -m unittest\nruff\nflake8\n"
                            "npm test\nnpm run lint\ngo test\ncargo test\nmake test", "str", False),
+    # Hur mycket Codex får göra själv: "ask" (fråga om lov varje gång),
+    # "auto_edit" (skriver filer själv, frågar om kommandon/git) eller
+    # "full" (fria händer – gör allt utan att fråga).
+    "code_permission":  ("OLLAMA_STUDIO_CODE_PERMISSION", "ask", "str", False),
+    "code_max_steps":   ("OLLAMA_STUDIO_CODE_STEPS", "25", "str", False),
+    # AI-träningen ligger dold i menyn som standard – fokus är Codex.
+    "train_menu":       ("OLLAMA_STUDIO_TRAIN_MENU", "0", "bool", False),
 }
 
 _settings_lock = threading.Lock()
@@ -211,6 +218,9 @@ def settings_public():
     out["code_active"] = code_enabled()
     out["code_workspace_ok"] = code_workspace_root() is not None
     out["code_run_active"] = code_run_enabled()
+    out["code_mode"] = code_mode()
+    out["code_mode_label"] = CODE_MODE_LABELS[code_mode()]
+    out["code_steps"] = code_max_steps()
     out["server_time"] = format_now()          # så man ser om serverns klocka/TZ är fel
     out["train_module"] = TRAIN is not None    # ligger soup_train.py bredvid appen?
     out["train_active"] = train_toggle_on()
@@ -271,6 +281,10 @@ def settings_set(values):
             _settings_db = merged
         finally:
             conn.close()
+    # Byttes arbetsytan? Då gäller inte ångra-stacken längre – den pekar på ett annat
+    # projekt, och att återställa "app.py" i fel mapp vore rena skadan.
+    if "code_workspace" in to_set or "code_workspace" in to_del:
+        undo_clear()
 
 
 # --- Bekväma getters (dynamiska: läser aktuella inställningar) ---
@@ -389,6 +403,36 @@ def code_toggle_on():
 def code_enabled():
     """Codex är FUNKTIONELL bara om påslagen OCH arbetsytan finns (gate för endpoints)."""
     return code_toggle_on() and code_workspace_root() is not None
+
+
+# --- Behörighetsläge: hur självständig Codex får vara -----------------------
+# "ask"       – fråga om lov före varje skrivning, kommando och git-åtgärd
+# "auto_edit" – skriv filer direkt, men fråga före kommandon och git
+# "full"      – fria händer: gör allt utan att fråga (även kommandon utanför listan)
+CODE_MODES = ("ask", "auto_edit", "full")
+CODE_MODE_LABELS = {
+    "ask": "Fråga om lov",
+    "auto_edit": "Skriv filer själv",
+    "full": "Fria händer",
+}
+
+
+def code_mode():
+    m = (setting_str("code_permission") or "ask").lower()
+    return m if m in CODE_MODES else "ask"
+
+
+def code_max_steps():
+    """Tak för antal verktygsvarv i en körning (1–100)."""
+    try:
+        return max(1, min(100, int(setting_str("code_max_steps") or "25")))
+    except ValueError:
+        return 25
+
+
+def train_menu_on():
+    """Ska AI-träningen synas i menyn? Dold som standard – appen fokuserar på Codex."""
+    return setting_bool("train_menu")
 
 
 # --------------------------------------------------------------------------
@@ -1151,10 +1195,11 @@ def mem0_context(memories):
 # --------------------------------------------------------------------------
 # Kodassistent – arbetsyta (jail), verktyg och agent-protokoll
 # --------------------------------------------------------------------------
-# All disk-åtkomst sker under arbetsytans rot. Agenten har BARA läsverktyg;
-# ändringar föreslås som fullständigt filinnehåll och skrivs först när användaren
-# godkänner (via /api/agent/apply). Fas 1+2: läsa & föreslå diffar.
-CODE_MAX_STEPS = 12          # max verktygsvarv per agent-körning
+# All disk-åtkomst sker under arbetsytans rot (path-jail). Agenten har både läs- och
+# skrivverktyg; hur mycket den får göra utan att fråga styrs av behörighetsläget
+# (code_permission): "ask" frågar om varje skrivning/kommando/git, "auto_edit" skriver
+# filer själv, "full" ger fria händer. Varje skrivning går att ångra (undo-stacken).
+CODE_MAX_STEPS = 25          # standardtak för verktygsvarv (ändras i ⚙ Inställningar)
 CODE_MAX_FILE_BYTES = 200000  # läs/skriv-tak per fil
 CODE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
                   ".idea", ".vscode", "dist", "build", ".mypy_cache"}
@@ -1256,20 +1301,111 @@ def ws_tree(max_entries=500):
 
 
 def ws_write_file(rel, content):
-    """Skriv en fil inom arbetsytan (används av godkänn-steget). Returnerar en diff."""
+    """Skriv en fil inom arbetsytan. Returnerar en diff. Det gamla innehållet läggs
+    på ångra-stacken så en skrivning alltid går att backa (även i fria händer-läget)."""
     full = ws_resolve(rel)
     if content is None:
         raise ValueError("Inget innehåll")
     if len(content.encode("utf-8")) > CODE_MAX_FILE_BYTES:
         raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_FILE_BYTES)
+    existed = os.path.isfile(full)
     old = ""
-    if os.path.isfile(full):
+    if existed:
         with open(full, "r", encoding="utf-8", errors="replace") as f:
             old = f.read()
-    os.makedirs(os.path.dirname(full), exist_ok=True)
+    parent = os.path.dirname(full)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
         f.write(content)
-    return {"path": _ws_rel(full), "diff": ws_diff(old, content, _ws_rel(full))}
+    rel_path = _ws_rel(full)
+    undo_push(rel_path, old if existed else None)
+    return {"path": rel_path, "created": not existed,
+            "diff": ws_diff(old, content, rel_path)}
+
+
+def ws_edit_file(rel, old_text, new_text):
+    """Byt ut en exakt textbit i en fil – motsvarigheten till Claude Codes Edit.
+    Biten måste finnas exakt EN gång; annars vet vi inte vilken som menades. Det här
+    är det viktiga verktyget för stora filer: modellen behöver inte skriva om allt."""
+    full = ws_resolve(rel)
+    if not os.path.isfile(full):
+        raise ValueError("Ingen fil: " + rel)
+    if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
+        raise ValueError("Filen är för stor (>%d B)" % CODE_MAX_FILE_BYTES)
+    if not old_text:
+        raise ValueError("old_text saknas – ange texten som ska bytas ut")
+    with open(full, "r", encoding="utf-8", errors="replace") as f:
+        cur = f.read()
+    hits = cur.count(old_text)
+    if hits == 0:
+        raise ValueError("Hittade inte texten i %s – den måste stämma exakt, tecken för "
+                         "tecken (läs filen igen och kopiera raderna)" % rel)
+    if hits > 1:
+        raise ValueError("Texten finns %d gånger i %s – ta med fler omgivande rader så "
+                         "den blir unik" % (hits, rel))
+    updated = cur.replace(old_text, new_text if new_text is not None else "", 1)
+    if len(updated.encode("utf-8")) > CODE_MAX_FILE_BYTES:
+        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_FILE_BYTES)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(updated)
+    rel_path = _ws_rel(full)
+    undo_push(rel_path, cur)
+    return {"path": rel_path, "created": False,
+            "diff": ws_diff(cur, updated, rel_path)}
+
+
+# ---- Ångra: varje skrivning sparar sitt gamla innehåll ----------------------
+# Fria händer-läget är bara tryggt om det går att backa. Stacken lever i minnet
+# (försvinner vid omstart) och håller de senaste ändringarna.
+CODE_UNDO_MAX = 50
+_undo_stack = []            # [{"path": rel, "before": text | None}] – senaste sist
+_undo_lock = threading.Lock()
+
+
+def undo_push(rel, before):
+    with _undo_lock:
+        _undo_stack.append({"path": rel, "before": before})
+        del _undo_stack[:-CODE_UNDO_MAX]
+
+
+def undo_clear():
+    """Töm ångra-stacken. Görs när arbetsytan byts – de gamla posterna pekar då på
+    filer i ett annat projekt och skulle skriva över fel saker."""
+    with _undo_lock:
+        del _undo_stack[:]
+
+
+def undo_available(rel=None):
+    with _undo_lock:
+        if rel is None:
+            return len(_undo_stack)
+        return sum(1 for it in _undo_stack if it["path"] == rel)
+
+
+def undo_file(rel):
+    """Backa den senaste skrivningen av en fil. Returnerar (ok, meddelande)."""
+    rel = (rel or "").strip()
+    with _undo_lock:
+        idx = None
+        for i in range(len(_undo_stack) - 1, -1, -1):
+            if _undo_stack[i]["path"] == rel:
+                idx = i
+                break
+        if idx is None:
+            return False, "Det finns inget att ångra för %s" % (rel or "(tom sökväg)")
+        item = _undo_stack.pop(idx)
+    try:
+        full = ws_resolve(item["path"])
+        if item["before"] is None:
+            if os.path.isfile(full):
+                os.remove(full)
+            return True, "Tog bort %s igen (filen fanns inte innan)" % item["path"]
+        with open(full, "w", encoding="utf-8") as f:
+            f.write(item["before"])
+        return True, "Återställde %s till innehållet före ändringen" % item["path"]
+    except Exception as e:
+        return False, str(e)
 
 
 def ws_diff(old, new, path=""):
@@ -1292,28 +1428,149 @@ def ws_current(rel):
     return ""
 
 
+# ---- Godkännanden: agenten frågar, webbläsaren svarar -----------------------
+# En körning strömmar NDJSON till webbläsaren. Vill agenten göra något som kräver
+# lov skickas en {"type":"ask"}-händelse och tråden BLOCKERAR tills webbläsaren
+# svarar via POST /api/agent/permission – eller tills det tar för lång tid (= nej).
+CODE_ASK_TIMEOUT = 600      # sekunder innan en obesvarad fråga räknas som nej
+_approvals = {}             # id -> {"ev": Event, "allow": bool, "always": bool}
+_approvals_lock = threading.Lock()
+_approval_n = 0
+
+
+def approval_open():
+    """Registrera en väntande fråga och returnera dess id."""
+    global _approval_n
+    with _approvals_lock:
+        _approval_n += 1
+        aid = "ap%d" % _approval_n
+        _approvals[aid] = {"ev": threading.Event(), "allow": False, "always": False}
+    return aid
+
+
+def approval_answer(aid, allow, always=False):
+    """Svara på en fråga (från webbläsaren). False om id:t inte finns/redan svarats."""
+    with _approvals_lock:
+        item = _approvals.get(aid)
+    if not item:
+        return False
+    item["allow"] = bool(allow)
+    item["always"] = bool(always)
+    item["ev"].set()
+    return True
+
+
+def approval_wait(aid, timeout=None):
+    """(tillåtet, tillåt_alltid). Timeout och okänt id räknas båda som nej."""
+    with _approvals_lock:
+        item = _approvals.get(aid)
+    if not item:
+        return False, False
+    got = item["ev"].wait(CODE_ASK_TIMEOUT if timeout is None else timeout)
+    with _approvals_lock:
+        _approvals.pop(aid, None)
+    if not got:
+        return False, False
+    return bool(item["allow"]), bool(item["always"])
+
+
+class AgentRun:
+    """Tillståndet för EN Codex-körning: behörighetsläge, ström till webbläsaren och
+    de svar användaren redan gett ("tillåt alltid" gäller resten av körningen)."""
+
+    def __init__(self, emit, mode=None):
+        self.emit = emit
+        self.mode = mode if mode in CODE_MODES else code_mode()
+        self.always = set()      # nycklar användaren sagt "tillåt alltid" för
+        self.writes = []         # filer agenten ändrat (för sammanfattningen)
+        self.commands = 0        # kommandon som körts
+        self.denied = 0          # gånger användaren sagt nej
+
+    def needs_ok(self, kind):
+        """Kräver den här sortens handling ett godkännande i det aktuella läget?"""
+        if self.mode == "full":
+            return False
+        if self.mode == "auto_edit" and kind == "edit":
+            return False
+        return True
+
+    def ask(self, kind, key, title, detail="", danger=False):
+        """Fråga användaren om lov. True = kör på."""
+        if not self.needs_ok(kind) or key in self.always:
+            return True
+        aid = approval_open()
+        self.emit({"type": "ask", "id": aid, "kind": kind, "title": title,
+                   "detail": detail or "", "danger": bool(danger)})
+        allow, always = approval_wait(aid)
+        if allow and always:
+            self.always.add(key)
+        self.emit({"type": "answer", "id": aid, "allow": allow, "always": always})
+        if not allow:
+            self.denied += 1
+        return allow
+
+
 # ---- Agent-protokoll --------------------------------------------------------
-AGENT_SYSTEM = (
-    "Du är en kodassistent som arbetar i en avgränsad arbetsyta (en projektmapp). "
-    "Svara på svenska. Du har läsverktyg för att utforska koden. Använd ett verktyg genom "
-    "att skriva EXAKT en rad som börjar med `TOOL ` följt av verktygsnamn och ett JSON-objekt, "
-    "och skriv inget annat på den raden. Tillgängliga verktyg:\n"
+def _tools_help(mode):
+    """Verktygslistan i systemprompten – beskriver även vad som kräver lov."""
+    if mode == "full":
+        note = ("Du har fria händer: skrivningar, kommandon och git körs direkt utan att "
+                "användaren tillfrågas. Var därför försiktig och verifiera med tester.")
+    elif mode == "auto_edit":
+        note = ("Filändringar skrivs direkt utan att fråga. Kommandon och git-åtgärder "
+                "måste användaren godkänna – den kan säga nej.")
+    else:
+        note = ("Varje skrivning, kommando och git-åtgärd måste användaren godkänna först. "
+                "Får du NEKAT: gör inte om samma sak – föreslå något annat eller fråga.")
+    return note
+
+
+AGENT_TOOLS_TEXT = (
     "  TOOL list_dir {\"path\": \".\"}\n"
-    "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1, \"end\": 120}\n"
+    "  TOOL tree {}                              (alla filer i projektet)\n"
+    "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1, \"end\": 200}\n"
     "  TOOL search {\"query\": \"text att söka\"}\n"
+    "  TOOL edit_file {\"path\": \"fil.py\", \"old_text\": \"exakt text som finns\", "
+    "\"new_text\": \"det den ska bli\"}\n"
+    "  TOOL write_file {\"path\": \"ny.py\", \"content\": \"hela filens innehåll\"}\n"
+    "  TOOL run_command {\"cmd\": \"pytest\"}\n"
     "  TOOL git_status {}\n"
     "  TOOL git_diff {\"path\": \"fil.py\"}\n"
-    "  TOOL run_command {\"cmd\": \"pytest\"}   (kör bara tillåtna kommandon, t.ex. tester/linters)\n"
-    "Efter varje verktyg får du resultatet och kan använda fler verktyg. Kör gärna tester med "
-    "run_command efter en ändring för att verifiera den (om det är tillåtet). När du är klar: "
-    "skriv ditt svar på svenska. Om du vill ÄNDRA eller SKAPA filer, föreslå varje fil som ett "
-    "block med FULLSTÄNDIGT nytt filinnehåll (inte en diff):\n"
-    "*** FIL: relativ/sökväg.py\n"
-    "<hela filens nya innehåll>\n"
-    "*** SLUT\n"
-    "Föreslå bara filer du verkligen vill ändra. Användaren granskar och godkänner varje ändring "
-    "innan något skrivs till disk – du skriver aldrig själv."
+    "  TOOL git_branch {\"name\": \"min-gren\"}\n"
+    "  TOOL git_commit {\"message\": \"Vad ändringen gör\"}\n"
+    "  TOOL todo {\"items\": [\"Läs koden\", \"Ändra X\", \"Kör testerna\"]}\n"
 )
+
+
+def agent_system_prompt(mode=None):
+    """Systemprompt för agentläget – beror på hur självständig agenten får vara."""
+    mode = mode if mode in CODE_MODES else code_mode()
+    return (
+        "Du är Codex, en kodagent som arbetar i en avgränsad projektmapp (arbetsytan). "
+        "Svara på svenska.\n\n"
+        "ARBETSSÄTT (följ ordningen):\n"
+        "1. Ta reda på fakta först – läs och sök i koden innan du ändrar något. Gissa aldrig "
+        "hur en fil ser ut.\n"
+        "2. Är uppgiften i flera steg: lägg upp en plan med TOOL todo och håll den uppdaterad.\n"
+        "3. Gör ändringen med edit_file (byt ut en exakt textbit) eller write_file (ny/liten fil). "
+        "Använd edit_file för stora filer – skriv aldrig om en hel fil i onödan.\n"
+        "4. Verifiera: kör tester eller linters med run_command när det går.\n"
+        "5. Sammanfatta kort på svenska vad du gjorde och vad användaren bör titta på.\n\n"
+        "VERKTYG – skriv EXAKT en rad som börjar med `TOOL ` följt av namn och ett JSON-objekt, "
+        "och inget annat på den raden. Ett verktyg i taget; du får resultatet och kan sedan "
+        "använda fler:\n" + AGENT_TOOLS_TEXT + "\n"
+        "REGLER:\n"
+        "- " + _tools_help(mode) + "\n"
+        "- Alla sökvägar är relativa till arbetsytan. Du kommer inte utanför den.\n"
+        "- edit_file kräver att old_text finns exakt en gång. Ta med omgivande rader så det blir "
+        "unikt, och kopiera texten ordagrant ur read_file (utan radnumren).\n"
+        "- Uppfinn inga verktyg och kör inga verktyg du inte fått resultat för.\n"
+        "- När du är klar: skriv svaret som vanlig text utan TOOL-rad."
+    )
+
+
+# Bakåtkompatibel konstant (används av äldre tester/kod).
+AGENT_SYSTEM = agent_system_prompt("ask")
 
 # Skisslage: ingen arbetsyta – inga verktyg, ingen disk. Bara kod-chatt.
 AGENT_SYSTEM_SCRATCH = (
@@ -1325,23 +1582,85 @@ AGENT_SYSTEM_SCRATCH = (
     "*** SLUT\n"
     "Använd inga TOOL-rader – det finns inga verktyg i det här läget."
 )
-_TOOL_RE = re.compile(r'^\s*TOOL\s+(\w+)\s+(\{.*\})\s*$', re.MULTILINE)
+
+_TOOL_HEAD_RE = re.compile(r'(?:^|\n)[ \t>*-]*TOOL[:\s]+([A-Za-z_]\w*)[ \t]*')
 _EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)',
                       re.MULTILINE | re.DOTALL)
+AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "edit_file", "write_file",
+                    "run_command", "git_status", "git_diff", "git_branch", "git_commit",
+                    "todo"}
+
+
+def _json_object_at(text, i):
+    """Läs ett komplett JSON-objekt som börjar vid text[i] == '{'. Klarar flera rader
+    och citattecken/escapes inuti strängar. Returnerar (objekt, slutindex) eller (None, i)."""
+    if i >= len(text) or text[i] != "{":
+        return None, i
+    depth, in_str, esc = 0, False, False
+    for j in range(i, len(text)):
+        ch = text[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[i:j + 1]), j + 1
+                except Exception:
+                    return None, j + 1
+    return None, i
 
 
 def parse_tool_call(text):
-    """Första verktygsanropet i modellens svar, eller None."""
-    m = _TOOL_RE.search(text or "")
-    if not m:
-        return None
-    try:
-        args = json.loads(m.group(2))
-    except Exception:
-        return None
-    if not isinstance(args, dict):
-        return None
-    return {"name": m.group(1), "args": args}
+    """Första verktygsanropet i modellens svar, eller None.
+
+    Tål mer än den gamla enradsregeln: JSON över flera rader, ```-block, punktlistor
+    och `TOOL: namn`. Små lokala modeller formaterar sällan perfekt – att vara strikt
+    här var en av de största bristerna."""
+    text = text or ""
+    for m in _TOOL_HEAD_RE.finditer(text):
+        name = m.group(1)
+        if name not in AGENT_TOOL_NAMES:
+            continue
+        rest = m.end()
+        # hoppa över ev. ```json-inledning mellan namnet och objektet
+        k = rest
+        while k < len(text) and text[k] in " \t\r\n`":
+            if text[k] == "`" and text[k:k + 3] == "```":
+                k += 3
+                while k < len(text) and text[k] not in "\r\n":
+                    k += 1
+            else:
+                k += 1
+        args, _ = _json_object_at(text, k)
+        if isinstance(args, dict):
+            return {"name": name, "args": args}
+        if name in ("git_status", "tree"):      # verktyg utan argument
+            return {"name": name, "args": {}}
+    # Sista chansen: ett rent JSON-objekt av typen {"tool": "...", "args": {...}}
+    i = text.find("{")
+    while i >= 0:
+        obj, nxt = _json_object_at(text, i)
+        if isinstance(obj, dict):
+            name = obj.get("tool") or obj.get("name") or obj.get("verktyg")
+            if name in AGENT_TOOL_NAMES:
+                args = obj.get("args") if isinstance(obj.get("args"), dict) else None
+                if args is None:
+                    args = {k: v for k, v in obj.items()
+                            if k not in ("tool", "name", "verktyg")}
+                return {"name": name, "args": args}
+        i = text.find("{", max(nxt, i + 1))
+    return None
 
 
 def parse_edits(text):
@@ -1356,29 +1675,74 @@ def parse_edits(text):
     return edits
 
 
+_TOOL_LINE_RE = re.compile(r'^[ \t>*-]*TOOL[:\s]+[A-Za-z_]\w*.*$', re.MULTILINE)
+
+
 def strip_edits(text):
-    """Ta bort FIL-blocken ur texten så bara förklaringen visas i chatten."""
-    return _EDIT_RE.sub("", text or "").strip()
+    """Ta bort FIL-blocken och halvfärdiga TOOL-rader så bara förklaringen visas.
+
+    Ett verktygsanrop som inte kördes (t.ex. på sista steget) ska inte läcka ut som
+    text i chatten – det ser ut som att modellen pratar strunt."""
+    out = _EDIT_RE.sub("", text or "")
+    out = _TOOL_LINE_RE.sub("", out)
+    return out.strip()
 
 
-def agent_tool_exec(name, args):
-    """Kör ett läsverktyg och returnera (resultattext_för_modellen, händelse_för_ui)."""
+def _denied(what):
+    return ("NEKAT: användaren sa nej till %s. Gör inte om samma sak – föreslå ett annat "
+            "sätt, eller fråga användaren vad hen vill i stället." % what)
+
+
+def _norm_todo(items):
+    if isinstance(items, str):
+        items = [i.strip(" -*\t") for i in items.split("\n") if i.strip()]
+    if not isinstance(items, list):
+        return []
+    out = []
+    for it in items[:20]:
+        if isinstance(it, dict):
+            text = str(it.get("text") or it.get("task") or it.get("titel") or "")
+            state = str(it.get("status") or "").lower()
+            done = bool(it.get("done")) or state in ("done", "klar", "completed")
+            active = state in ("doing", "pågår", "in_progress", "aktiv")
+        else:
+            text, done, active = str(it), False, False
+        text = text.strip()[:200]
+        if text:
+            out.append({"text": text, "done": done, "active": active})
+    return out
+
+
+def agent_tool_exec(name, args, ctx=None):
+    """Kör ett verktyg och returnera (resultattext_för_modellen, händelse_för_ui).
+
+    `ctx` är körningens AgentRun. Utan ctx finns bara läsverktygen – skrivning,
+    kommandon och git kräver en körning som kan fråga användaren om lov."""
+    args = args if isinstance(args, dict) else {}
     try:
         if name == "list_dir":
             r = ws_list_dir(args.get("path", "."))
             txt = "Mapp %s:\n%s" % (r["path"],
                   "\n".join(["[D] " + d for d in r["dirs"]] + r["files"]) or "(tom)")
             return txt, {"summary": "%d mappar, %d filer" % (len(r["dirs"]), len(r["files"]))}
+
+        if name == "tree":
+            files = ws_tree()
+            return ("Filer i arbetsytan:\n" + ("\n".join(files) or "(tom)"),
+                    {"summary": "%d filer" % len(files)})
+
         if name == "read_file":
             r = ws_read_file(args.get("path", ""), args.get("start"), args.get("end"))
             return ("Fil %s (rad %s–%s av %s):\n%s" % (
                     r["path"], r.get("start", 1), r.get("end", r["total"]), r["total"], r["content"]),
                     {"summary": "%s rader" % r["total"]})
+
         if name == "search":
             r = ws_search(args.get("query", ""))
             lines = ["%s:%d: %s" % (h["path"], h["line"], h["text"]) for h in r["hits"]]
             return ("Sökträffar för %r:\n%s" % (r["query"], "\n".join(lines) or "(inga)"),
                     {"summary": "%d träffar" % len(r["hits"])})
+
         if name == "git_status":
             info = git_status_info()
             if not info.get("repo"):
@@ -1386,16 +1750,124 @@ def agent_tool_exec(name, args):
             return ("Gren: %s · %d ändrade filer:\n%s" % (
                     info["branch"], info["changed"], "\n".join(info["files"]) or "(inga)"),
                     {"summary": "%d ändrade" % info["changed"]})
+
         if name == "git_diff":
             d = git_diff_text(args.get("path"))
             return ("Diff:\n" + (d or "(inga ändringar)"))[:8000], {"summary": "diff"}
+
+        if name == "todo":
+            items = _norm_todo(args.get("items") or args.get("todos") or args.get("plan"))
+            if not items:
+                return "FEL: items saknas (en lista med punkter)", {"summary": "tom plan"}
+            done = sum(1 for i in items if i["done"])
+            return ("Planen är noterad och visas för användaren:\n"
+                    + "\n".join(("[x] " if i["done"] else "[ ] ") + i["text"] for i in items),
+                    {"summary": "%d/%d klara" % (done, len(items)), "todo": items})
+
+        # ---- Skrivande verktyg: kräver en körning (och oftast ett godkännande) ----
+        if name in ("write_file", "edit_file", "run_command", "git_branch", "git_commit"):
+            if ctx is None:
+                return ("FEL: %s kan bara användas i en Codex-körning." % name,
+                        {"summary": "ingen körning"})
+
+        if name == "write_file":
+            path = (args.get("path") or "").strip()
+            content = args.get("content")
+            if not path:
+                return "FEL: path saknas", {"summary": "fel: path saknas"}
+            if content is None:
+                return "FEL: content saknas", {"summary": "fel: content saknas"}
+            if not isinstance(content, str):
+                content = str(content)
+            before = ws_current(path)
+            preview = ws_diff(before, content, path) or "(oförändrad)"
+            if not ctx.ask("edit", "write:" + path, "Skriva filen %s" % path, preview):
+                return _denied("att skriva " + path), {"summary": "nekat: " + path, "denied": True}
+            r = ws_write_file(path, content)
+            ctx.writes.append(r["path"])
+            return ("OK: skrev %s (%d tecken).%s" % (
+                        r["path"], len(content),
+                        " Filen skapades." if r["created"] else ""),
+                    {"summary": ("skapade " if r["created"] else "skrev ") + r["path"],
+                     "path": r["path"], "diff": r["diff"], "wrote": True})
+
+        if name == "edit_file":
+            path = (args.get("path") or "").strip()
+            old_text = args.get("old_text")
+            if old_text is None:
+                old_text = args.get("old")
+            new_text = args.get("new_text")
+            if new_text is None:
+                new_text = args.get("new")
+            if not path:
+                return "FEL: path saknas", {"summary": "fel: path saknas"}
+            if not old_text:
+                return ("FEL: old_text saknas – ange den exakta text som ska bytas ut.",
+                        {"summary": "fel: old_text saknas"})
+            if not os.path.isfile(ws_resolve(path)):
+                return ("FEL: filen %s finns inte. Använd write_file för att skapa den." % path,
+                        {"summary": "ingen fil: " + path})
+            # Förhandsvisa ändringen innan vi frågar – användaren ska se vad hen godkänner.
+            cur = ws_current(path)
+            hits = cur.count(old_text)
+            if hits != 1:
+                return (("FEL: texten finns %d gånger i %s. Den måste finnas exakt en gång – "
+                         "läs filen och ta med fler omgivande rader." % (hits, path)),
+                        {"summary": "ingen unik träff"})
+            preview = ws_diff(cur, cur.replace(old_text, new_text or "", 1), path)
+            if not ctx.ask("edit", "edit:" + path, "Ändra i filen %s" % path, preview):
+                return _denied("att ändra " + path), {"summary": "nekat: " + path, "denied": True}
+            r = ws_edit_file(path, old_text, new_text)
+            ctx.writes.append(r["path"])
+            return ("OK: ändrade %s." % r["path"],
+                    {"summary": "ändrade " + r["path"], "path": r["path"],
+                     "diff": r["diff"], "wrote": True})
+
         if name == "run_command":
-            cmd = args.get("cmd") or args.get("command") or ""
-            ok, out = run_command(cmd)
+            cmd = (args.get("cmd") or args.get("command") or "").strip()
+            if not cmd:
+                return "FEL: cmd saknas", {"summary": "fel: cmd saknas"}
+            if not code_run_enabled():
+                return ("FEL: kommandokörning är avstängd. Användaren kan slå på den under "
+                        "⚙ Inställningar → Codex. Fortsätt utan att köra kommandon.",
+                        {"summary": "körning avstängd"})
+            listed = code_run_allowed(cmd)
+            if not listed:
+                # Utanför allowlist: fråga om lov (eller kör direkt i fria händer-läget).
+                if ctx.mode != "full":
+                    if not ctx.ask("run", "run:" + cmd, "Köra kommandot: " + cmd,
+                                   "Kommandot står inte på listan över tillåtna kommandon.",
+                                   danger=True):
+                        return (_denied("kommandot `%s`" % cmd),
+                                {"summary": "nekat: " + cmd[:50], "denied": True})
+            ok, out = run_command(cmd, force=not listed)
+            ctx.commands += 1
             return ("$ %s\n%s" % (cmd, out),
                     {"summary": (("✓" if ok else "✕") + " " + cmd)[:60],
                      "detail": out, "cmd": cmd, "ok": ok})
-        return "Okänt verktyg: " + str(name), {"summary": "okänt verktyg"}
+
+        if name == "git_branch":
+            branch = (args.get("name") or args.get("branch") or "").strip()
+            if not branch:
+                return "FEL: name saknas", {"summary": "fel: name saknas"}
+            if not ctx.ask("git", "branch:" + branch, "Skapa/byta till grenen %s" % branch):
+                return _denied("att byta gren"), {"summary": "nekat", "denied": True}
+            ok, msg = git_create_branch(branch)
+            return (("OK: " if ok else "FEL: ") + msg, {"summary": msg[:60], "ok": ok})
+
+        if name == "git_commit":
+            message = (args.get("message") or args.get("msg") or "").strip()
+            if not message:
+                return "FEL: message saknas", {"summary": "fel: message saknas"}
+            info = git_status_info()
+            detail = "Ändrade filer:\n" + ("\n".join(info.get("files") or []) or "(inga)")
+            if not ctx.ask("git", "commit", "Committa: " + message, detail):
+                return _denied("att committa"), {"summary": "nekat", "denied": True}
+            ok, msg = git_commit_all(message)
+            return (("OK: " if ok else "FEL: ") + msg, {"summary": msg[:60], "ok": ok})
+
+        return ("Okänt verktyg: %s. Tillgängliga: %s"
+                % (name, ", ".join(sorted(AGENT_TOOL_NAMES))), {"summary": "okänt verktyg"})
     except Exception as e:
         return "FEL: %s" % e, {"summary": "fel: %s" % e}
 
@@ -1899,16 +2371,23 @@ def code_run_allowed(cmd):
     return False
 
 
-def run_command(cmd):
-    """Kör ett tillåtet kommando i arbetsytan. Returnerar (ok, text)."""
+def run_command(cmd, force=False):
+    """Kör ett kommando i arbetsytan. Returnerar (ok, text).
+
+    `force` hoppar över allowlisten – används bara när användaren uttryckligen
+    godkänt kommandot i rutan, eller kör i läget "fria händer". Skyddet som ALLTID
+    gäller: ingen shell, ingen kedjning, kör i arbetsytan, timeout och utskriftstak."""
     root = code_workspace_root()
     if not root:
         return False, "Ingen arbetsyta"
     if not code_run_enabled():
         return False, "Kommandokörning är avstängd (slå på under ⚙ Inställningar)"
-    if not code_run_allowed(cmd):
+    if not force and not code_run_allowed(cmd):
         return False, ("Kommandot är inte tillåtet enligt allowlist. Tillåtna prefix: "
                        + ", ".join(code_run_allowlist()))
+    if force and (not (cmd or "").strip() or _SHELL_META.search(cmd or "")):
+        # Även ett godkänt kommando får inte kedja/omdirigera – vi kör aldrig via shell.
+        return False, "Kommandot innehåller tecken som inte tillåts (; & | < > `)"
     try:
         toks = shlex.split(cmd)
     except ValueError as e:
@@ -2591,6 +3070,9 @@ PAGE = r"""<!doctype html>
   .code-files .f:hover{background:var(--card-hover);color:var(--text)}
   .code-main{flex:1;display:flex;flex-direction:column;min-width:0}
   .code-log{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 2px}
+  /* Loggens kort får aldrig krympa – annars klipps diffar och frågerutor ihop när
+     det blir ont om plats (flex-barn krymper som standard). */
+  .code-log > *{flex:0 0 auto}
   .code-step{font-size:12px;color:var(--faint)}
   .code-tool{background:var(--chip);border:1px solid var(--border);border-radius:8px;
     padding:6px 10px;font-size:12px;color:var(--subtle)}
@@ -2604,7 +3086,7 @@ PAGE = r"""<!doctype html>
   .code-edit .eh{display:flex;justify-content:space-between;align-items:center;gap:10px;
     padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px}
   .code-edit .eh .path{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent-hov)}
-  .code-edit .eh .acts{display:flex;gap:8px;flex:none}
+  .code-edit .eh .acts,.code-edit .eh .acts2{display:flex;gap:8px;flex:none}
   .code-diff{margin:0;padding:10px 12px;overflow-x:auto;font-family:ui-monospace,Menlo,Consolas,monospace;
     font-size:12px;line-height:1.45;max-height:340px}
   .code-diff .add{color:var(--green)} .code-diff .del{color:var(--danger)}
@@ -2618,6 +3100,33 @@ PAGE = r"""<!doctype html>
   .code-git .gacts{display:flex;gap:6px;flex-wrap:wrap}
   .code-batch{background:var(--accent-dim);border:1px solid var(--accent);border-radius:8px;
     padding:8px 12px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  /* Behörighetsrad: hur självständig Codex får vara */
+  .code-modebar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--card);
+    border:1px solid var(--border);border-radius:10px;padding:8px 12px;margin-bottom:8px}
+  .code-modebar label{color:var(--subtle);font-size:12.5px}
+  .code-modebar select{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:6px 8px;font-size:13px}
+  .code-modebar select:focus{outline:none;border-color:var(--accent)}
+  .code-modebar .mhint{color:var(--faint);font-size:12px;flex:1;min-width:200px}
+  .code-modebar.full{border-color:var(--amber)}
+  .code-modebar.full .mhint{color:var(--amber)}
+  /* Frågeruta: "får jag göra det här?" */
+  .code-ask{background:var(--accent-dim);border:1px solid var(--accent);border-radius:10px;overflow:hidden}
+  .code-ask.danger{background:var(--danger-dim);border-color:var(--danger)}
+  .code-ask .ah{display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:8px 12px;font-size:13px;flex-wrap:wrap}
+  .code-ask .ah .what{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--text)}
+  .code-ask .ah .acts{display:flex;gap:6px;flex-wrap:wrap}
+  .code-ask.done .acts{display:none}
+  .code-ask .state{font-size:12px;color:var(--faint)}
+  /* Plan (todo) – som Claude Codes checklista */
+  .code-plan{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:13px}
+  .code-plan .t{font-weight:700;font-size:12px;color:var(--subtle);margin-bottom:4px}
+  .code-plan .i{padding:2px 0;color:var(--subtle)}
+  .code-plan .i.done{color:var(--green);text-decoration:line-through;opacity:.75}
+  .code-plan .i.active{color:var(--accent-hov);font-weight:600}
+  .code-summary{background:var(--chip);border:1px solid var(--border);border-radius:8px;
+    padding:6px 10px;font-size:12px;color:var(--subtle)}
   .code-runbar{display:flex;gap:8px;margin:0 2px 8px}
   .code-runbar input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;
     color:var(--text);padding:8px 10px;font-size:13px;font-family:ui-monospace,Menlo,Consolas,monospace}
@@ -2829,6 +3338,9 @@ PAGE = r"""<!doctype html>
   .toast{position:fixed;right:24px;bottom:24px;padding:12px 18px;border-radius:8px;color:#0f1115;
     font-weight:600;font-size:14px;z-index:50;opacity:0;transform:translateY(10px);transition:.2s}
   .toast.show{opacity:1;transform:none}
+  /* Rutan ligger kvar i layouten även när den tonat bort – utan detta fångar den
+     klick på knappar under sig (t.ex. Skicka i Codex) och de tar inte. */
+  .toast{pointer-events:none}
   .toast.ok{background:var(--green)} .toast.err{background:var(--danger)}
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;
     justify-content:center;z-index:60}
@@ -2982,7 +3494,8 @@ PAGE = r"""<!doctype html>
     <div id="view-code" class="view code hidden">
       <div id="codeOff" class="empty" style="display:none;max-width:560px;margin:48px auto">
         <h2>💻 Codex är avstängd</h2>
-        <p>Codex läser en projektmapp och föreslår kodändringar (som du godkänner).<br>
+        <p>Codex är en kodagent som läser en projektmapp, ändrar filer och kör tester –
+           med dina egna Ollama-modeller.<br>
            Slå på den och välj en arbetsyta under Inställningar för att börja.</p>
         <button class="btn accent" onclick="showView('settings')">Öppna Inställningar</button>
       </div>
@@ -3018,6 +3531,17 @@ PAGE = r"""<!doctype html>
             </span>
           </div>
           <div id="codeGitMsg" class="hint" style="margin:0 2px 6px"></div>
+          <div id="codeModeBar" class="code-modebar">
+            <label for="codeMode">Behörighet:</label>
+            <select id="codeMode" onchange="saveCodeMode()">
+              <option value="ask">🔒 Fråga om lov (varje steg)</option>
+              <option value="auto_edit">✍ Skriv filer själv (fråga om kommandon)</option>
+              <option value="full">⚡ Fria händer (gör allt utan att fråga)</option>
+            </select>
+            <span id="codeModeHint" class="mhint"></span>
+            <button class="btn ghost small" id="codeUndoBtn" onclick="undoLast()"
+                    title="Ångra den senast skrivna filen" style="display:none">↩ Ångra senaste</button>
+          </div>
           <div id="codeNoWs" class="chatwarn warn" style="display:none">
             💡 Skisslage – ingen arbetsyta vald. Codex skriver kod åt dig men kan inte läsa
             projektet eller spara till disk. Kopiera koden, eller välj en arbetsyta i
@@ -3029,8 +3553,9 @@ PAGE = r"""<!doctype html>
             <button class="btn ghost small" onclick="runManual()">▶ Kör</button>
           </div>
           <div id="codeLog" class="code-log">
-            <div class="chat-empty">Be Codex läsa/förklara kod eller föreslå en ändring.
-              Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>
+            <div class="chat-empty">Be Codex läsa koden, ändra en fil eller köra testerna –
+              t.ex. ”Lägg till en /health-endpoint och kör testerna”. Den arbetar bara i mappen
+              ovan, och <b>Behörighet</b> ovanför styr vad den får göra utan att fråga.</div>
           </div>
           <div class="chatbar" style="margin-top:8px">
             <label style="color:var(--subtle);font-size:13px">Modell (Codex):</label>
@@ -3400,6 +3925,9 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
             och startar processer.</p>
           <label class="set-check"><input id="stTrainEnabled" type="checkbox">
             <span>🎓 Slå på AI-träning</span></label>
+          <label class="set-check"><input id="stTrainMenu" type="checkbox">
+            <span>👁 Visa AI-träning i menyn
+              <span class="hint">(dold som standard – appen fokuserar på Codex)</span></span></label>
           <div class="set-row">
             <label>Träningsmapp <span class="hint">(konfig, dataset och tränade modeller)</span></label>
             <input id="stTrainWs" placeholder="lämna tomt för ~/ollama-studio-training">
@@ -3413,10 +3941,13 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
         </div>
 
         <div class="set-card">
-          <h2>Codex <span class="hint">(kodassistent · experimentell)</span></h2>
-          <p class="hint">En kodassistent som läser en projektmapp och föreslår filändringar
-            (du godkänner varje ändring). Arbetar bara inom den valda mappen.
-            <b>Kräver en åtkomsttoken om servern nås av andra</b> – den kan skriva till disk.</p>
+          <h2>Codex <span class="hint">(kodagent)</span></h2>
+          <p class="hint">En kodagent som läser en projektmapp, ändrar filer, kör tester och
+            jobbar mot git – driven av <b>dina egna Ollama-modeller</b>. Hur mycket den får göra
+            på egen hand bestämmer du med <b>Behörighet</b> nedan: fråga om lov varje gång,
+            skriva filer själv, eller fria händer. Varje skrivning går att ångra. Arbetar bara
+            inom den valda mappen. <b>Kräver en åtkomsttoken om servern nås av andra</b> – den
+            kan skriva till disk och köra kommandon.</p>
           <label class="set-check"><input id="stCodeEnabled" type="checkbox">
             <span>💻 Slå på Codex</span></label>
           <div class="set-row">
@@ -3435,6 +3966,24 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
           <div class="set-row" style="max-width:260px">
             <label>Standard bas-gren för PR</label>
             <input id="stGhBase" placeholder="main">
+          </div>
+          <div class="set-grid">
+            <div class="set-row">
+              <label>Behörighet <span class="hint">(hur mycket Codex får göra utan att fråga)</span></label>
+              <select id="stCodePerm" style="background:var(--bg);border:1px solid var(--border);
+                      border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px">
+                <option value="ask">🔒 Fråga om lov – varje skrivning, kommando och git</option>
+                <option value="auto_edit">✍ Skriv filer själv – fråga om kommandon och git</option>
+                <option value="full">⚡ Fria händer – gör allt utan att fråga</option>
+              </select>
+              <span id="stCodePermHint" class="hint"></span>
+            </div>
+            <div class="set-row">
+              <label>Max verktygssteg per körning</label>
+              <input id="stCodeSteps" placeholder="25">
+              <span class="hint">Hur många varv agenten får ta (läsa, ändra, köra tester) innan
+                den stannar. 1–100. Fler steg = den orkar längre, men tar längre tid.</span>
+            </div>
           </div>
           <label class="set-check" style="margin-top:14px"><input id="stRunEnabled" type="checkbox">
             <span>▶ Tillåt kommandokörning
@@ -5062,10 +5611,15 @@ async function loadConfig(){
   updateTrainNav();   // AI-träningsfliken kräver soup_train.py
 }
 function updateTrainNav(){
-  // Fliken finns bara om soup_train.py ligger bredvid appen. Är den där men
-  // avstängd syns fliken ändå, med en förklaring inuti (som Codex).
+  // AI-träningen är DOLD som standard – appen fokuserar på Codex. Slå på den under
+  // ⚙ Inställningar → AI-träning ("Visa AI-träning i menyn"). Fliken kräver dessutom
+  // att soup_train.py ligger bredvid appen.
   const nav = document.getElementById('nav-train');
-  if(nav) nav.style.display = cfg.train_module ? '' : 'none';
+  const show = !!(cfg.train_module && cfg.train_menu);
+  if(nav) nav.style.display = show ? '' : 'none';
+  // Står man i den dolda vyn när den göms: gå tillbaka till Codex.
+  if(!show && document.getElementById('nav-train')
+     && document.getElementById('nav-train').classList.contains('active')) showView('code');
 }
 function updateHfView(){
   // Ett sökfält för allt – texten säger bara vilka källor som är påslagna.
@@ -5120,6 +5674,7 @@ function updateCodeView(){
   if(li) li.textContent = localDir ? ('📂 '+localDirName) : '';
   const cb = document.getElementById('codeLocalClose');
   if(cb) cb.style.display = localDir ? '' : 'none';
+  updateModeBar();
 }
 
 /* ---- Inställningar (sparas i lokal SQLite på servern) ---- */
@@ -5171,6 +5726,7 @@ async function loadSettingsForm(){
       : 'okända modellnamn visar träffar från Hugging Face att välja bland');
   }
   chk('stTrainEnabled', s.train_enabled);
+  chk('stTrainMenu', s.train_menu);
   set('stTrainWs', s.train_workspace);
   set('stTrainBin', s.train_soup_bin);
   const twState = document.getElementById('stTrainWsState');
@@ -5186,6 +5742,17 @@ async function loadSettingsForm(){
   }
   chk('stCodeEnabled', s.code_enabled);
   set('stCodeWs', s.code_workspace);
+  set('stCodePerm', s.code_mode || 'ask');
+  set('stCodeSteps', s.code_steps);
+  const permHint = document.getElementById('stCodePermHint');
+  if(permHint) permHint.textContent = CODE_MODE_HINTS[s.code_mode] || CODE_MODE_HINTS.ask;
+  const permSel = document.getElementById('stCodePerm');
+  if(permSel && !permSel._wired){
+    permSel._wired = true;
+    permSel.addEventListener('change', ()=>{
+      if(permHint) permHint.textContent = CODE_MODE_HINTS[permSel.value] || '';
+    });
+  }
   const cws = document.getElementById('stCodeWsState');
   if(cws){
     if(!s.code_workspace){
@@ -5221,6 +5788,8 @@ async function loadSettingsForm(){
         parts.push('⚠ arbetsytan är inte ett git-repo (git/PR-knapparna döljs)');
       }
       parts.push(s.code_run_active ? 'kommandokörning PÅ' : 'kommandokörning av');
+      parts.push('behörighet: ' + (s.code_mode_label || s.code_mode || 'ask'));
+      parts.push('max ' + (s.code_steps || 25) + ' steg');
       cg.textContent = 'Status: ' + parts.join(' · ');
     }
   }
@@ -5263,6 +5832,7 @@ function collectSettings(){
     hf_enabled: document.getElementById('stHfEnabled').checked,
     hf_auto: document.getElementById('stHfAuto').checked,
     train_enabled: document.getElementById('stTrainEnabled').checked,
+    train_menu: document.getElementById('stTrainMenu').checked,
     train_workspace: val('stTrainWs'),
     train_soup_bin: val('stTrainBin'),
     code_enabled: document.getElementById('stCodeEnabled').checked,
@@ -5270,7 +5840,9 @@ function collectSettings(){
     github_base: val('stGhBase'),
     code_run_enabled: document.getElementById('stRunEnabled').checked,
     code_run_allowlist: document.getElementById('stRunAllow').value,
-    code_run_timeout: val('stRunTimeout')
+    code_run_timeout: val('stRunTimeout'),
+    code_permission: val('stCodePerm'),
+    code_max_steps: val('stCodeSteps')
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
@@ -5362,9 +5934,12 @@ function clearCode(){
       + 'rörs inte – ändringar du redan sparat ligger kvar på disken.' + warn)) return;
   if(codeController) codeController.abort();
   codeMessages = [];
+  codeWrites = [];
+  updateModeBar();
   try{ localStorage.removeItem(CODE_MSGS_KEY); }catch(e){}
-  if(box) box.innerHTML = '<div class="chat-empty">Be Codex läsa/förklara kod eller föreslå en '
-    + 'ändring. Den arbetar bara i mappen ovan och du godkänner varje ändring.</div>';
+  if(box) box.innerHTML = '<div class="chat-empty">Be Codex läsa koden, ändra en fil eller köra '
+    + 'testerna. Den arbetar bara i mappen ovan, och <b>Behörighet</b> ovanför styr vad den får '
+    + 'göra utan att fråga.</div>';
   const inp = document.getElementById('codeInput'); if(inp) inp.focus();
 }
 function populateCodeModels(){
@@ -5401,6 +5976,144 @@ function askAboutFile(path){
   const inp = document.getElementById('codeInput');
   inp.value = 'Förklara vad '+path+' gör.';
   inp.focus();
+}
+/* ---- Behörighetsläge: fråga om lov, skriv själv, eller fria händer ---- */
+const CODE_MODE_HINTS = {
+  ask: 'Codex frågar innan den skriver en fil, kör ett kommando eller rör git. Tryggast.',
+  auto_edit: 'Codex ändrar filer direkt (varje skrivning går att ångra), men frågar innan '
+    + 'den kör kommandon eller committar.',
+  full: '⚠ Codex gör allt själv – skriver filer, kör kommandon (även utanför listan) och '
+    + 'committar utan att fråga. Använd bara i ett projekt du kan återställa.'
+};
+function updateModeBar(){
+  const bar = document.getElementById('codeModeBar');
+  const sel = document.getElementById('codeMode');
+  const hint = document.getElementById('codeModeHint');
+  if(!bar || !sel) return;
+  const ws = !!cfg.code_ws;                       // läget gäller server-arbetsytan
+  bar.style.display = cfg.code ? 'flex' : 'none';
+  const mode = CODE_MODE_HINTS[cfg.code_mode] ? cfg.code_mode : 'ask';
+  sel.value = mode;
+  bar.classList.toggle('full', mode === 'full');
+  if(hint) hint.textContent = ws ? CODE_MODE_HINTS[mode]
+    : 'Gäller när en arbetsyta på servern är vald. I skisslage finns inga verktyg att godkänna.';
+  const ub = document.getElementById('codeUndoBtn');
+  if(ub) ub.style.display = (ws && codeWrites.length) ? '' : 'none';
+}
+async function saveCodeMode(){
+  const mode = document.getElementById('codeMode').value;
+  try{
+    const r = await api('/api/agent/mode', {method:'POST', headers:headers(true),
+      body: JSON.stringify({mode})});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error||'kunde inte spara');
+    cfg.code_mode = mode;
+    updateModeBar();
+    toast('Behörighet: ' + d.label);
+  }catch(e){ toast('Kunde inte byta läge: '+e.message, true); }
+}
+/* Filer Codex skrivit i den här körningen – ger Ångra-knappen något att peka på. */
+let codeWrites = [];
+function noteWrite(path){
+  if(!path) return;
+  codeWrites = codeWrites.filter(p=>p!==path);
+  codeWrites.push(path);
+  updateModeBar();
+}
+async function undoFile(path, node){
+  try{
+    const r = await api('/api/agent/undo', {method:'POST', headers:headers(true),
+      body: JSON.stringify({path})});
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.message||d.error||'kunde inte ångra');
+    codeWrites = codeWrites.filter(p=>p!==path);
+    if(node){ const st = node.querySelector('.state'); if(st) st.textContent = '↩ Ångrad'; }
+    toast(d.message); loadTree(); gitStatus(); updateModeBar();
+  }catch(e){ toast('Kunde inte ångra: '+e.message, true); }
+}
+function undoLast(){
+  const path = codeWrites[codeWrites.length-1];
+  if(!path){ toast('Inget att ångra'); return; }
+  if(confirm('Ångra den senaste ändringen av ' + path + '?')) undoFile(path, null);
+}
+/* ---- Frågerutor: agenten vill göra något och väntar på svar ---- */
+let askSeq = 0;
+function renderAsk(ev){
+  const id = 'ask'+(askSeq++);
+  const detail = ev.detail ? '<pre class="code-diff">'+diffToHtml(ev.detail)+'</pre>' : '';
+  const node = codeAppend(
+    '<div class="code-ask'+(ev.danger?' danger':'')+'" id="'+id+'">'
+    + '<div class="ah"><span class="what">'+(ev.danger?'⚠ ':'🔐 ')+esc(ev.title||'Får jag?')+'</span>'
+    + '<span class="acts">'
+    + '<button class="btn accent small" onclick="answerAsk(\''+id+'\',true,false)">Tillåt</button>'
+    + '<button class="btn ghost small" onclick="answerAsk(\''+id+'\',true,true)" '
+    + 'title="Tillåt det här för resten av körningen">Tillåt alltid</button>'
+    + '<button class="btn ghost small" onclick="answerAsk(\''+id+'\',false,false)">Neka</button>'
+    + '</span></div>' + detail + '</div>');
+  node._askId = ev.id;
+  node.scrollIntoView({block:'nearest'});
+  return node;
+}
+async function answerAsk(nodeId, allow, always){
+  const node = document.getElementById(nodeId);
+  if(!node || !node._askId) return;
+  node.classList.add('done');
+  node.querySelector('.ah').insertAdjacentHTML('beforeend',
+    '<span class="state">'+(allow ? (always?'✓ Tillåtet (alltid)':'✓ Tillåtet') : '✕ Nekat')+'</span>');
+  try{
+    await api('/api/agent/permission', {method:'POST', headers:headers(true),
+      body: JSON.stringify({id: node._askId, allow, always})});
+  }catch(e){ toast('Kunde inte skicka svaret: '+e.message, true); }
+}
+function renderPlan(items){
+  const html = (items||[]).map(i=>'<div class="i'+(i.done?' done':(i.active?' active':''))+'">'
+    + (i.done?'✓ ':(i.active?'▸ ':'○ ')) + esc(i.text) + '</div>').join('');
+  codeAppend('<div class="code-plan"><div class="t">PLAN</div>'+html+'</div>');
+}
+/* En ändring som agenten redan skrivit (auto_edit / fria händer) – med Ångra.
+   I lokalt mappläge sparas det gamla innehållet i webbläsaren i stället för på servern. */
+const localUndo = new Map();     // sökväg -> innehåll före ändringen (null = fanns inte)
+function renderApplied(ev){
+  const id = 'appl'+(codeEditSeq++);
+  const node = codeAppend(
+    '<div class="code-edit done" id="'+id+'">'
+    + '<div class="eh"><span class="path">'+esc(ev.path)+(ev.created?' <span class="hint">(ny fil)</span>':'')+'</span>'
+    + '<span class="acts2"><button class="btn ghost small">↩ Ångra</button></span>'
+    + '<span class="state">✓ Skrivet</span></div>'
+    + '<pre class="code-diff">'+diffToHtml(ev.diff||'')+'</pre></div>');
+  const local = !!ev.local;
+  if(local && ev.before !== undefined) localUndo.set(ev.path, ev.created ? null : ev.before);
+  const btn = node.querySelector('.acts2 button');
+  if(btn) btn.onclick = ()=> local ? undoLocal(ev.path, node) : undoFile(ev.path, node);
+  if(!local) noteWrite(ev.path);
+  return node;
+}
+async function undoLocal(path, node){
+  if(!localUndo.has(path)){ toast('Inget att ångra för '+path, true); return; }
+  const before = localUndo.get(path);
+  try{
+    if(before === null){
+      // Filen fanns inte innan – töm den (webbläsaren får inte radera filer utan vidare).
+      await fsWrite(path, '');
+      toast('Tömde '+path+' (filen fanns inte innan – ta bort den själv om du vill)');
+    } else {
+      await fsWrite(path, before);
+      toast('Återställde '+path);
+    }
+    localUndo.delete(path);
+    if(node){ const st = node.querySelector('.state'); if(st) st.textContent = '↩ Ångrad'; }
+    loadLocalTree();
+  }catch(e){ toast('Kunde inte ångra: '+(e.message||e), true); }
+}
+/* Kort, läsbar form av verktygets argument – hela filinnehåll ska inte fylla loggen. */
+function toolArgsText(args){
+  if(!args || typeof args!=='object') return '';
+  const out = {};
+  for(const k of Object.keys(args)){
+    const v = args[k];
+    out[k] = (typeof v==='string' && v.length>80) ? (v.slice(0,80)+'… ('+v.length+' tecken)') : v;
+  }
+  try{ return JSON.stringify(out); }catch(e){ return ''; }
 }
 function codeLogEl(){ return document.getElementById('codeLog'); }
 function codeAppend(html){
@@ -5485,6 +6198,7 @@ async function applyEdit(id){
     if(!d.ok) throw new Error(d.error||'fel');
     node.classList.add('done');
     node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Skrivet</span>');
+    noteWrite(d.path || node._edit.path);   // så Ångra-knappen når även godkända förslag
     toast('Ändring skriven: '+node._edit.path);
     loadTree(); gitStatus();
   }catch(e){ toast('Kunde inte skriva: '+e.message, true); }
@@ -5559,25 +6273,48 @@ async function runAgentServer(model){
       if(!line) continue;
       let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
       if(ev.type==='step'){ thinkText=''; think=null; }
+      else if(ev.type==='start'){
+        if(ev.mode && ev.mode!==cfg.code_mode){ cfg.code_mode = ev.mode; updateModeBar(); }
+        codeAppend('<div class="code-step">Behörighet: '+esc(ev.mode_label||ev.mode||'')
+          + ' · max '+(ev.steps||'?')+' steg</div>');
+      }
       else if(ev.type==='delta'){
         thinkText += ev.text; assistantFull += ev.text;
         if(!think) think = codeAppend('<div class="code-think"></div>');
         think.textContent = thinkText;
         codeLogEl().scrollTop = codeLogEl().scrollHeight;
       }
+      else if(ev.type==='ask'){
+        if(think){ think.remove(); think=null; }
+        renderAsk(ev);
+      }
+      else if(ev.type==='answer'){ /* svaret ritas redan när knappen trycks */ }
       else if(ev.type==='tool'){
         if(think){ think.remove(); think=null; }
-        const icon = ev.name==='run_command' ? '▶' : '🔧';
+        if(ev.todo){ renderPlan(ev.todo); continue; }
+        const icon = ev.name==='run_command' ? '▶'
+          : (ev.denied ? '🚫' : (ev.wrote ? '✍' : '🔧'));
         let html = '<div class="code-tool">'+icon+' <b>'+esc(ev.name)+'</b> '
-          + esc(JSON.stringify(ev.args))+' → '+esc(ev.summary||'');
+          + esc(toolArgsText(ev.args))+' → '+esc(ev.summary||'');
         if(ev.detail) html += '<pre class="code-diff" style="margin-top:6px">'+esc(ev.detail)+'</pre>';
         codeAppend(html+'</div>');
+        // Skrev agenten en fil? Visa diffen med en Ångra-knapp.
+        if(ev.wrote && ev.path){ renderApplied({path: ev.path, diff: ev.diff||''}); }
       }
       else if(ev.type==='message'){
         if(think){ think.remove(); think=null; }
         if(ev.text) codeAppend('<div class="code-msg">'+mdToHtml(ev.text)+'</div>');
       }
+      else if(ev.type==='applied'){ if(think){ think.remove(); think=null; } renderApplied(ev); }
       else if(ev.type==='edit'){ renderEdit(ev); }
+      else if(ev.type==='summary'){
+        const parts = [];
+        if((ev.files||[]).length) parts.push((ev.files.length===1?'1 fil ändrad: ':ev.files.length+' filer ändrade: ')+ev.files.join(', '));
+        if(ev.commands) parts.push(ev.commands+' kommando'+(ev.commands===1?'':'n')+' kört');
+        if(ev.denied) parts.push(ev.denied+' åtgärd'+(ev.denied===1?'':'er')+' nekad'+(ev.denied===1?'':'e'));
+        if(parts.length) codeAppend('<div class="code-summary">Klart · '+esc(parts.join(' · '))+'</div>');
+        if(ev.files && ev.files.length){ loadTree(); gitStatus(); }
+      }
       else if(ev.type==='error'){ codeAppend('<div class="code-tool">⚠ '+esc(ev.text)+'</div>'); }
     }
   }
@@ -5618,18 +6355,70 @@ document.getElementById('codeModel').addEventListener('change', saveCodeModel);
 const FS_OK = ('showDirectoryPicker' in window);
 let localDir = null, localDirName = '';
 const LOCAL_SKIP = new Set(['.git','__pycache__','node_modules','.venv','venv','.idea','.vscode','dist','build','.mypy_cache']);
-const AGENT_LOCAL_SYS =
-  'Du är en kodassistent (Codex) som arbetar i en projektmapp. Svara på svenska. '
-  + 'Du har läsverktyg. Använd ett verktyg genom att skriva EXAKT en rad som börjar med "TOOL " '
-  + 'följt av verktygsnamn och ett JSON-objekt, och inget annat på den raden:\n'
-  + '  TOOL list_dir {"path": "."}\n'
-  + '  TOOL read_file {"path": "fil.py", "start": 1, "end": 200}\n'
-  + '  TOOL search {"query": "text"}\n'
-  + 'Efter varje verktyg får du resultatet och kan använda fler. När du är klar, skriv ditt svar. '
-  + 'Vill du ÄNDRA/SKAPA filer, föreslå varje fil som ett block med FULLSTÄNDIGT nytt innehåll:\n'
-  + '*** FIL: relativ/sökväg.py\n<hela filens nya innehåll>\n*** SLUT\n'
-  + 'Användaren godkänner varje skrivning – du skriver aldrig själv.';
+function agentLocalSys(){
+  // Samma arbetssätt som serverns agent, men allt sker i webbläsaren mot din mapp.
+  const mode = CODE_MODE_HINTS[cfg.code_mode] ? cfg.code_mode : 'ask';
+  const rule = mode==='full'
+    ? 'Du har fria händer: dina ändringar skrivs direkt utan att användaren tillfrågas.'
+    : (mode==='auto_edit'
+       ? 'Dina filändringar skrivs direkt utan att fråga.'
+       : 'Varje skrivning måste användaren godkänna. Får du NEKAT: gör inte om samma sak.');
+  return 'Du är Codex, en kodagent som arbetar i en projektmapp på användarens dator. '
+    + 'Svara på svenska.\n\n'
+    + 'ARBETSSÄTT: läs och sök i koden först – gissa aldrig hur en fil ser ut. Är uppgiften i '
+    + 'flera steg, lägg upp en plan med TOOL todo. Ändra sedan med edit_file (byt ut en exakt '
+    + 'textbit) eller write_file (ny/liten fil). Sammanfatta kort till slut.\n\n'
+    + 'VERKTYG – skriv EXAKT en rad som börjar med "TOOL " följt av namn och ett JSON-objekt, '
+    + 'och inget annat på den raden:\n'
+    + '  TOOL list_dir {"path": "."}\n'
+    + '  TOOL tree {}\n'
+    + '  TOOL read_file {"path": "fil.py", "start": 1, "end": 200}\n'
+    + '  TOOL search {"query": "text"}\n'
+    + '  TOOL edit_file {"path": "fil.py", "old_text": "exakt text", "new_text": "det den ska bli"}\n'
+    + '  TOOL write_file {"path": "ny.py", "content": "hela filens innehåll"}\n'
+    + '  TOOL todo {"items": ["Läs koden", "Ändra X"]}\n\n'
+    + 'REGLER:\n- ' + rule + '\n'
+    + '- edit_file kräver att old_text finns exakt en gång – ta med omgivande rader.\n'
+    + '- Det finns inga kommandon eller git här (mappen ligger i webbläsaren).\n'
+    + '- När du är klar: skriv svaret som vanlig text utan TOOL-rad.';
+}
 
+/* Fråga om lov i lokalt läge – samma ruta, men svaret stannar i webbläsaren. */
+function needsOkLocal(kind){
+  const mode = CODE_MODE_HINTS[cfg.code_mode] ? cfg.code_mode : 'ask';
+  if(mode==='full') return false;
+  if(mode==='auto_edit' && kind==='edit') return false;
+  return true;
+}
+const localAlways = new Set();
+function askLocal(kind, key, title, detail){
+  if(!needsOkLocal(kind) || localAlways.has(key)) return Promise.resolve(true);
+  return new Promise(resolve=>{
+    const id = 'lask'+(askSeq++);
+    const body = detail ? '<pre class="code-diff">'+diffToHtml(detail)+'</pre>' : '';
+    const node = codeAppend(
+      '<div class="code-ask" id="'+id+'">'
+      + '<div class="ah"><span class="what">🔐 '+esc(title)+'</span>'
+      + '<span class="acts">'
+      + '<button class="btn accent small" data-a="1">Tillåt</button>'
+      + '<button class="btn ghost small" data-a="2">Tillåt alltid</button>'
+      + '<button class="btn ghost small" data-a="0">Neka</button>'
+      + '</span></div>' + body + '</div>');
+    node.scrollIntoView({block:'nearest'});
+    const done = (allow, always)=>{
+      node.classList.add('done');
+      node.querySelector('.ah').insertAdjacentHTML('beforeend',
+        '<span class="state">'+(allow?(always?'✓ Tillåtet (alltid)':'✓ Tillåtet'):'✕ Nekat')+'</span>');
+      if(allow && always) localAlways.add(key);
+      resolve(allow);
+    };
+    node.querySelectorAll('button').forEach(b=>{
+      b.onclick = ()=>done(b.dataset.a!=='0', b.dataset.a==='2');
+    });
+    // Avbryter användaren körningen räknas det som nej.
+    if(codeController) codeController.signal.addEventListener('abort', ()=>done(false,false), {once:true});
+  });
+}
 async function pickLocalDir(){
   if(!FS_OK){ toast('Din webbläsare stödjer inte lokal mapp – använd Chrome/Edge', true); return; }
   try{ localDir = await window.showDirectoryPicker(); }
@@ -5676,10 +6465,53 @@ async function loadLocalTree(){
       || '<div class="hint" style="padding:6px 8px">(tom mapp)</div>';
   }catch(e){ box.innerHTML='<div class="hint" style="padding:6px 8px">Kunde inte läsa mappen.</div>'; }
 }
+const TOOL_NAMES = new Set(['list_dir','tree','read_file','search','edit_file','write_file',
+  'run_command','git_status','git_diff','git_branch','git_commit','todo']);
+/* Läs ett komplett JSON-objekt som börjar vid text[i]==='{' (klarar flera rader). */
+function jsonObjectAt(text, i){
+  if(text[i] !== '{') return [null, i];
+  let depth=0, inStr=false, esc=false;
+  for(let j=i;j<text.length;j++){
+    const ch = text[j];
+    if(inStr){ if(esc) esc=false; else if(ch==='\\') esc=true; else if(ch==='"') inStr=false; continue; }
+    if(ch==='"') inStr=true;
+    else if(ch==='{') depth++;
+    else if(ch==='}'){ depth--; if(depth===0){
+      try{ return [JSON.parse(text.slice(i,j+1)), j+1]; }catch(e){ return [null, j+1]; } } }
+  }
+  return [null, i];
+}
+/* Samma toleranta tolkning som servern: flerrads-JSON, ```-block, "TOOL: namn". */
 function parseToolJs(text){
-  const m = (text||'').match(/^\s*TOOL\s+(\w+)\s+(\{.*\})\s*$/m);
-  if(!m) return null;
-  try{ const a=JSON.parse(m[2]); return (a&&typeof a==='object')?{name:m[1],args:a}:null; }catch(e){ return null; }
+  text = text || '';
+  const re = /(?:^|\n)[ \t>*-]*TOOL[:\s]+([A-Za-z_]\w*)[ \t]*/g;
+  let m;
+  while((m = re.exec(text))){
+    const name = m[1];
+    if(!TOOL_NAMES.has(name)) continue;
+    let k = m.index + m[0].length;
+    while(k<text.length && ' \t\r\n`'.includes(text[k])){
+      if(text.startsWith('```', k)){ k+=3; while(k<text.length && text[k]!=='\n' && text[k]!=='\r') k++; }
+      else k++;
+    }
+    const [args] = jsonObjectAt(text, k);
+    if(args && typeof args==='object') return {name, args};
+    if(name==='git_status' || name==='tree') return {name, args:{}};
+  }
+  let i = text.indexOf('{');
+  while(i>=0){
+    const [obj, nxt] = jsonObjectAt(text, i);
+    if(obj && typeof obj==='object'){
+      const name = obj.tool || obj.name || obj.verktyg;
+      if(TOOL_NAMES.has(name)){
+        const args = (obj.args && typeof obj.args==='object') ? obj.args
+          : Object.fromEntries(Object.entries(obj).filter(([k])=>!['tool','name','verktyg'].includes(k)));
+        return {name, args};
+      }
+    }
+    i = text.indexOf('{', Math.max(nxt, i+1));
+  }
+  return null;
 }
 function parseEditsJs(text){
   const edits=[]; const lines=(text||'').split('\n'); let i=0;
@@ -5700,8 +6532,65 @@ function stripEditsJs(text){
   }
   return out.join('\n').trim();
 }
+/* Enkel rad-diff till förhandsvisning i frågerutan (lokalt läge). */
+function previewDiff(oldText, newText, path){
+  const d = jsLineDiff(oldText||'', newText||'');
+  return d ? ('--- a/'+path+'\n+++ b/'+path+'\n'+d) : ('+++ b/'+path+'\n(för stor för diff)');
+}
 async function execToolLocal(call){
   try{
+    if(call.name==='tree'){
+      const out=[]; await fsWalk(localDir,'',out,8);
+      return 'Filer i mappen:\n'+(out.slice(0,600).join('\n')||'(tom)');
+    }
+    if(call.name==='todo'){
+      let items = call.args.items || call.args.todos || call.args.plan || [];
+      if(typeof items==='string') items = items.split('\n').map(t=>t.replace(/^[-*\s]+/,'').trim()).filter(Boolean);
+      const norm = (items||[]).slice(0,20).map(i=> (i && typeof i==='object')
+        ? {text:String(i.text||i.task||''), done:!!i.done, active:(String(i.status||'').toLowerCase()==='doing')}
+        : {text:String(i), done:false, active:false}).filter(i=>i.text);
+      if(!norm.length) return 'FEL: items saknas (en lista med punkter)';
+      renderPlan(norm);
+      return 'Planen är noterad och visas för användaren.';
+    }
+    if(call.name==='write_file'){
+      const path=(call.args.path||'').trim();
+      const content=call.args.content;
+      if(!path) return 'FEL: path saknas';
+      if(content==null) return 'FEL: content saknas';
+      let cur=''; try{ cur = await fsRead(path); }catch(e){}
+      const ok = await askLocal('edit', 'write:'+path, 'Skriva filen '+path, previewDiff(cur, content, path));
+      if(!ok) return 'NEKAT: användaren sa nej till att skriva '+path+'. Gör inte om samma sak.';
+      await fsWrite(path, String(content));
+      renderApplied({path, diff: previewDiff(cur, content, path), created: cur==='',
+                     local:true, before: cur});
+      loadLocalTree();
+      return 'OK: skrev '+path+' ('+String(content).length+' tecken).';
+    }
+    if(call.name==='edit_file'){
+      const path=(call.args.path||'').trim();
+      const oldText = call.args.old_text!=null ? call.args.old_text : call.args.old;
+      const newText = call.args.new_text!=null ? call.args.new_text : call.args.new;
+      if(!path) return 'FEL: path saknas';
+      if(!oldText) return 'FEL: old_text saknas – ange den exakta text som ska bytas ut.';
+      let cur; try{ cur = await fsRead(path); }catch(e){ return 'FEL: ingen fil '+path; }
+      const hits = cur.split(oldText).length-1;
+      if(hits!==1) return 'FEL: texten finns '+hits+' gånger i '+path
+        + '. Den måste finnas exakt en gång – läs filen och ta med fler omgivande rader.';
+      const updated = cur.replace(oldText, newText==null?'':newText);
+      const ok = await askLocal('edit', 'edit:'+path, 'Ändra i filen '+path, previewDiff(cur, updated, path));
+      if(!ok) return 'NEKAT: användaren sa nej till att ändra '+path+'. Gör inte om samma sak.';
+      await fsWrite(path, updated);
+      renderApplied({path, diff: previewDiff(cur, updated, path), created:false,
+                     local:true, before: cur});
+      loadLocalTree();
+      return 'OK: ändrade '+path+'.';
+    }
+    if(call.name==='run_command' || call.name==='git_status' || call.name==='git_diff'
+       || call.name==='git_branch' || call.name==='git_commit'){
+      return 'FEL: '+call.name+' finns inte i lokalt mappläge (mappen ligger i webbläsaren, '
+        + 'inte på servern). Välj en arbetsyta på servern om du behöver köra kommandon eller git.';
+    }
     if(call.name==='list_dir'){
       const out=[]; await fsWalk(await fsSubdir(call.args.path||'.'), '', out, 6);
       return 'Innehåll:\n'+(out.slice(0,300).join('\n')||'(tom)');
@@ -5727,9 +6616,10 @@ async function execToolLocal(call){
   }catch(e){ return 'FEL: '+(e.message||e); }
 }
 async function runAgentLocal(model){
-  let convo = [{role:'system', content: AGENT_LOCAL_SYS}].concat(codeMessages);
+  let convo = [{role:'system', content: agentLocalSys()}].concat(codeMessages);
   let assistantFull='';
-  for(let step=0; step<12; step++){
+  const maxSteps = Math.max(1, Math.min(100, cfg.code_steps || 25));
+  for(let step=0; step<maxSteps; step++){
     if(codeController.signal.aborted) break;
     let think=null, thinkText='';
     const full = await streamModel(convo, d=>{
@@ -5738,7 +6628,7 @@ async function runAgentLocal(model){
     });
     assistantFull = full;
     const call = parseToolJs(full);
-    if(call && step<11){
+    if(call && step<maxSteps-1){
       if(think) think.remove();
       const res = await execToolLocal(call);
       codeAppend('<div class="code-tool">🔧 <b>'+esc(call.name)+'</b> '+esc(JSON.stringify(call.args))
@@ -6270,6 +7160,9 @@ class Handler(BaseHTTPRequestHandler):
                     "server_os": ("Windows" if os.name == "nt"
                                   else ("macOS" if sys.platform == "darwin" else "Linux")),
                     "code_run": code_run_enabled(),
+                    "code_mode": code_mode(),
+                    "code_steps": code_max_steps(),
+                    "train_menu": train_menu_on(),
                     "hf": hf_enabled(),
                     "hf_auto": hf_auto_enabled(),
                     "train": train_toggle_on(),
@@ -6282,7 +7175,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/agent/tree":
                 if not code_enabled():
                     return self._send_json({"root": None, "files": []})
-                return self._send_json({"root": code_workspace_root(), "files": ws_tree()})
+                return self._send_json({"root": code_workspace_root(), "files": ws_tree(),
+                                        "undo": undo_available(), "mode": code_mode()})
             if path == "/api/agent/file":
                 if not code_enabled():
                     return self._send_json({"error": "Kodassistenten är av"}, 400)
@@ -6544,8 +7438,31 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/agent/run":
             if not code_enabled():
                 return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
-            ok, out = run_command(data.get("cmd", ""))
+            # Kör användaren kommandot själv i rutan är det hen som godkänner det:
+            # i "fria händer" hoppar vi över allowlisten, annars gäller listan.
+            ok, out = run_command(data.get("cmd", ""), force=(code_mode() == "full"))
             return self._send_json({"ok": ok, "output": out})
+
+        if path == "/api/agent/permission":
+            # Svar på en fråga från en pågående körning ("Tillåt" / "Neka").
+            aid = str(data.get("id") or "")
+            ok = approval_answer(aid, bool(data.get("allow")), bool(data.get("always")))
+            return self._send_json({"ok": ok}, 200 if ok else 404)
+
+        if path == "/api/agent/undo":
+            if not code_enabled():
+                return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
+            ok, msg = undo_file(data.get("path", ""))
+            return self._send_json({"ok": ok, "message": msg}, 200 if ok else 400)
+
+        if path == "/api/agent/mode":
+            # Byt behörighetsläge direkt från Codex-vyn (samma inställning som i ⚙).
+            mode = str(data.get("mode") or "").lower()
+            if mode not in CODE_MODES:
+                return self._send_json({"ok": False, "error": "Okänt läge"}, 400)
+            settings_set({"code_permission": mode})
+            return self._send_json({"ok": True, "mode": mode,
+                                    "label": CODE_MODE_LABELS[mode]})
 
         if path == "/api/github/fetch":
             # Hämta ett repo och gör det till arbetsyta (kräver bara att Codex är på –
@@ -7008,11 +7925,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- Kodassistent: agent-loop (läs-verktyg + föreslå diffar) ----------
     def _run_agent(self, model, messages, base):
-        """Kör agent-loopen: modellen utforskar med läsverktyg och föreslår sedan
-        filändringar som diffar. Strömmar händelser som NDJSON till webbläsaren.
-        Utan arbetsyta körs ett 'skisslage': ingen disk/verktyg – bara kod-chatt."""
+        """Kör agent-loopen: modellen utforskar med verktyg, ändrar filer och verifierar.
+        Strömmar händelser som NDJSON till webbläsaren.
+
+        Behörighetsläget (⚙ Codex) styr hur mycket som sker utan att fråga:
+        "ask" frågar om varje skrivning/kommando/git, "auto_edit" skriver filer själv,
+        "full" gör allt direkt. Utan arbetsyta körs ett "skisslage": ingen disk, ingen
+        verktygsåtkomst – bara kod-chatt."""
         scratch = code_workspace_root() is None
-        sys_prompt = AGENT_SYSTEM_SCRATCH if scratch else AGENT_SYSTEM
+        mode = code_mode()
+        sys_prompt = AGENT_SYSTEM_SCRATCH if scratch else agent_system_prompt(mode)
         convo = [{"role": "system", "content": sys_prompt}] + list(messages)
         try:
             self.send_response(200)
@@ -7055,14 +7977,20 @@ class Handler(BaseHTTPRequestHandler):
             self._emit({"type": "done"})
             return
 
+        ctx = AgentRun(self._emit, mode)
+        max_steps = code_max_steps()
+        self._emit({"type": "start", "mode": mode, "mode_label": CODE_MODE_LABELS[mode],
+                    "steps": max_steps})
+        finished = False
         try:
-            for step in range(CODE_MAX_STEPS):
-                self._emit({"type": "step", "n": step + 1})
+            for step in range(max_steps):
+                self._emit({"type": "step", "n": step + 1, "of": max_steps})
                 full = ""
                 try:
                     up = self._open_chat_stream(convo, model, None, base)
                 except Exception as e:
                     self._emit({"type": "error", "text": "Kunde inte nå modellen: %s" % e})
+                    finished = True      # avbrutet av ett fel, inte av stegtaket
                     break
                 try:
                     for raw in up:
@@ -7083,32 +8011,61 @@ class Handler(BaseHTTPRequestHandler):
                         pass
 
                 call = parse_tool_call(full)
-                if call and step < CODE_MAX_STEPS - 1:
-                    result, meta = agent_tool_exec(call["name"], call["args"])
+                if call and step < max_steps - 1:
+                    result, meta = agent_tool_exec(call["name"], call["args"], ctx)
                     ev = {"type": "tool", "name": call["name"], "args": call["args"],
                           "summary": meta.get("summary", "")}
-                    if meta.get("detail") is not None:
-                        ev["detail"] = meta["detail"]      # t.ex. kommandots utdata
+                    for key in ("detail", "diff", "path", "todo", "denied", "wrote", "ok"):
+                        if meta.get(key) is not None:
+                            ev[key] = meta[key]
                     self._emit(ev)
                     convo.append({"role": "assistant", "content": full})
                     convo.append({"role": "user",
                                   "content": "VERKTYGSRESULTAT (%s):\n%s" % (call["name"], result)})
                     continue
 
-                # Slutligt svar: förklaring + föreslagna filändringar
+                if call:
+                    # Vi tog slut på steg mitt i arbetet – säg det rakt ut i stället för
+                    # att låtsas att det halvfärdiga verktygsanropet var ett svar.
+                    break
+
+                # Slutligt svar. FIL-block stöds fortfarande – små modeller föredrar dem
+                # framför verktygen. I lägen där ändringar inte kräver lov skrivs de direkt,
+                # annars visas de som förslag att godkänna.
                 for ed in parse_edits(full):
-                    self._emit({"type": "edit", "path": ed["path"], "content": ed["content"],
-                                "diff": ws_diff(ws_current(ed["path"]), ed["content"], ed["path"])})
+                    self._emit(self._agent_edit_event(ed, ctx))
                 msg = strip_edits(full)
                 if msg:
                     self._emit({"type": "message", "text": msg})
+                finished = True
                 break
-            else:
+            if not finished:
                 self._emit({"type": "message",
-                            "text": "(nådde max antal verktygssteg – ställ en mer avgränsad fråga)"})
+                            "text": "(Jag nådde taket på %d verktygssteg och hann inte bli klar. "
+                                    "Be om ett mindre steg i taget, eller höj taket under "
+                                    "⚙ Inställningar → Codex.)" % max_steps})
         except (BrokenPipeError, ConnectionResetError):
             return
+        except Exception as e:
+            self._emit({"type": "error", "text": "Fel i agenten: %s" % e})
+        self._emit({"type": "summary", "files": sorted(set(ctx.writes)),
+                    "commands": ctx.commands, "denied": ctx.denied, "mode": ctx.mode})
         self._emit({"type": "done"})
+
+    def _agent_edit_event(self, ed, ctx):
+        """Ett FIL-block i slutsvaret: skriv direkt om läget tillåter det, annars förslag."""
+        base = {"type": "edit", "path": ed["path"], "content": ed["content"]}
+        try:
+            before = ws_current(ed["path"])
+            base["diff"] = ws_diff(before, ed["content"], ed["path"])
+            if not ctx.needs_ok("edit"):
+                r = ws_write_file(ed["path"], ed["content"])
+                ctx.writes.append(r["path"])
+                base.update({"type": "applied", "path": r["path"], "diff": r["diff"],
+                             "created": r["created"]})
+        except Exception as e:
+            base["error"] = str(e)
+        return base
 
     def _proxy_stream(self, upstream_path, payload, base=None):
         """POSTa till en Ollama-backend och strömma NDJSON-svaret rad för rad till webbläsaren."""
@@ -7235,9 +8192,10 @@ def main():
         gh = "GitHub-token satt" if setting_str("github_token") else "ingen GitHub-token"
         run = ("kommandokörning PÅ (%d tillåtna)" % len(code_run_allowlist())) \
             if code_run_enabled() else "kommandokörning AV"
-        print(" Codex:          PÅ (arbetsyta: %s · git %s · %s · %s)"
+        print(" Codex:          PÅ (arbetsyta: %s · git %s · %s · %s · behörighet: %s)"
               % (code_workspace_root(),
-                 "finns" if git_available() else "saknas", gh, run))
+                 "finns" if git_available() else "saknas", gh, run,
+                 CODE_MODE_LABELS[code_mode()]))
     elif setting_bool("code_enabled"):
         print(" Codex:          AV (påslagen men arbetsytan saknas/går inte att läsa)")
     else:
