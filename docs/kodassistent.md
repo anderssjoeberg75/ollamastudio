@@ -6,6 +6,79 @@
 > får göra på egen hand styr du med **Behörighet**: fråga om lov varje steg, skriva filer själv,
 > eller fria händer. Varje skrivning går att ångra.
 
+## Var koden bor
+
+`ollama_web.py` var 8 543 rader och 401 kB. Den är nu en startfil på 72 rader; koden
+ligger uppdelad per ansvarsområde:
+
+```
+ollama_web.py            startfil – kör appen och re-exporterar allt
+studio/
+  config.py              inställningar, miljövariabler, alla getters
+  backends.py            en eller flera Ollama-instanser
+  sysinfo.py             CPU, RAM och GPU
+  websearch.py           DuckDuckGo-sök, sidhämtning, nu-kontext
+  memory.py              Mem0 (delat långtidsminne)
+  models.py              modellkatalog och biblioteks-sök
+  training.py            AI-träning (soup_train.py)
+  selfupdate.py          "Uppdatera"-knappen (git pull + omstart)
+  huggingface_bridge.py  Hugging Face-tillägget
+  codex/
+    workspace.py         path-jail, läs/skriv/sök i projektmappen, ångra
+    permissions.py       godkännanden, loop-vakt, en körnings tillstånd
+    context.py           kontextbudget: kapa och beskär så fönstret räcker
+    protocol.py          systemprompt, tolkning av TOOL-rader, verktygen
+    commands.py          kommandokörning (allowlist, ingen shell)
+    gitops.py            git mot arbetsytan
+    github.py            repo-listning, hämta hem, pull requests
+  web/
+    server.py            routingtabellen (varje /api/...-väg) + main()
+    base.py              åtkomst, JSON-svar, strömning uppströms
+    page.py              sidan och den publika inställningsvyn
+    routes_models.py     modeller: lista, vad som körs, hämta hem
+    routes_chat.py       chatt med webbsök och minne
+    routes_codex.py      Codex agent-loop
+    routes_train.py      AI-träning
+    assets/page.html     sidans stomme
+    assets/styles.css    all CSS
+    assets/app.js        all JavaScript
+```
+
+`Handler` byggs av rutt-modulerna som mixins:
+
+```python
+class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
+```
+
+Routingen står kvar samlad i `server.py` – `do_GET` och `do_POST` är kartan över hela
+API:t, och det är en fördel att kunna läsa den på ett ställe. Själva arbetet ligger i
+den rutt-modul som äger området.
+
+Webbläsaren laddar fortfarande inga externa filer – `build_page()` bakar in CSS och JS
+i sidan vid start. Sidan som skickas ut är tecken för tecken densamma som före
+uppdelningen (kontrollerat med sha256).
+
+`ollama_web.py` är kvar som både startfil och det namn resten känner till: allt som fanns
+där förut går fortfarande att nå som `ollama_web.X`, så `python3 ollama_web.py`, `run.sh`,
+systemd-tjänsten och självuppdateringen fungerar oförändrat.
+
+**Ett undantag: monkeypatchning.** Byter man ut en funktion ska det göras där den *slås upp*,
+inte på `ollama_web`:
+
+| Byta ut | Patcha i |
+| --- | --- |
+| `DB_PATH`, `APP_DIR` | `studio.config` |
+| `PRIMARY`, `BACKENDS` | `studio.backends` |
+| `nvidia_gpus` | `studio.sysinfo` |
+| `_ddg_fetch`, `url_is_public` | `studio.websearch` |
+| `GITHUB_API` | `studio.codex.github` |
+| `_authed_push_url` | `studio.codex.gitops` |
+| något som Handler anropar | `studio.web.server` |
+
+`studio/config.py` importerar avsiktligt inget från de andra modulerna: den ligger underst
+så att inget blir cirkulärt. Den enda kopplingen uppåt – `settings_set()` måste tömma
+ångra-stacken när arbetsytan byts – görs med en lokal import.
+
 ## Behörighet – hur långt koppel agenten får
 
 Väljaren **Behörighet** ligger överst i Codex-vyn (och under ⚙ Inställningar → Codex).
@@ -79,8 +152,29 @@ verktygsanrop. Båda värdena ändras under ⚙ Inställningar → Codex.
 filer fungerar**. Texten i `old_text` måste finnas **exakt en gång** – annars får modellen ett
 fel som säger åt den att ta med fler omgivande rader.
 
-Agenten får som mest **25 verktygssteg** per körning (ändras under ⚙ Inställningar, 1–100).
-Räcker de inte säger den det rakt ut i stället för att låtsas vara klar.
+## Steg – obegränsat som standard
+
+Agenten har **inget tak på antal verktygssteg**. Ett fast tak stoppade den mitt i riktigt
+arbete; nu håller den på tills den är klar. Det som skyddar i stället:
+
+- **Loop-detektion.** Kör modellen exakt samma verktygsanrop flera gånger i rad får den först
+  en tillsägelse om att byta spår, och avbryts sedan. En modell som gör framsteg varierar sina
+  anrop; en som fastnat läser samma fil i evighet.
+- **■ Stoppa** i knappen, som under körningen visar vilket steg den är på.
+
+Vill du ändå ha ett hårt tak sätter du en siffra (1–1000) under ⚙ Inställningar → Codex.
+`0` betyder obegränsat.
+
+## Stora filer
+
+`read_file` och `search` läser **radvis** och håller aldrig hela filen i minnet, så filstorlek
+spelar ingen roll. `edit_file`/`write_file` måste hålla innehållet i minnet för att byta ut en
+textbit och har ett tak på **5 MB**.
+
+> Tidigare låg taket på 200 kB för allt. Det gjorde att Codex varken kunde läsa, söka i eller
+> ändra `ollama_web.py` (401 kB) – projektets egen huvudfil. Värst var att `search` hoppade
+> över för stora filer **utan att säga något**, så agenten drog slutsatsen att koden inte fanns.
+> Sökningen rapporterar numera vad den hoppat över.
 
 Modeller som struntar i verktygen och i stället skriver hela filer som `*** FIL: … *** SLUT`
 funkar fortfarande: i fråge-läget blir de förslag att godkänna, i de andra lägena skrivs de direkt.

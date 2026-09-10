@@ -21,6 +21,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 os.environ.setdefault("OLLAMA_STUDIO_DB", os.path.join(tempfile.gettempdir(), "os_test_import.db"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ollama_web as w  # noqa: E402
+# Koden bor i studio/ – DB_PATH och APP_DIR ägs av studio.config, så det är DÄR
+# de ska patchas. ollama_web re-exporterar dem, men den kopian läses inte av
+# funktionerna själva.
+import studio.config as cfg  # noqa: E402
+import studio.codex.github as gh_mod  # noqa: E402
+import studio.codex.gitops as git_mod  # noqa: E402
+import studio.backends as be_mod  # noqa: E402
+import studio.sysinfo as sys_mod  # noqa: E402
+import studio.websearch as ws_mod  # noqa: E402
+import studio.models as models_mod  # noqa: E402
 
 
 class TestHuggingFaceWiring(unittest.TestCase):
@@ -194,9 +204,9 @@ class TestWebSearchParsing(unittest.TestCase):
 
     def test_gpu_cache(self):
         # Två snabba anrop ska ge SAMMA cachade objekt (ingen ny subprocess) – board #11.
-        w._GPU_CACHE = None
-        a = w.nvidia_gpus()
-        b = w.nvidia_gpus()
+        sys_mod._GPU_CACHE = None
+        a = sys_mod.nvidia_gpus()
+        b = sys_mod.nvidia_gpus()
         self.assertIs(a, b)
 
 
@@ -221,8 +231,8 @@ class _DBTest(unittest.TestCase):
     """Bas: färsk temp-databas per test (isolerad)."""
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self._old_db = w.DB_PATH
-        w.DB_PATH = os.path.join(self.tmp, "t.db")
+        self._old_db = cfg.DB_PATH
+        cfg.DB_PATH = w.DB_PATH = os.path.join(self.tmp, "t.db")
         # nollställ ev. env som annars kan störa default-assertions
         for k in ("OLLAMA_STUDIO_WEBSEARCH", "OLLAMA_STUDIO_MEM0", "OLLAMA_STUDIO_CODE",
                   "OLLAMA_STUDIO_CODE_RUN", "OLLAMA_STUDIO_WORKSPACE", "MEM0_API_KEY",
@@ -233,7 +243,7 @@ class _DBTest(unittest.TestCase):
         w.db_init()
 
     def tearDown(self):
-        w.DB_PATH = self._old_db
+        cfg.DB_PATH = w.DB_PATH = self._old_db
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
@@ -303,6 +313,9 @@ class TestCodeAssistant(_DBTest):
         with open(os.path.join(self.ws, "app.py"), "w", encoding="utf-8") as f:
             f.write("def hej():\n    return 1  # TODO\n")
         w.settings_set({"code_enabled": True, "code_workspace": self.ws})
+
+    def _p(self, name):
+        return os.path.join(self.ws, name)
 
     def test_jail(self):
         self.assertTrue(w.code_enabled())
@@ -639,6 +652,69 @@ class TestCodeAssistant(_DBTest):
         w.settings_set({"code_ctx": "131072"})                 # stort fönster
         self.assertEqual(w.code_result_cap(), w.CODE_TOOL_RESULT_CAP)
 
+    def test_big_files_are_readable_searchable_and_editable(self):
+        # Gamla taket på 200 kB gjorde att Codex inte kunde röra projektets egen
+        # huvudfil – och search hoppade över den UTAN att säga något, så agenten
+        # drog slutsatsen att koden inte fanns.
+        big = "\n".join("rad %d %s" % (i, "q" * 200) for i in range(1, 3000))
+        big += "\nNÅLEN I HÖSTACKEN\n"
+        w.ws_write_file("jattefil.py", big)
+        self.assertGreater(os.path.getsize(self._p("jattefil.py")), 500000)
+
+        r = w.ws_read_file("jattefil.py", start=1)
+        self.assertEqual(r["start"], 1)
+        self.assertEqual(r["total"], 3000)
+        self.assertTrue(r["more"])
+        hits = w.ws_search("NÅLEN")["hits"]
+        self.assertEqual([h["path"] for h in hits], ["jattefil.py"])
+        # …och den går att ändra i.
+        w.ws_edit_file("jattefil.py", "NÅLEN I HÖSTACKEN", "HITTAD")
+        self.assertEqual(w.ws_search("NÅLEN")["hits"], [])
+
+    def test_read_file_streams_a_window_regardless_of_file_size(self):
+        # Fönstret ska kosta lika lite oavsett hur stor filen är – annars går det
+        # inte att arbeta i ett riktigt projekt.
+        big = "\n".join("rad %d" % i for i in range(1, 20001))
+        w.ws_write_file("enorm.txt", big)
+        r = w.ws_read_file("enorm.txt", start=19990)
+        self.assertEqual(r["start"], 19990)
+        self.assertEqual(r["total"], 20000)
+        self.assertFalse(r["more"])
+        self.assertIn("20000\trad 20000", r["content"])
+        self.assertNotIn("rad 1\n", r["content"])          # bara fönstret
+        self.assertLess(len(r["content"]), 2000)
+
+    def test_search_reports_what_it_skipped(self):
+        r = w.ws_search("nånting")
+        self.assertEqual(r["skipped"], [])                  # inget hoppas över tyst
+
+    def test_steps_are_unlimited_by_default(self):
+        self.assertEqual(w.code_max_steps(), 0)             # 0 = obegränsat
+        w.settings_set({"code_max_steps": "40"})
+        self.assertEqual(w.code_max_steps(), 40)
+        w.settings_set({"code_max_steps": "-5"})
+        self.assertEqual(w.code_max_steps(), 0)             # negativt = obegränsat
+        w.settings_set({"code_max_steps": "99999"})
+        self.assertEqual(w.code_max_steps(), 1000)          # men inte oändligt i praktiken
+        w.settings_set({"code_max_steps": "skräp"})
+        self.assertEqual(w.code_max_steps(), 0)
+
+    def test_repeat_guard_warns_then_stops(self):
+        # Utan steg-tak är det HÄR som hindrar en fastnad modell från att snurra.
+        g = w.RepeatGuard()
+        args = {"path": "app.py"}
+        self.assertEqual(g.see("read_file", args), "ok")
+        self.assertEqual(g.see("read_file", args), "ok")
+        self.assertEqual(g.see("read_file", dict(args)), "warn")   # samma innehåll
+        self.assertEqual(g.see("read_file", args), "warn")
+        self.assertEqual(g.see("read_file", args), "stop")
+        # Byter modellen spår nollställs räknaren – framsteg ska aldrig straffas.
+        self.assertEqual(g.see("read_file", {"path": "annan.py"}), "ok")
+        self.assertEqual(g.see("read_file", {"path": "annan.py"}), "ok")
+        self.assertEqual(g.see("search", {"query": "x"}), "ok")
+        # Argument som inte går att serialisera får inte spräcka vakten.
+        self.assertEqual(g.see("x", {"o": object()}), "ok")
+
     def test_run_allowlist(self):
         w.settings_set({"code_run_enabled": True,
                         "code_run_allowlist": "python -c\npytest"})
@@ -692,10 +768,10 @@ class TestCodexAgentLoop(_DBTest):
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._ScriptedOllama)
         threading.Thread(target=self.ollama.serve_forever,
                          kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_primary, self._old_backends = w.PRIMARY, w.BACKENDS
-        w.PRIMARY = {"label": "test", "gpu": None,
+        self._old_primary, self._old_backends = be_mod.PRIMARY, be_mod.BACKENDS
+        be_mod.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
-        w.BACKENDS = [w.PRIMARY]
+        be_mod.BACKENDS = [be_mod.PRIMARY]
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
         threading.Thread(target=self.studio.serve_forever,
                          kwargs={"poll_interval": 0.02}, daemon=True).start()
@@ -706,7 +782,7 @@ class TestCodexAgentLoop(_DBTest):
         for srv in (self.studio, self.ollama):
             srv.shutdown()
             srv.server_close()
-        w.PRIMARY, w.BACKENDS = self._old_primary, self._old_backends
+        be_mod.PRIMARY, be_mod.BACKENDS = self._old_primary, self._old_backends
         super().tearDown()
 
     def _post(self, path, body):
@@ -870,6 +946,47 @@ class TestCodexAgentLoop(_DBTest):
         last = TestCodexAgentLoop.seen[-1]["messages"]
         self.assertTrue(any("beskuret" in m["content"] for m in last))
 
+    def test_a_long_run_is_not_cut_off_at_the_old_limit(self):
+        # Förut stannade agenten efter 25 varv mitt i arbetet. Nu håller den på
+        # tills den är klar.
+        w.settings_set({"code_permission": "full", "code_max_steps": "0"})
+        TestCodexAgentLoop.script = (
+            ['TOOL read_file {"path": "app.py", "start": %d}' % (n + 1) for n in range(40)]
+            + ["Nu är jag klar."])
+        events = self._run("jobba länge")
+        steps = [e for e in events if e["type"] == "step"]
+        self.assertEqual(len(steps), 41)                 # 40 verktygsvarv + slutsvaret
+        self.assertEqual(steps[0]["of"], 0)              # 0 = obegränsat
+        self.assertTrue(any("Nu är jag klar" in (e.get("text") or "")
+                            for e in events if e["type"] == "message"))
+        # Ingen text om något stegtak – det finns inget att nå.
+        self.assertFalse(any("taket på" in (e.get("text") or "") for e in events))
+        self.assertEqual([e for e in events if e["type"] == "summary"][0]["steps"], 41)
+
+    def test_a_stuck_model_is_warned_and_then_stopped(self):
+        # Obegränsat får inte betyda "snurrar för evigt": identiska anrop i rad
+        # varnas först och avbryts sedan.
+        w.settings_set({"code_permission": "full", "code_max_steps": "0"})
+        TestCodexAgentLoop.script = ['TOOL read_file {"path": "app.py"}'] * 30
+        events = self._run("fastna")
+        tools = [e for e in events if e["type"] == "tool"]
+        self.assertTrue(any("byta spår" in (t.get("summary") or "") for t in tools),
+                        [t.get("summary") for t in tools])
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertTrue(any("om och om igen" in e["text"] for e in errors), errors)
+        # Avbröt långt före de 30 svaren i manuset – snurrade alltså inte.
+        self.assertLess(len([e for e in events if e["type"] == "step"]), 10)
+        self.assertEqual([e["type"] for e in events][-1], "done")
+
+    def test_an_explicit_limit_still_works_for_those_who_want_one(self):
+        w.settings_set({"code_permission": "full", "code_max_steps": "3"})
+        TestCodexAgentLoop.script = [
+            'TOOL read_file {"path": "app.py", "start": %d}' % (n + 1) for n in range(10)]
+        events = self._run("jobba")
+        self.assertEqual(len([e for e in events if e["type"] == "step"]), 3)
+        self.assertTrue(any("taket på 3 verktygssteg" in (e.get("text") or "")
+                            for e in events if e["type"] == "message"))
+
     def test_mode_endpoint_switches_permission(self):
         self.assertEqual(w.code_mode(), "ask")
         d = self._post("/api/agent/mode", {"mode": "full"})
@@ -923,8 +1040,8 @@ class TestPullFallback(_DBTest):
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._FakeOllama)
         threading.Thread(target=self.ollama.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_primary = w.PRIMARY
-        w.PRIMARY = {"label": "test", "gpu": None,
+        self._old_primary = be_mod.PRIMARY
+        be_mod.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
         threading.Thread(target=self.studio.serve_forever,
@@ -941,7 +1058,7 @@ class TestPullFallback(_DBTest):
         for srv in (self.studio, self.ollama):
             srv.shutdown()
             srv.server_close()
-        w.PRIMARY = self._old_primary
+        be_mod.PRIMARY = self._old_primary
         super().tearDown()
 
     def _pull(self, name):
@@ -1041,15 +1158,15 @@ class TestPageReading(unittest.TestCase):
         threading.Thread(target=self.srv.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
-        self._old_check = w.url_is_public
+        self._old_check = ws_mod.url_is_public
 
     def tearDown(self):
-        w.url_is_public = self._old_check
+        ws_mod.url_is_public = self._old_check
         self.srv.shutdown()
         self.srv.server_close()
 
     def _allow_local(self):
-        w.url_is_public = lambda url: url.startswith("http")
+        ws_mod.url_is_public = lambda url: url.startswith("http")
 
     # ---- textutvinning ----
     def test_html_to_text(self):
@@ -1175,8 +1292,8 @@ class TestExcerptAndCache(unittest.TestCase):
 
     def test_search_is_cached(self):
         calls = []
-        real = w._ddg_fetch
-        w._ddg_fetch = lambda url, timeout: calls.append(url) or (
+        real = ws_mod._ddg_fetch
+        ws_mod._ddg_fetch = lambda url, timeout: calls.append(url) or (
             '<a class="result__a" href="https://x.se">Titel</a>')
         try:
             first = w.web_search("vuelta 2026")
@@ -1184,7 +1301,7 @@ class TestExcerptAndCache(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(len(calls), 1)               # bara ett nätanrop
         finally:
-            w._ddg_fetch = real
+            ws_mod._ddg_fetch = real
 
     def test_expired_cache_is_refetched(self):
         w._cache_put(w._search_cache, "x", [{"title": "gammal"}])
@@ -1286,11 +1403,11 @@ class TestChatClock(_DBTest):
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._EchoOllama)
         threading.Thread(target=self.ollama.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_primary = w.PRIMARY
-        w.PRIMARY = {"label": "test", "gpu": None,
+        self._old_primary = be_mod.PRIMARY
+        be_mod.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
-        self._old_backends = w.BACKENDS
-        w.BACKENDS = [w.PRIMARY]
+        self._old_backends = be_mod.BACKENDS
+        be_mod.BACKENDS = [be_mod.PRIMARY]
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
         threading.Thread(target=self.studio.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
@@ -1301,7 +1418,7 @@ class TestChatClock(_DBTest):
         for srv in (self.studio, self.ollama):
             srv.shutdown()
             srv.server_close()
-        w.PRIMARY, w.BACKENDS = self._old_primary, self._old_backends
+        be_mod.PRIMARY, be_mod.BACKENDS = self._old_primary, self._old_backends
         super().tearDown()
 
     def _chat(self, **extra):
@@ -1378,8 +1495,8 @@ class TestModelSearch(_DBTest):
         self.assertTrue(w.catalog_matches("embeddings"))
 
     def test_model_search_merges_sources_without_duplicates(self):
-        old_lib, old_hf = w.ollama_library_search, w.HF.search_models
-        w.ollama_library_search = lambda q, limit=20, timeout=8: (
+        old_lib, old_hf = models_mod.ollama_library_search, w.HF.search_models
+        models_mod.ollama_library_search = lambda q, limit=20, timeout=8: (
             w.parse_ollama_library(self.LIBRARY_HTML, limit)
             + [{"pull": "qwen2.5", "name": "qwen2.5", "desc": "", "sizes": [],
                 "source": "ollama", "url": ""}])          # dubblett mot katalogen
@@ -1394,11 +1511,12 @@ class TestModelSearch(_DBTest):
             self.assertEqual(result["hf"][0]["pull"], "hf.co/bartowski/Qwen3-8B-GGUF")
             self.assertEqual(result["hf"][0]["source"], "hf")
         finally:
-            w.ollama_library_search, w.HF.search_models = old_lib, old_hf
+            models_mod.ollama_library_search, w.HF.search_models = old_lib, old_hf
 
     def test_model_search_survives_dead_network(self):
-        old_lib, old_hf = w.ollama_library_search, w.HF.search_models
-        w.ollama_library_search = lambda *a, **k: []        # som vid nätverksfel
+        old_lib, old_hf = models_mod.ollama_library_search, w.HF.search_models
+        # Patcha i modulen som äger namnet – model_search slår upp det där.
+        models_mod.ollama_library_search = lambda *a, **k: []   # som vid nätverksfel
         def boom(*a, **k):
             raise OSError("nätet nere")
         w.HF.search_models = boom
@@ -1408,7 +1526,7 @@ class TestModelSearch(_DBTest):
                              ["qwen2.5:3b", "qwen2.5"])     # inbyggda katalogen räcker
             self.assertEqual(result["hf"], [])
         finally:
-            w.ollama_library_search, w.HF.search_models = old_lib, old_hf
+            models_mod.ollama_library_search, w.HF.search_models = old_lib, old_hf
 
     def test_empty_query(self):
         self.assertEqual(w.model_search("  "), {"query": "", "library": [], "hf": []})
@@ -1476,13 +1594,13 @@ class TestTraining(_DBTest):
 
     def test_gpu_hint_unpacks_tuple(self):
         # nvidia_gpus() returnerar (lista, fel) – hinten får inte snubbla på det.
-        old = w.nvidia_gpus
-        w.nvidia_gpus = lambda: ([{"name": "RTX 4060", "mem_total_mb": 8188}], None)
+        old = sys_mod.nvidia_gpus
+        sys_mod.nvidia_gpus = lambda: ([{"name": "RTX 4060", "mem_total_mb": 8188}], None)
         try:
             self.assertEqual(w.train_gpu_hint(), (8188, "RTX 4060"))
             self.assertEqual(w.train_status()["suggest_profile"], "8gb")
         finally:
-            w.nvidia_gpus = old
+            sys_mod.nvidia_gpus = old
 
     # ---- jobbkörningen ----
     def test_job_parses_progress_and_finishes(self):
@@ -1607,9 +1725,9 @@ class TestGithubRepoFetch(_DBTest):
         self.api = ThreadingHTTPServer(("127.0.0.1", 0), self._Api)
         threading.Thread(target=self.api.serve_forever,
                          kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_api, self._old_auth = w.GITHUB_API, w._authed_push_url
-        w.GITHUB_API = "http://127.0.0.1:%d" % self.api.server_address[1]
-        w._repos_cache.update({"at": 0, "items": []})
+        self._old_api, self._old_auth = gh_mod.GITHUB_API, git_mod._authed_push_url
+        gh_mod.GITHUB_API = "http://127.0.0.1:%d" % self.api.server_address[1]
+        gh_mod._repos_cache.update({"at": 0, "items": []})
         # Ett riktigt litet git-repo att klona ifrån (i stället för github.com)
         self.origin = os.path.join(self.tmp, "fjärr")
         os.makedirs(self.origin)
@@ -1618,13 +1736,13 @@ class TestGithubRepoFetch(_DBTest):
             fh.write("# test\n")
         self._git(["add", "-A"])
         self._git(["-c", "user.email=t@t", "-c", "user.name=T", "commit", "-qm", "start"])
-        w._authed_push_url = lambda owner, repo, token: self.origin
+        git_mod._authed_push_url = lambda owner, repo, token: self.origin
         w.settings_set({"code_enabled": True, "github_token": "ghp_test",
                         "code_repos_dir": os.path.join(self.tmp, "hämtade")})
 
     def tearDown(self):
-        w.GITHUB_API, w._authed_push_url = self._old_api, self._old_auth
-        w._repos_cache.update({"at": 0, "items": []})
+        gh_mod.GITHUB_API, git_mod._authed_push_url = self._old_api, self._old_auth
+        gh_mod._repos_cache.update({"at": 0, "items": []})
         self.api.shutdown()
         self.api.server_close()
         super().tearDown()
@@ -1812,15 +1930,15 @@ class TestSelfUpdate(_DBTest):
     def test_not_a_git_repo(self):
         plain = os.path.join(self.tmp, "plain")
         os.makedirs(plain)
-        old = w.APP_DIR
-        w.APP_DIR = plain
+        old = cfg.APP_DIR
+        cfg.APP_DIR = plain
         try:
             r = w.self_update()
             self.assertFalse(r["ok"])
             self.assertFalse(r["restart"])
             self.assertIn("git-repo", r["output"])
         finally:
-            w.APP_DIR = old
+            cfg.APP_DIR = old
 
     @unittest.skipUnless(shutil.which("git"), "git saknas")
     def test_up_to_date_then_update(self):
@@ -1846,8 +1964,8 @@ class TestSelfUpdate(_DBTest):
         # Appklonen som self_update() kör i
         subprocess.run(["git", "clone", remote, app], capture_output=True, text=True)
 
-        old = w.APP_DIR
-        w.APP_DIR = app
+        old = cfg.APP_DIR
+        cfg.APP_DIR = app
         try:
             r = w.self_update()                       # inget nytt på remote ännu
             self.assertTrue(r["ok"], r["output"])
@@ -1864,7 +1982,7 @@ class TestSelfUpdate(_DBTest):
             self.assertTrue(r2["restart"])
             self.assertTrue(r2["updated"])
         finally:
-            w.APP_DIR = old
+            cfg.APP_DIR = old
 
 
 class TestGit(_DBTest):

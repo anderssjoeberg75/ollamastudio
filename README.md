@@ -18,6 +18,15 @@ Ollama Studio finns i **två varianter** – välj den som passar dig:
 
 Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons standardbibliotek.
 
+> **Filstruktur (webbversionen):** `ollama_web.py` är startfilen. Koden ligger i `studio/`,
+> uppdelad per ansvarsområde – `config.py` (inställningar), `backends.py`, `sysinfo.py`,
+> `websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `codex/` för
+> kodagenten (arbetsyta, behörigheter, protokoll, kommandon, git, GitHub) och `web/` för
+> webblagret – routingtabellen i `server.py`, arbetet i `routes_*.py`, och sidan i
+> `web/assets/` (HTML, CSS, JavaScript). Webbläsaren laddar
+> fortfarande inga externa filer: allt bakas in i sidan vid start. Se
+> [`docs/kodassistent.md`](docs/kodassistent.md) för hela kartan.
+
 ---
 
 ## Innehåll
@@ -114,7 +123,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   därför funkar även stora filer), `write_file`, `run_command`, `git_status`, `git_diff`,
   `git_branch`, `git_commit` och `todo` (visar en plan/checklista som uppdateras i vyn).
   `search` klarar `glob` (`"*.py"`), `regex` och skiftlägesokänslig sökning; `read_file` ger
-  400 rader åt gången så att en stor fil inte äter upp hela modellens kontext. Knapparna **Ny gren →
+  400 rader åt gången så att en stor fil inte äter upp hela modellens kontext. Både `read_file`
+  och `search` läser radvis, så **filstorlek spelar ingen roll** – Codex kan arbeta i filer på
+  hundratals kB. Knapparna **Ny gren →
   Committa → Push → Skapa PR** tar ändringarna hela vägen till GitHub (kräver en GitHub-token).
 
   Utan arbetsyta fungerar Codex som en **kod-chatt** (skriver kod du kopierar). Du kan också öppna
@@ -232,7 +243,7 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_CODE_ALLOWLIST` | *(förinställd)* | Tillåtna kommando-prefix (ett per rad/komma), t.ex. `pytest`, `npm test`. Redigeras enklast i ⚙ Inställningar. |
 | `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Max körtid i sekunder per kommando (klamras 1–600). |
 | `OLLAMA_STUDIO_CODE_PERMISSION` | `ask` | Hur självständig Codex är: `ask` (fråga om lov före varje skrivning, kommando och git), `auto_edit` (skriver filer själv, frågar om kommandon/git) eller `full` (fria händer – gör allt utan att fråga, även kommandon utanför allowlisten). Byts enklast i väljaren **Behörighet** överst i Codex-vyn. |
-| `OLLAMA_STUDIO_CODE_STEPS` | `25` | Max antal verktygssteg agenten får ta per körning (klamras 1–100). |
+| `OLLAMA_STUDIO_CODE_STEPS` | `0` (obegränsat) | Tak för antal verktygssteg per körning. **0 = obegränsat** – agenten håller på tills den är klar; en modell som kört fast fångas i stället av loop-detektionen och av **■ Stoppa**. Sätt 1–1000 för ett hårt tak. |
 | `OLLAMA_STUDIO_CODE_CTX` | `8192` | Kontextfönster (`num_ctx`) för Codex. **Viktig:** utan den kör Ollama på sin egen standard (ofta 2048 token), och då trillar instruktionerna ut ur fönstret efter ett par steg så agenten slutar följa protokollet mitt i jobbet. `0` = låt Ollama bestämma. |
 | `OLLAMA_STUDIO_CODE_TEMP` | `0.2` | Temperatur för Codex. Lågt värde ger förutsägbar kod och stabila verktygsanrop. |
 | `OLLAMA_STUDIO_TRAIN_MENU` | `0` (av) | Sätt `1` för att visa **🎓 AI-träning** i menyn. Dold som standard – appen fokuserar på Codex. |
