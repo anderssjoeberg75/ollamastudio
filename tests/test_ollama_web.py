@@ -304,6 +304,9 @@ class TestCodeAssistant(_DBTest):
             f.write("def hej():\n    return 1  # TODO\n")
         w.settings_set({"code_enabled": True, "code_workspace": self.ws})
 
+    def _p(self, name):
+        return os.path.join(self.ws, name)
+
     def test_jail(self):
         self.assertTrue(w.code_enabled())
         with self.assertRaises(ValueError):
@@ -639,6 +642,69 @@ class TestCodeAssistant(_DBTest):
         w.settings_set({"code_ctx": "131072"})                 # stort fönster
         self.assertEqual(w.code_result_cap(), w.CODE_TOOL_RESULT_CAP)
 
+    def test_big_files_are_readable_searchable_and_editable(self):
+        # Gamla taket på 200 kB gjorde att Codex inte kunde röra projektets egen
+        # huvudfil – och search hoppade över den UTAN att säga något, så agenten
+        # drog slutsatsen att koden inte fanns.
+        big = "\n".join("rad %d %s" % (i, "q" * 200) for i in range(1, 3000))
+        big += "\nNÅLEN I HÖSTACKEN\n"
+        w.ws_write_file("jattefil.py", big)
+        self.assertGreater(os.path.getsize(self._p("jattefil.py")), 500000)
+
+        r = w.ws_read_file("jattefil.py", start=1)
+        self.assertEqual(r["start"], 1)
+        self.assertEqual(r["total"], 3000)
+        self.assertTrue(r["more"])
+        hits = w.ws_search("NÅLEN")["hits"]
+        self.assertEqual([h["path"] for h in hits], ["jattefil.py"])
+        # …och den går att ändra i.
+        w.ws_edit_file("jattefil.py", "NÅLEN I HÖSTACKEN", "HITTAD")
+        self.assertEqual(w.ws_search("NÅLEN")["hits"], [])
+
+    def test_read_file_streams_a_window_regardless_of_file_size(self):
+        # Fönstret ska kosta lika lite oavsett hur stor filen är – annars går det
+        # inte att arbeta i ett riktigt projekt.
+        big = "\n".join("rad %d" % i for i in range(1, 20001))
+        w.ws_write_file("enorm.txt", big)
+        r = w.ws_read_file("enorm.txt", start=19990)
+        self.assertEqual(r["start"], 19990)
+        self.assertEqual(r["total"], 20000)
+        self.assertFalse(r["more"])
+        self.assertIn("20000\trad 20000", r["content"])
+        self.assertNotIn("rad 1\n", r["content"])          # bara fönstret
+        self.assertLess(len(r["content"]), 2000)
+
+    def test_search_reports_what_it_skipped(self):
+        r = w.ws_search("nånting")
+        self.assertEqual(r["skipped"], [])                  # inget hoppas över tyst
+
+    def test_steps_are_unlimited_by_default(self):
+        self.assertEqual(w.code_max_steps(), 0)             # 0 = obegränsat
+        w.settings_set({"code_max_steps": "40"})
+        self.assertEqual(w.code_max_steps(), 40)
+        w.settings_set({"code_max_steps": "-5"})
+        self.assertEqual(w.code_max_steps(), 0)             # negativt = obegränsat
+        w.settings_set({"code_max_steps": "99999"})
+        self.assertEqual(w.code_max_steps(), 1000)          # men inte oändligt i praktiken
+        w.settings_set({"code_max_steps": "skräp"})
+        self.assertEqual(w.code_max_steps(), 0)
+
+    def test_repeat_guard_warns_then_stops(self):
+        # Utan steg-tak är det HÄR som hindrar en fastnad modell från att snurra.
+        g = w.RepeatGuard()
+        args = {"path": "app.py"}
+        self.assertEqual(g.see("read_file", args), "ok")
+        self.assertEqual(g.see("read_file", args), "ok")
+        self.assertEqual(g.see("read_file", dict(args)), "warn")   # samma innehåll
+        self.assertEqual(g.see("read_file", args), "warn")
+        self.assertEqual(g.see("read_file", args), "stop")
+        # Byter modellen spår nollställs räknaren – framsteg ska aldrig straffas.
+        self.assertEqual(g.see("read_file", {"path": "annan.py"}), "ok")
+        self.assertEqual(g.see("read_file", {"path": "annan.py"}), "ok")
+        self.assertEqual(g.see("search", {"query": "x"}), "ok")
+        # Argument som inte går att serialisera får inte spräcka vakten.
+        self.assertEqual(g.see("x", {"o": object()}), "ok")
+
     def test_run_allowlist(self):
         w.settings_set({"code_run_enabled": True,
                         "code_run_allowlist": "python -c\npytest"})
@@ -869,6 +935,47 @@ class TestCodexAgentLoop(_DBTest):
         # Sista anropet ska ha hunnit beskära något – annars testar vi inget.
         last = TestCodexAgentLoop.seen[-1]["messages"]
         self.assertTrue(any("beskuret" in m["content"] for m in last))
+
+    def test_a_long_run_is_not_cut_off_at_the_old_limit(self):
+        # Förut stannade agenten efter 25 varv mitt i arbetet. Nu håller den på
+        # tills den är klar.
+        w.settings_set({"code_permission": "full", "code_max_steps": "0"})
+        TestCodexAgentLoop.script = (
+            ['TOOL read_file {"path": "app.py", "start": %d}' % (n + 1) for n in range(40)]
+            + ["Nu är jag klar."])
+        events = self._run("jobba länge")
+        steps = [e for e in events if e["type"] == "step"]
+        self.assertEqual(len(steps), 41)                 # 40 verktygsvarv + slutsvaret
+        self.assertEqual(steps[0]["of"], 0)              # 0 = obegränsat
+        self.assertTrue(any("Nu är jag klar" in (e.get("text") or "")
+                            for e in events if e["type"] == "message"))
+        # Ingen text om något stegtak – det finns inget att nå.
+        self.assertFalse(any("taket på" in (e.get("text") or "") for e in events))
+        self.assertEqual([e for e in events if e["type"] == "summary"][0]["steps"], 41)
+
+    def test_a_stuck_model_is_warned_and_then_stopped(self):
+        # Obegränsat får inte betyda "snurrar för evigt": identiska anrop i rad
+        # varnas först och avbryts sedan.
+        w.settings_set({"code_permission": "full", "code_max_steps": "0"})
+        TestCodexAgentLoop.script = ['TOOL read_file {"path": "app.py"}'] * 30
+        events = self._run("fastna")
+        tools = [e for e in events if e["type"] == "tool"]
+        self.assertTrue(any("byta spår" in (t.get("summary") or "") for t in tools),
+                        [t.get("summary") for t in tools])
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertTrue(any("om och om igen" in e["text"] for e in errors), errors)
+        # Avbröt långt före de 30 svaren i manuset – snurrade alltså inte.
+        self.assertLess(len([e for e in events if e["type"] == "step"]), 10)
+        self.assertEqual([e["type"] for e in events][-1], "done")
+
+    def test_an_explicit_limit_still_works_for_those_who_want_one(self):
+        w.settings_set({"code_permission": "full", "code_max_steps": "3"})
+        TestCodexAgentLoop.script = [
+            'TOOL read_file {"path": "app.py", "start": %d}' % (n + 1) for n in range(10)]
+        events = self._run("jobba")
+        self.assertEqual(len([e for e in events if e["type"] == "step"]), 3)
+        self.assertTrue(any("taket på 3 verktygssteg" in (e.get("text") or "")
+                            for e in events if e["type"] == "message"))
 
     def test_mode_endpoint_switches_permission(self):
         self.assertEqual(w.code_mode(), "ask")

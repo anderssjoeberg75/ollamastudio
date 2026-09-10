@@ -79,8 +79,29 @@ verktygsanrop. Båda värdena ändras under ⚙ Inställningar → Codex.
 filer fungerar**. Texten i `old_text` måste finnas **exakt en gång** – annars får modellen ett
 fel som säger åt den att ta med fler omgivande rader.
 
-Agenten får som mest **25 verktygssteg** per körning (ändras under ⚙ Inställningar, 1–100).
-Räcker de inte säger den det rakt ut i stället för att låtsas vara klar.
+## Steg – obegränsat som standard
+
+Agenten har **inget tak på antal verktygssteg**. Ett fast tak stoppade den mitt i riktigt
+arbete; nu håller den på tills den är klar. Det som skyddar i stället:
+
+- **Loop-detektion.** Kör modellen exakt samma verktygsanrop flera gånger i rad får den först
+  en tillsägelse om att byta spår, och avbryts sedan. En modell som gör framsteg varierar sina
+  anrop; en som fastnat läser samma fil i evighet.
+- **■ Stoppa** i knappen, som under körningen visar vilket steg den är på.
+
+Vill du ändå ha ett hårt tak sätter du en siffra (1–1000) under ⚙ Inställningar → Codex.
+`0` betyder obegränsat.
+
+## Stora filer
+
+`read_file` och `search` läser **radvis** och håller aldrig hela filen i minnet, så filstorlek
+spelar ingen roll. `edit_file`/`write_file` måste hålla innehållet i minnet för att byta ut en
+textbit och har ett tak på **5 MB**.
+
+> Tidigare låg taket på 200 kB för allt. Det gjorde att Codex varken kunde läsa, söka i eller
+> ändra `ollama_web.py` (401 kB) – projektets egen huvudfil. Värst var att `search` hoppade
+> över för stora filer **utan att säga något**, så agenten drog slutsatsen att koden inte fanns.
+> Sökningen rapporterar numera vad den hoppat över.
 
 Modeller som struntar i verktygen och i stället skriver hela filer som `*** FIL: … *** SLUT`
 funkar fortfarande: i fråge-läget blir de förslag att godkänna, i de andra lägena skrivs de direkt.

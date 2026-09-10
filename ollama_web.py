@@ -106,7 +106,7 @@ SETTINGS_SPEC = {
     # "auto_edit" (skriver filer själv, frågar om kommandon/git) eller
     # "full" (fria händer – gör allt utan att fråga).
     "code_permission":  ("OLLAMA_STUDIO_CODE_PERMISSION", "ask", "str", False),
-    "code_max_steps":   ("OLLAMA_STUDIO_CODE_STEPS", "25", "str", False),
+    "code_max_steps":   ("OLLAMA_STUDIO_CODE_STEPS", "0", "str", False),
     # Kontextlängd för agenten. Utan den kör Ollama på sin egen standard (ofta 2048
     # token) – då trillar systemprompten med verktygen ut ur fönstret efter ett par
     # steg och modellen slutar följa protokollet mitt i körningen.
@@ -431,11 +431,16 @@ def code_mode():
 
 
 def code_max_steps():
-    """Tak för antal verktygsvarv i en körning (1–100)."""
+    """Tak för antal verktygsvarv i en körning. 0 = OBEGRÄNSAT (standard).
+
+    Ett fast tak stoppade agenten mitt i riktigt arbete. I stället får den hålla på
+    tills den är klar – det som skyddar mot en modell som fastnat är loop-detektionen
+    (samma verktygsanrop om och om igen) och Stoppa-knappen, inte en siffra."""
     try:
-        return max(1, min(100, int(setting_str("code_max_steps") or "25")))
+        n = int(setting_str("code_max_steps") or "0")
     except ValueError:
-        return 25
+        return 0
+    return 0 if n <= 0 else min(1000, n)
 
 
 def code_ctx():
@@ -1240,9 +1245,15 @@ def mem0_context(memories):
 # skrivverktyg; hur mycket den får göra utan att fråga styrs av behörighetsläget
 # (code_permission): "ask" frågar om varje skrivning/kommando/git, "auto_edit" skriver
 # filer själv, "full" ger fria händer. Varje skrivning går att ångra (undo-stacken).
-CODE_MAX_STEPS = 25          # standardtak för verktygsvarv (ändras i ⚙ Inställningar)
-CODE_MAX_FILE_BYTES = 200000  # läs/skriv-tak per fil
+CODE_MAX_STEPS = 0            # 0 = obegränsat antal verktygsvarv (⚙ Inställningar)
 CODE_READ_LINES = 400         # rader per read_file utan uttryckligt intervall
+# read_file och search läser RADVIS och behöver aldrig hela filen i minnet – därför
+# får de arbeta med stora filer. edit_file/write_file måste däremot hålla hela
+# innehållet i minnet för att byta ut en textbit, och har ett rejält men verkligt tak.
+# (Gamla taket på 200 kB gjorde att Codex inte kunde läsa, söka i eller ändra
+# projektets egen huvudfil – och search hoppade över den UTAN att säga något.)
+CODE_MAX_EDIT_BYTES = 5000000     # 5 MB – tak för edit_file/write_file
+CODE_SEARCH_MAX_BYTES = 20000000  # 20 MB – search hoppar bara över absurt stora filer
 CODE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
                   ".idea", ".vscode", "dist", "build", ".mypy_cache"}
 
@@ -1294,27 +1305,28 @@ def ws_read_file(rel, start=None, end=None, window=None):
     full = ws_resolve(rel)
     if not os.path.isfile(full):
         raise ValueError("Ingen fil: " + rel)
-    if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
-        raise ValueError("Filen är för stor för att läsa (>%d B)" % CODE_MAX_FILE_BYTES)
-    with open(full, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.read().split("\n")
-    total = len(lines)
     win = CODE_READ_LINES if window is None else max(1, int(window))
     try:
-        s = max(1, int(start)) if start else 1
+        first = max(1, int(start)) if start else 1
     except (TypeError, ValueError):
-        s = 1
+        first = 1
     try:
-        e = min(total, int(end)) if end else min(total, s + win - 1)
+        last = int(end) if end else first + win - 1
     except (TypeError, ValueError):
-        e = min(total, s + win - 1)
-    if e < s:
-        e = s
-    if e - s + 1 > win:                      # be om hur mycket som helst – vi ger ett fönster
-        e = s + win - 1
-    e = min(e, total)
-    body = "\n".join("%d\t%s" % (i, lines[i - 1]) for i in range(s, e + 1))
-    return {"path": _ws_rel(full), "start": s, "end": e, "total": total,
+        last = first + win - 1
+    if last < first:
+        last = first
+    last = min(last, first + win - 1)         # be om hur mycket som helst – vi ger ett fönster
+    # Läs RADVIS: bara fönstret hamnar i minnet, så filens storlek spelar ingen roll.
+    picked, total = [], 0
+    with open(full, "r", encoding="utf-8", errors="replace") as f:
+        for n, line in enumerate(f, 1):
+            total = n
+            if first <= n <= last:
+                picked.append("%d\t%s" % (n, line.rstrip("\n")))
+    e = min(last, total)
+    body = "\n".join(picked)
+    return {"path": _ws_rel(full), "start": first, "end": e, "total": total,
             "more": e < total, "content": body}
 
 
@@ -1342,7 +1354,7 @@ def ws_search(query, max_results=40, regex=False, ignore_case=False, glob=None):
     else:
         match = lambda line: q in line                         # noqa: E731
     pats = [p.strip() for p in re.split(r"[,\s]+", glob or "") if p.strip()]
-    hits, scanned = [], 0
+    hits, scanned, skipped = [], 0, []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in CODE_SKIP_DIRS]
         for name in sorted(filenames):
@@ -1352,7 +1364,8 @@ def ws_search(query, max_results=40, regex=False, ignore_case=False, glob=None):
                                 for p in pats):
                 continue
             try:
-                if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
+                if os.path.getsize(full) > CODE_SEARCH_MAX_BYTES:
+                    skipped.append(rel)      # hoppa aldrig över i tysthet
                     continue
                 scanned += 1
                 with open(full, "r", encoding="utf-8", errors="strict") as f:
@@ -1362,10 +1375,10 @@ def ws_search(query, max_results=40, regex=False, ignore_case=False, glob=None):
                                          "text": line.rstrip()[:200]})
                             if len(hits) >= max_results:
                                 return {"query": q, "hits": hits, "truncated": True,
-                                        "scanned": scanned}
+                                        "scanned": scanned, "skipped": skipped}
             except (OSError, UnicodeDecodeError):
                 continue
-    return {"query": q, "hits": hits, "scanned": scanned}
+    return {"query": q, "hits": hits, "scanned": scanned, "skipped": skipped}
 
 
 def ws_tree(max_entries=500):
@@ -1389,8 +1402,8 @@ def ws_write_file(rel, content):
     full = ws_resolve(rel)
     if content is None:
         raise ValueError("Inget innehåll")
-    if len(content.encode("utf-8")) > CODE_MAX_FILE_BYTES:
-        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_FILE_BYTES)
+    if len(content.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
+        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
     existed = os.path.isfile(full)
     old = ""
     if existed:
@@ -1414,8 +1427,8 @@ def ws_edit_file(rel, old_text, new_text):
     full = ws_resolve(rel)
     if not os.path.isfile(full):
         raise ValueError("Ingen fil: " + rel)
-    if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
-        raise ValueError("Filen är för stor (>%d B)" % CODE_MAX_FILE_BYTES)
+    if os.path.getsize(full) > CODE_MAX_EDIT_BYTES:
+        raise ValueError("Filen är för stor att ändra i ett svep (>%d B)" % CODE_MAX_EDIT_BYTES)
     if not old_text:
         raise ValueError("old_text saknas – ange texten som ska bytas ut")
     with open(full, "r", encoding="utf-8", errors="replace") as f:
@@ -1428,8 +1441,8 @@ def ws_edit_file(rel, old_text, new_text):
         raise ValueError("Texten finns %d gånger i %s – ta med fler omgivande rader så "
                          "den blir unik" % (hits, rel))
     updated = cur.replace(old_text, new_text if new_text is not None else "", 1)
-    if len(updated.encode("utf-8")) > CODE_MAX_FILE_BYTES:
-        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_FILE_BYTES)
+    if len(updated.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
+        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
     with open(full, "w", encoding="utf-8") as f:
         f.write(updated)
     rel_path = _ws_rel(full)
@@ -1557,6 +1570,37 @@ def approval_wait(aid, timeout=None):
     return bool(item["allow"]), bool(item["always"])
 
 
+class RepeatGuard:
+    """Upptäcker att modellen kört fast: exakt samma verktygsanrop om och om igen.
+
+    Det är det som gör "obegränsat antal steg" tryggt. En modell som gör framsteg
+    varierar sina anrop; en som fastnat läser samma fil i evighet. Vi varnar först
+    (modellen får en chans att ändra sig) och avbryter sedan."""
+
+    WARN_AT = 3          # så många identiska anrop i rad innan vi säger till
+    STOP_AT = 5          # …och så många innan vi avbryter körningen
+
+    def __init__(self):
+        self.last = None
+        self.count = 0
+
+    def see(self, name, args):
+        """Returnerar "ok", "warn" eller "stop" för det här anropet."""
+        try:
+            sig = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
+        except Exception:
+            sig = (name, repr(args))
+        if sig == self.last:
+            self.count += 1
+        else:
+            self.last, self.count = sig, 1
+        if self.count >= self.STOP_AT:
+            return "stop"
+        if self.count >= self.WARN_AT:
+            return "warn"
+        return "ok"
+
+
 class AgentRun:
     """Tillståndet för EN Codex-körning: behörighetsläge, ström till webbläsaren och
     de svar användaren redan gett ("tillåt alltid" gäller resten av körningen)."""
@@ -1653,6 +1697,8 @@ def agent_system_prompt(mode=None):
         "- search: smalna av med \"glob\" (t.ex. \"*.py\") när träffarna blir för många, och "
         "sätt \"regex\": true för mönster.\n"
         "- Kontexten är begränsad. Läs det du behöver, inte hela projektet.\n"
+        "- Du har gott om steg – ta dem du behöver för att bli KLAR. Men upprepa aldrig ett "
+        "verktygsanrop du redan fått svar på; resultatet blir detsamma.\n"
         "- Uppfinn inga verktyg och kör inga verktyg du inte fått resultat för.\n"
         "- När du är klar: skriv svaret som vanlig text utan TOOL-rad."
     )
@@ -4166,9 +4212,11 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
             </div>
             <div class="set-row">
               <label>Max verktygssteg per körning</label>
-              <input id="stCodeSteps" placeholder="25">
-              <span class="hint">Hur många varv agenten får ta (läsa, ändra, köra tester) innan
-                den stannar. 1–100. Fler steg = den orkar längre, men tar längre tid.</span>
+              <input id="stCodeSteps" placeholder="0 = obegränsat">
+              <span class="hint"><b>0 = obegränsat</b> (standard) – agenten håller på tills den
+                är klar. Det som skyddar mot en modell som kört fast är att Codex upptäcker
+                identiska verktygsanrop i rad och avbryter, plus <b>■ Stoppa</b>-knappen.
+                Sätt en siffra (1–1000) bara om du vill ha ett hårt tak.</span>
             </div>
             <div class="set-row">
               <label>Kontextlängd (num_ctx)</label>
@@ -5991,7 +6039,7 @@ async function loadSettingsForm(){
       }
       parts.push(s.code_run_active ? 'kommandokörning PÅ' : 'kommandokörning av');
       parts.push('behörighet: ' + (s.code_mode_label || s.code_mode || 'ask'));
-      parts.push('max ' + (s.code_steps || 25) + ' steg');
+      parts.push(s.code_steps ? ('max ' + s.code_steps + ' steg') : 'obegränsat antal steg');
       parts.push('kontext ' + (s.code_ctx ? s.code_ctx + ' token' : 'Ollamas standard'));
       cg.textContent = 'Status: ' + parts.join(' · ');
     }
@@ -6487,11 +6535,16 @@ async function runAgentServer(model){
       const line = buf.slice(0,i).trim(); buf = buf.slice(i+1);
       if(!line) continue;
       let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
-      if(ev.type==='step'){ thinkText=''; think=null; }
+      if(ev.type==='step'){
+        thinkText=''; think=null;
+        // Utan steg-tak är det här enda tecknet på att den fortfarande jobbar.
+        const send=document.getElementById('codeSend');
+        if(send && codeController) send.textContent='■ Stoppa (steg '+ev.n+')';
+      }
       else if(ev.type==='start'){
         if(ev.mode && ev.mode!==cfg.code_mode){ cfg.code_mode = ev.mode; updateModeBar(); }
         codeAppend('<div class="code-step">Behörighet: '+esc(ev.mode_label||ev.mode||'')
-          + ' · max '+(ev.steps||'?')+' steg'
+          + ' · ' + (ev.steps ? 'max '+ev.steps+' steg' : 'obegränsat antal steg')
           + (ev.ctx ? ' · kontext '+ev.ctx+' token' : '')+'</div>');
       }
       else if(ev.type==='delta'){
@@ -6528,6 +6581,7 @@ async function runAgentServer(model){
         if((ev.files||[]).length) parts.push((ev.files.length===1?'1 fil ändrad: ':ev.files.length+' filer ändrade: ')+ev.files.join(', '));
         if(ev.commands) parts.push(ev.commands+' kommando'+(ev.commands===1?'':'n')+' kört');
         if(ev.denied) parts.push(ev.denied+' åtgärd'+(ev.denied===1?'':'er')+' nekad'+(ev.denied===1?'':'e'));
+        if(ev.steps) parts.unshift(ev.steps+' steg');
         if(parts.length) codeAppend('<div class="code-summary">Klart · '+esc(parts.join(' · '))+'</div>');
         if(ev.files && ev.files.length){ loadTree(); gitStatus(); }
       }
@@ -8209,12 +8263,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         ctx = AgentRun(self._emit, mode)
-        max_steps = code_max_steps()
+        max_steps = code_max_steps()           # 0 = obegränsat
+        guard = RepeatGuard()
         self._emit({"type": "start", "mode": mode, "mode_label": CODE_MODE_LABELS[mode],
                     "steps": max_steps, "ctx": code_ctx()})
         finished = False
+        step = -1
         try:
-            for step in range(max_steps):
+            while True:
+                step += 1
+                if max_steps and step >= max_steps:
+                    break
                 self._emit({"type": "step", "n": step + 1, "of": max_steps})
                 full = ""
                 try:
@@ -8246,7 +8305,27 @@ class Handler(BaseHTTPRequestHandler):
                         pass
 
                 call = parse_tool_call(full)
-                if call and step < max_steps - 1:
+                if call and (not max_steps or step < max_steps - 1):
+                    # Kör modellen fast i samma anrop? Säg till, och avbryt till slut –
+                    # utan tak är det här skyddet mot att den snurrar i evighet.
+                    verdict = guard.see(call["name"], call["args"])
+                    if verdict == "stop":
+                        self._emit({"type": "error",
+                                    "text": "Avbröt: modellen körde samma verktygsanrop (%s) "
+                                            "om och om igen utan att komma vidare."
+                                            % call["name"]})
+                        break
+                    if verdict == "warn":
+                        convo.append({"role": "assistant", "content": full})
+                        convo.append({"role": "user", "content":
+                                      "%s (%s):\nDu har nu kört EXAKT samma verktygsanrop flera "
+                                      "gånger i rad. Resultatet blir detsamma igen. Gör något "
+                                      "annat: prova ett annat verktyg eller andra argument, "
+                                      "eller svara användaren med det du redan vet."
+                                      % (TOOL_RESULT_PREFIX, call["name"])})
+                        self._emit({"type": "tool", "name": call["name"], "args": call["args"],
+                                    "summary": "samma anrop igen – bad modellen byta spår"})
+                        continue
                     result, meta = agent_tool_exec(call["name"], call["args"], ctx)
                     ev = {"type": "tool", "name": call["name"], "args": call["args"],
                           "summary": meta.get("summary", "")}
@@ -8276,17 +8355,18 @@ class Handler(BaseHTTPRequestHandler):
                     self._emit({"type": "message", "text": msg})
                 finished = True
                 break
-            if not finished:
+            if not finished and max_steps:
                 self._emit({"type": "message",
                             "text": "(Jag nådde taket på %d verktygssteg och hann inte bli klar. "
-                                    "Be om ett mindre steg i taget, eller höj taket under "
-                                    "⚙ Inställningar → Codex.)" % max_steps})
+                                    "Sätt taket till 0 för obegränsat under ⚙ Inställningar → "
+                                    "Codex, eller be om ett mindre steg i taget.)" % max_steps})
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception as e:
             self._emit({"type": "error", "text": "Fel i agenten: %s" % e})
         self._emit({"type": "summary", "files": sorted(set(ctx.writes)),
-                    "commands": ctx.commands, "denied": ctx.denied, "mode": ctx.mode})
+                    "commands": ctx.commands, "denied": ctx.denied, "mode": ctx.mode,
+                    "steps": step + 1})
         self._emit({"type": "done"})
 
     def _agent_edit_event(self, ed, ctx):
