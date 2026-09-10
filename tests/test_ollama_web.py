@@ -14,6 +14,7 @@ import socket
 import threading
 import unittest
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Peka inställnings-DB:n till en temp-fil INNAN modulen importeras (DB_PATH sätts vid import).
@@ -344,6 +345,300 @@ class TestCodeAssistant(_DBTest):
         txt2, _ = w.agent_tool_exec("read_file", {"path": "app.py"})
         self.assertIn("def hej", txt2)
 
+    def test_edit_file_needs_a_unique_match(self):
+        # edit_file är det viktiga verktyget för stora filer: byt ut en exakt bit.
+        r = w.ws_edit_file("app.py", "return 1", "return 42")
+        self.assertIn("+    return 42", r["diff"])
+        with open(os.path.join(self.ws, "app.py"), encoding="utf-8") as f:
+            self.assertIn("return 42", f.read())
+        with self.assertRaises(ValueError):      # finns inte
+            w.ws_edit_file("app.py", "finns inte här", "x")
+        w.ws_write_file("dup.py", "a\na\n")
+        with self.assertRaises(ValueError):      # finns två gånger -> tvetydigt
+            w.ws_edit_file("dup.py", "a", "b")
+        with self.assertRaises(ValueError):      # utanför arbetsytan
+            w.ws_edit_file("../evil", "a", "b")
+
+    def test_undo_restores_previous_content(self):
+        w.ws_write_file("app.py", "ny text\n")
+        ok, msg = w.undo_file("app.py")
+        self.assertTrue(ok, msg)
+        with open(os.path.join(self.ws, "app.py"), encoding="utf-8") as f:
+            self.assertIn("return 1", f.read())     # tillbaka till originalet
+        # En ny fil tas bort igen när man ångrar
+        w.ws_write_file("helt_ny.py", "x = 1\n")
+        ok, _ = w.undo_file("helt_ny.py")
+        self.assertTrue(ok)
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "helt_ny.py")))
+        self.assertFalse(w.undo_file("app.py")[0])  # inget kvar att ångra
+
+    def test_tool_parsing_survives_sloppy_models(self):
+        # Små lokala modeller formaterar sällan perfekt – tolkningen måste tåla det.
+        cases = [
+            'TOOL read_file {"path": "app.py"}',
+            'lite text\nTOOL read_file {\n  "path": "app.py"\n}\nmer text',
+            '- TOOL: read_file {"path": "app.py"}',
+            'TOOL read_file\n```json\n{"path": "app.py"}\n```',
+        ]
+        for text in cases:
+            c = w.parse_tool_call(text)
+            self.assertIsNotNone(c, text)
+            self.assertEqual(c["name"], "read_file", text)
+            self.assertEqual(c["args"]["path"], "app.py", text)
+        self.assertEqual(w.parse_tool_call('{"tool": "git_status"}')["name"], "git_status")
+        self.assertEqual(w.parse_tool_call("TOOL git_status")["name"], "git_status")
+        self.assertIsNone(w.parse_tool_call("ingen tool här"))
+        self.assertIsNone(w.parse_tool_call('TOOL rm_rf {"path": "/"}'))   # okänt namn
+
+    def test_permission_modes_decide_what_needs_an_ok(self):
+        run = w.AgentRun(lambda ev: None, "ask")
+        self.assertTrue(run.needs_ok("edit"))
+        self.assertTrue(run.needs_ok("run"))
+        run = w.AgentRun(lambda ev: None, "auto_edit")
+        self.assertFalse(run.needs_ok("edit"))     # skriver filer själv
+        self.assertTrue(run.needs_ok("run"))       # men frågar om kommandon
+        run = w.AgentRun(lambda ev: None, "full")
+        self.assertFalse(run.needs_ok("edit"))
+        self.assertFalse(run.needs_ok("run"))
+        self.assertFalse(run.needs_ok("git"))
+        # Läget läses ur inställningarna och okända värden faller tillbaka på "ask"
+        w.settings_set({"code_permission": "full"})
+        self.assertEqual(w.code_mode(), "full")
+        w.settings_set({"code_permission": "nonsens"})
+        self.assertEqual(w.code_mode(), "ask")
+
+    def test_write_tools_need_an_approved_run(self):
+        # Utan körning (ctx) finns bara läsverktygen.
+        txt, meta = w.agent_tool_exec("write_file", {"path": "x.py", "content": "1"})
+        self.assertIn("bara användas i en Codex-körning", txt)
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "x.py")))
+
+        events = []
+        # "full" = fria händer: skrivningen sker utan att någon fråga ställs.
+        run = w.AgentRun(events.append, "full")
+        txt, meta = w.agent_tool_exec("write_file", {"path": "x.py", "content": "1\n"}, run)
+        self.assertIn("OK: skrev", txt)
+        self.assertTrue(meta.get("wrote"))
+        self.assertEqual(run.writes, ["x.py"])
+        self.assertFalse([e for e in events if e["type"] == "ask"])
+
+    def test_ask_mode_asks_and_a_no_blocks_the_write(self):
+        events = []
+        run = w.AgentRun(events.append, "ask")
+
+        def answer_no():
+            for _ in range(200):                       # vänta tills frågan är ute
+                asks = [e for e in events if e["type"] == "ask"]
+                if asks:
+                    return w.approval_answer(asks[0]["id"], False)
+                time.sleep(0.01)
+            return False
+
+        t = threading.Thread(target=answer_no)
+        t.start()
+        txt, meta = w.agent_tool_exec("write_file", {"path": "nej.py", "content": "x"}, run)
+        t.join(5)
+        self.assertIn("NEKAT", txt)
+        self.assertTrue(meta.get("denied"))
+        self.assertEqual(run.denied, 1)
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "nej.py")))
+
+    def test_ask_mode_writes_when_the_user_says_yes(self):
+        events = []
+        run = w.AgentRun(events.append, "ask")
+
+        def answer_yes():
+            for _ in range(200):
+                asks = [e for e in events if e["type"] == "ask"]
+                if asks:
+                    return w.approval_answer(asks[0]["id"], True, True)
+                time.sleep(0.01)
+            return False
+
+        t = threading.Thread(target=answer_yes)
+        t.start()
+        txt, _ = w.agent_tool_exec("edit_file",
+                                   {"path": "app.py", "old_text": "return 1",
+                                    "new_text": "return 7"}, run)
+        t.join(5)
+        self.assertIn("OK: ändrade", txt)
+        with open(os.path.join(self.ws, "app.py"), encoding="utf-8") as f:
+            self.assertIn("return 7", f.read())
+        # "Tillåt alltid" gäller resten av körningen – nästa gång ställs ingen fråga.
+        self.assertIn("edit:app.py", run.always)
+        before = len([e for e in events if e["type"] == "ask"])
+        w.agent_tool_exec("edit_file", {"path": "app.py", "old_text": "return 7",
+                                        "new_text": "return 8"}, run)
+        self.assertEqual(len([e for e in events if e["type"] == "ask"]), before)
+
+    def test_unanswered_question_counts_as_no(self):
+        aid = w.approval_open()
+        allow, always = w.approval_wait(aid, timeout=0.05)
+        self.assertFalse(allow)
+        self.assertFalse(always)
+        self.assertFalse(w.approval_answer(aid, True))     # frågan är borta
+
+    def test_full_mode_may_run_commands_outside_the_allowlist(self):
+        w.settings_set({"code_run_enabled": True, "code_run_allowlist": "pytest",
+                        "code_permission": "full"})
+        run = w.AgentRun(lambda ev: None, "full")
+        txt, meta = w.agent_tool_exec("run_command",
+                                      {"cmd": sys.executable + ' -c "print(11*11)"'}, run)
+        self.assertTrue(meta.get("ok"), txt)
+        self.assertIn("121", txt)
+        self.assertEqual(run.commands, 1)
+        # Kedjning blockeras ändå – vi kör aldrig via shell.
+        ok, out = w.run_command("pytest; rm -rf /", force=True)
+        self.assertFalse(ok)
+        self.assertIn("tillåts", out)
+
+    def test_commands_stay_off_until_the_master_switch_is_on(self):
+        w.settings_set({"code_run_enabled": False, "code_permission": "full"})
+        run = w.AgentRun(lambda ev: None, "full")
+        txt, _ = w.agent_tool_exec("run_command", {"cmd": "pytest"}, run)
+        self.assertIn("avstängd", txt)
+
+    def test_todo_becomes_a_plan_for_the_ui(self):
+        run = w.AgentRun(lambda ev: None, "ask")
+        txt, meta = w.agent_tool_exec("todo", {"items": ["Läs koden",
+                                                         {"text": "Ändra X", "done": True}]}, run)
+        self.assertEqual([i["text"] for i in meta["todo"]], ["Läs koden", "Ändra X"])
+        self.assertTrue(meta["todo"][1]["done"])
+        self.assertEqual(meta["summary"], "1/2 klara")
+        self.assertIn("[x] Ändra X", txt)
+
+    def test_edit_file_on_a_missing_file_says_so(self):
+        run = w.AgentRun(lambda ev: None, "full")
+        txt, _ = w.agent_tool_exec("edit_file", {"path": "finns_inte.py",
+                                                 "old_text": "a", "new_text": "b"}, run)
+        self.assertIn("finns inte", txt)
+        self.assertIn("write_file", txt)      # säg vad man ska göra i stället
+
+    def test_unknown_tool_lists_the_real_ones(self):
+        txt, _ = w.agent_tool_exec("hitta_på", {})
+        self.assertIn("Okänt verktyg", txt)
+        self.assertIn("edit_file", txt)
+
+    def test_read_file_returns_a_window_not_the_whole_file(self):
+        # En stor fil får inte äta upp hela modellens kontext i ett enda anrop.
+        big = "\n".join("rad %d" % i for i in range(1, 1001))
+        w.ws_write_file("stor.txt", big)
+        r = w.ws_read_file("stor.txt")
+        self.assertEqual((r["start"], r["end"]), (1, w.CODE_READ_LINES))
+        self.assertEqual(r["total"], 1000)
+        self.assertTrue(r["more"])
+        self.assertIn("1\trad 1", r["content"])
+        self.assertNotIn("rad 999", r["content"])
+        # …och modellen får veta hur den bläddrar vidare.
+        txt, _ = w.agent_tool_exec("read_file", {"path": "stor.txt"})
+        self.assertIn('"start": %d' % (w.CODE_READ_LINES + 1), txt)
+        # Nästa fönster fortsätter där det förra slutade.
+        r2 = w.ws_read_file("stor.txt", start=w.CODE_READ_LINES + 1)
+        self.assertEqual(r2["start"], w.CODE_READ_LINES + 1)
+        self.assertIn("rad %d" % (w.CODE_READ_LINES + 1), r2["content"])
+        # Ett tilltaget intervall klipps till fönstret i stället för att svälla.
+        r3 = w.ws_read_file("stor.txt", start=1, end=1000)
+        self.assertEqual(r3["end"], w.CODE_READ_LINES)
+        # En liten fil ryms i ett fönster och flaggas inte som avkortad.
+        r4 = w.ws_read_file("app.py")
+        self.assertFalse(r4["more"])
+
+    def test_search_handles_regex_glob_and_case(self):
+        w.ws_write_file("a.py", "TODO: fixa\n")
+        w.ws_write_file("b.txt", "todo: annat\n")
+        # Ren delsträng, skiftlägeskänslig som förut (app.py har också ett TODO)
+        self.assertEqual(sorted(h["path"] for h in w.ws_search("TODO")["hits"]),
+                         ["a.py", "app.py"])
+        # Skiftlägesokänslig hittar båda
+        self.assertEqual(sorted(h["path"] for h in
+                                w.ws_search("todo", ignore_case=True)["hits"]),
+                         ["a.py", "app.py", "b.txt"])
+        # glob smalnar av till vissa filer
+        self.assertEqual([h["path"] for h in
+                          w.ws_search("todo", ignore_case=True, glob="*.txt")["hits"]],
+                         ["b.txt"])
+        # regex
+        hits = w.ws_search(r"^def \w+", regex=True)["hits"]
+        self.assertTrue(any(h["path"] == "app.py" for h in hits))
+        # trasigt mönster ger ett begripligt fel, ingen krasch
+        with self.assertRaises(ValueError):
+            w.ws_search("(oavslutad", regex=True)
+        # …och verktyget rapporterar felet i stället för att spricka
+        txt, _ = w.agent_tool_exec("search", {"query": "(oavslutad", "regex": True})
+        self.assertIn("Ogiltigt reguljärt uttryck", txt)
+
+    def test_agent_options_set_a_real_context_window(self):
+        # Utan num_ctx kör Ollama på sin standard (ofta 2048) och tappar tyst
+        # systemprompten mitt i en körning.
+        w.settings_set({"code_ctx": "8192", "code_temp": "0.2"})
+        opts = w.code_options()
+        self.assertEqual(opts["num_ctx"], 8192)
+        self.assertEqual(opts["temperature"], 0.2)
+        w.settings_set({"code_ctx": "0"})                 # 0 = låt Ollama bestämma
+        self.assertNotIn("num_ctx", w.code_options())
+        w.settings_set({"code_ctx": "skräp", "code_temp": "skräp"})
+        self.assertEqual(w.code_ctx(), 8192)               # faller tillbaka
+        self.assertEqual(w.code_temp(), 0.2)
+        w.settings_set({"code_temp": "0,7"})               # svenskt decimalkomma
+        self.assertEqual(w.code_temp(), 0.7)
+
+    def test_long_tool_output_is_capped_in_both_ends(self):
+        text = "BÖRJAN" + ("x" * 50000) + "SLUTET"
+        out = w.cap_tool_result(text, cap=1000)
+        self.assertLessEqual(len(out), 1000)      # taket ska hålla, markören inräknad
+        self.assertTrue(out.startswith("BÖRJAN"))
+        self.assertTrue(out.endswith("SLUTET"))     # felmeddelanden står ofta sist
+        self.assertIn("utelämnade", out)
+        self.assertEqual(w.cap_tool_result("kort", cap=1000), "kort")
+
+    def test_pruning_drops_oldest_tool_results_first(self):
+        def result(n):
+            return {"role": "user",
+                    "content": "%s (read_file):\n%s" % (w.TOOL_RESULT_PREFIX, "y" * 5000)}
+        convo = ([{"role": "system", "content": "systemprompt"},
+                  {"role": "user", "content": "gör en sak"}]
+                 + [m for n in range(6)
+                    for m in ({"role": "assistant", "content": "TOOL read_file {}"}, result(n))])
+        pruned = w.prune_convo(convo, budget=12000)
+        self.assertLessEqual(sum(len(m["content"]) for m in pruned), 12000)
+        # Systemprompten och frågan är orörda – det är dem modellen inte får tappa.
+        self.assertEqual(pruned[0]["content"], "systemprompt")
+        self.assertEqual(pruned[1]["content"], "gör en sak")
+        # De äldsta resultaten är de som tömts, de senaste är kvar i sin helhet.
+        # Ett beskuret resultat är fortfarande igenkännbart som ett verktygsresultat.
+        results = [m["content"] for m in pruned if w.is_tool_result(m)]
+        self.assertEqual(len(results), 6)
+        self.assertIn("borttaget", results[0])
+        self.assertNotIn("borttaget", results[-1])
+        # Ryms allt rörs ingenting.
+        small = [{"role": "system", "content": "kort"}, result(0)]
+        self.assertEqual(w.prune_convo(small, budget=100000), small)
+
+    def test_pruning_also_shrinks_recent_results_when_it_has_to(self):
+        # Räcker det inte att tömma de gamla måste även de senaste kortas – annars
+        # svämmar fönstret över ändå, och då är det Ollama som klipper (i fel ände).
+        def result():
+            return {"role": "user",
+                    "content": "%s (read_file):\n%s" % (w.TOOL_RESULT_PREFIX, "y" * 9000)}
+        convo = [{"role": "system", "content": "S" * 1000}]
+        for _ in range(3):
+            convo.append({"role": "assistant", "content": "TOOL read_file {}"})
+            convo.append(result())
+        pruned = w.prune_convo(convo, budget=5000)
+        self.assertLessEqual(sum(len(m["content"]) for m in pruned), 5000)
+        self.assertEqual(pruned[0]["content"], "S" * 1000)     # systemprompten orörd
+        # Det senaste resultatet finns kvar, fast nedkortat – inte bortkastat.
+        last = pruned[-1]["content"]
+        self.assertTrue(w.is_tool_result(pruned[-1]))
+        self.assertIn("utelämnade", last)
+        self.assertTrue(last.endswith("y"))                    # slutet bevarat
+
+    def test_result_cap_never_eats_the_whole_window(self):
+        w.settings_set({"code_ctx": "4096"})
+        self.assertLessEqual(w.code_result_cap(), w.code_char_budget() // 3 + 1)
+        w.settings_set({"code_ctx": "131072"})                 # stort fönster
+        self.assertEqual(w.code_result_cap(), w.CODE_TOOL_RESULT_CAP)
+
     def test_run_allowlist(self):
         w.settings_set({"code_run_enabled": True,
                         "code_run_allowlist": "python -c\npytest"})
@@ -354,6 +649,239 @@ class TestCodeAssistant(_DBTest):
         ok, out = w.run_command('python -c "print(2+2)"')
         self.assertTrue(ok)
         self.assertIn("4", out)
+
+
+class TestCodexAgentLoop(_DBTest):
+    """Hela Codex-körningen genom HTTP: verktyg, godkännanden och sammanfattning.
+
+    En falsk Ollama spelar upp ett manus av modellsvar, så vi kan följa exakt hur
+    agenten beter sig i varje behörighetsläge."""
+
+    script = []          # modellsvar i tur och ordning
+
+    seen = []            # payloads som nådde "Ollama"
+
+    class _ScriptedOllama(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            TestCodexAgentLoop.seen.append(json.loads(self.rfile.read(length) or b"{}"))
+            text = (TestCodexAgentLoop.script.pop(0)
+                    if TestCodexAgentLoop.script else "Klart.")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write((json.dumps({"message": {"content": text}}) + "\n").encode())
+
+    def setUp(self):
+        super().setUp()
+        TestCodexAgentLoop.script = []
+        TestCodexAgentLoop.seen = []
+        self.ws = os.path.join(self.tmp, "ws")
+        os.makedirs(self.ws)
+        with open(os.path.join(self.ws, "app.py"), "w", encoding="utf-8") as f:
+            f.write("def hej():\n    return 1\n")
+        w.settings_set({"code_enabled": True, "code_workspace": self.ws,
+                        "code_run_enabled": True,
+                        # allowlist som släpper igenom testets egna python -c-kommandon
+                        "code_run_allowlist": sys.executable + " -c"})
+        self._old_log = w.Handler.log_message
+        w.Handler.log_message = lambda *a, **k: None
+        self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._ScriptedOllama)
+        threading.Thread(target=self.ollama.serve_forever,
+                         kwargs={"poll_interval": 0.02}, daemon=True).start()
+        self._old_primary, self._old_backends = w.PRIMARY, w.BACKENDS
+        w.PRIMARY = {"label": "test", "gpu": None,
+                     "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
+        w.BACKENDS = [w.PRIMARY]
+        self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
+        threading.Thread(target=self.studio.serve_forever,
+                         kwargs={"poll_interval": 0.02}, daemon=True).start()
+        self.base = "http://127.0.0.1:%d" % self.studio.server_address[1]
+
+    def tearDown(self):
+        w.Handler.log_message = self._old_log
+        for srv in (self.studio, self.ollama):
+            srv.shutdown()
+            srv.server_close()
+        w.PRIMARY, w.BACKENDS = self._old_primary, self._old_backends
+        super().tearDown()
+
+    def _post(self, path, body):
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read() or b"{}")
+
+    def _run(self, prompt, answer=None):
+        """Kör agenten och samla händelserna. `answer` svarar på varje fråga (True/False)."""
+        req = urllib.request.Request(
+            self.base + "/api/agent",
+            data=json.dumps({"model": "m",
+                             "messages": [{"role": "user", "content": prompt}]}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        events, threads = [], []
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            for line in resp:
+                line = line.strip()
+                if not line:
+                    continue
+                ev = json.loads(line)
+                events.append(ev)
+                if ev["type"] == "ask":
+                    # Svaret måste skickas från en annan tråd – servern väntar på det.
+                    t = threading.Thread(
+                        target=self._post, daemon=True,
+                        args=("/api/agent/permission",
+                              {"id": ev["id"], "allow": bool(answer)}))
+                    t.start()
+                    threads.append(t)
+        for t in threads:
+            t.join(5)
+        return events
+
+    def _path(self, name):
+        return os.path.join(self.ws, name)
+
+    def test_ask_mode_reads_freely_but_asks_before_changing(self):
+        TestCodexAgentLoop.script = [
+            'TOOL read_file {"path": "app.py"}',
+            'TOOL edit_file {"path": "app.py", "old_text": "return 1", "new_text": "return 2"}',
+            "Klart – jag ändrade returvärdet.",
+        ]
+        w.settings_set({"code_permission": "ask"})
+        events = self._run("ändra returvärdet", answer=True)
+        types = [e["type"] for e in events]
+        tools = [e for e in events if e["type"] == "tool"]
+        asks = [e for e in events if e["type"] == "ask"]
+        self.assertEqual(types[0], "start")
+        self.assertEqual(types[-1], "done")
+        self.assertEqual(tools[0]["name"], "read_file")       # läsning frågar inte
+        self.assertEqual(len(asks), 1)                        # ändringen gör det
+        self.assertIn("+    return 2", asks[0]["detail"])     # med diff att granska
+        with open(self._path("app.py"), encoding="utf-8") as f:
+            self.assertIn("return 2", f.read())
+        summary = [e for e in events if e["type"] == "summary"][0]
+        self.assertEqual(summary["files"], ["app.py"])
+
+    def test_a_no_stops_the_write_and_is_reported_back(self):
+        TestCodexAgentLoop.script = ['TOOL write_file {"path": "nej.py", "content": "x"}',
+                                     "Ok, jag lät bli."]
+        w.settings_set({"code_permission": "ask"})
+        events = self._run("skriv nej.py", answer=False)
+        self.assertFalse(os.path.exists(self._path("nej.py")))
+        self.assertTrue([e for e in events if e["type"] == "tool" and e.get("denied")])
+        self.assertEqual([e for e in events if e["type"] == "summary"][0]["denied"], 1)
+
+    def test_full_mode_does_everything_without_asking(self):
+        TestCodexAgentLoop.script = [
+            'TOOL todo {"items": ["Skapa filen", "Verifiera"]}',
+            'TOOL write_file {"path": "ny.py", "content": "print(1)\\n"}',
+            'TOOL run_command {"cmd": %s}' % json.dumps(sys.executable + ' -c "print(99)"'),
+            "Klart.",
+        ]
+        w.settings_set({"code_permission": "full", "code_run_allowlist": "pytest"})
+        events = self._run("skapa ny.py")
+        self.assertFalse([e for e in events if e["type"] == "ask"])
+        self.assertTrue(os.path.exists(self._path("ny.py")))
+        self.assertTrue([e for e in events if e["type"] == "tool" and e.get("todo")])
+        # Kommandot står inte på listan, men fria händer kör det ändå.
+        run = [e for e in events if e.get("name") == "run_command"][0]
+        self.assertTrue(run["ok"])
+        self.assertIn("99", run["detail"])
+        # …och allt går att ångra igen.
+        self.assertTrue(self._post("/api/agent/undo", {"path": "ny.py"})["ok"])
+        self.assertFalse(os.path.exists(self._path("ny.py")))
+
+    def test_auto_edit_writes_files_but_asks_about_commands(self):
+        TestCodexAgentLoop.script = [
+            'TOOL write_file {"path": "auto.py", "content": "y = 2\\n"}',
+            'TOOL run_command {"cmd": "inte-pa-listan --x"}',
+            "Klart.",
+        ]
+        w.settings_set({"code_permission": "auto_edit", "code_run_allowlist": "pytest"})
+        events = self._run("gör det", answer=False)
+        asks = [e for e in events if e["type"] == "ask"]
+        self.assertTrue(os.path.exists(self._path("auto.py")))
+        self.assertFalse([a for a in asks if a["kind"] == "edit"])
+        self.assertEqual([a["kind"] for a in asks], ["run"])
+
+    def test_file_blocks_still_work_for_models_that_ignore_the_tools(self):
+        # Små modeller struntar ofta i verktygen och skriver hela filer i ett block.
+        TestCodexAgentLoop.script = ["Här:\n*** FIL: block.py\nx = 1\n*** SLUT\nKlart."]
+        w.settings_set({"code_permission": "full"})
+        events = self._run("skriv block.py")
+        self.assertTrue([e for e in events if e["type"] == "applied"])
+        self.assertTrue(os.path.exists(self._path("block.py")))
+
+        # I fråge-läget blir samma block ett förslag att godkänna – inget skrivs.
+        TestCodexAgentLoop.script = ["*** FIL: forslag.py\nz = 3\n*** SLUT"]
+        w.settings_set({"code_permission": "ask"})
+        events = self._run("skriv forslag.py")
+        self.assertTrue([e for e in events if e["type"] == "edit"])
+        self.assertFalse([e for e in events if e["type"] == "applied"])
+        self.assertFalse(os.path.exists(self._path("forslag.py")))
+
+    def test_step_limit_is_configurable_and_reported(self):
+        w.settings_set({"code_permission": "full", "code_max_steps": "2"})
+        TestCodexAgentLoop.script = ['TOOL read_file {"path": "app.py"}',
+                                     'TOOL read_file {"path": "app.py"}',
+                                     'TOOL read_file {"path": "app.py"}']
+        events = self._run("läs i all oändlighet")
+        self.assertEqual([e for e in events if e["type"] == "start"][0]["steps"], 2)
+        self.assertEqual(len([e for e in events if e["type"] == "step"]), 2)
+        self.assertTrue(any("taket på 2 verktygssteg" in (e.get("text") or "")
+                            for e in events if e["type"] == "message"))
+        # Det halvfärdiga verktygsanropet läcker inte ut som "svar" i chatten.
+        self.assertFalse(any("TOOL read_file" in (e.get("text") or "")
+                             for e in events if e["type"] == "message"))
+
+    def test_context_window_and_temperature_reach_ollama(self):
+        # Den tystaste buggen av alla: utan num_ctx kör Ollama på sin standard
+        # (ofta 2048 token) och kastar systemprompten med verktygen mitt i körningen.
+        w.settings_set({"code_permission": "full", "code_ctx": "8192", "code_temp": "0.1"})
+        TestCodexAgentLoop.script = ["Klart."]
+        self._run("hej")
+        opts = TestCodexAgentLoop.seen[0]["options"]
+        self.assertEqual(opts["num_ctx"], 8192)
+        self.assertEqual(opts["temperature"], 0.1)
+
+    def test_a_long_run_keeps_the_system_prompt(self):
+        # Läs en stor fil flera varv och kontrollera att systemprompten ligger kvar
+        # och att konversationen hålls inom budgeten – det är hela poängen.
+        with open(self._path("stor.txt"), "w", encoding="utf-8") as f:
+            # under CODE_MAX_FILE_BYTES, annars vägrar read_file och vi testar inget
+            f.write("\n".join("rad %d %s" % (i, "z" * 110) for i in range(1, 1500)))
+        w.settings_set({"code_permission": "full", "code_ctx": "4096",
+                        "code_max_steps": "8"})
+        TestCodexAgentLoop.script = (
+            ['TOOL read_file {"path": "stor.txt", "start": %d}' % (1 + 400 * n)
+             for n in range(7)] + ["Klart."])
+        self._run("läs igenom filen")
+        budget = w.code_char_budget()
+        for payload in TestCodexAgentLoop.seen:
+            msgs = payload["messages"]
+            self.assertEqual(msgs[0]["role"], "system")
+            self.assertIn("TOOL edit_file", msgs[0]["content"])   # verktygen finns kvar
+            self.assertLessEqual(sum(len(m["content"]) for m in msgs), budget)
+        # Sista anropet ska ha hunnit beskära något – annars testar vi inget.
+        last = TestCodexAgentLoop.seen[-1]["messages"]
+        self.assertTrue(any("beskuret" in m["content"] for m in last))
+
+    def test_mode_endpoint_switches_permission(self):
+        self.assertEqual(w.code_mode(), "ask")
+        d = self._post("/api/agent/mode", {"mode": "full"})
+        self.assertTrue(d["ok"])
+        self.assertEqual(w.code_mode(), "full")
+        req = urllib.request.Request(self.base + "/api/agent/mode",
+                                     data=json.dumps({"mode": "hitta-på"}).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req, timeout=10)
+        self.assertEqual(cm.exception.code, 400)
+        self.assertEqual(w.code_mode(), "full")      # oförändrat
 
 
 class TestPullFallback(_DBTest):
