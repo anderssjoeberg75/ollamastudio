@@ -112,7 +112,9 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
   **Varje skrivning går att ångra** (↩ Ångra på ändringen, eller *Ångra senaste*). Agenten har
   verktygen `read_file`, `search`, `tree`, `list_dir`, `edit_file` (byter ut en exakt textbit –
   därför funkar även stora filer), `write_file`, `run_command`, `git_status`, `git_diff`,
-  `git_branch`, `git_commit` och `todo` (visar en plan/checklista i vyn). Knapparna **Ny gren →
+  `git_branch`, `git_commit` och `todo` (visar en plan/checklista som uppdateras i vyn).
+  `search` klarar `glob` (`"*.py"`), `regex` och skiftlägesokänslig sökning; `read_file` ger
+  400 rader åt gången så att en stor fil inte äter upp hela modellens kontext. Knapparna **Ny gren →
   Committa → Push → Skapa PR** tar ändringarna hela vägen till GitHub (kräver en GitHub-token).
 
   Utan arbetsyta fungerar Codex som en **kod-chatt** (skriver kod du kopierar). Du kan också öppna
@@ -231,6 +233,8 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Max körtid i sekunder per kommando (klamras 1–600). |
 | `OLLAMA_STUDIO_CODE_PERMISSION` | `ask` | Hur självständig Codex är: `ask` (fråga om lov före varje skrivning, kommando och git), `auto_edit` (skriver filer själv, frågar om kommandon/git) eller `full` (fria händer – gör allt utan att fråga, även kommandon utanför allowlisten). Byts enklast i väljaren **Behörighet** överst i Codex-vyn. |
 | `OLLAMA_STUDIO_CODE_STEPS` | `25` | Max antal verktygssteg agenten får ta per körning (klamras 1–100). |
+| `OLLAMA_STUDIO_CODE_CTX` | `8192` | Kontextfönster (`num_ctx`) för Codex. **Viktig:** utan den kör Ollama på sin egen standard (ofta 2048 token), och då trillar instruktionerna ut ur fönstret efter ett par steg så agenten slutar följa protokollet mitt i jobbet. `0` = låt Ollama bestämma. |
+| `OLLAMA_STUDIO_CODE_TEMP` | `0.2` | Temperatur för Codex. Lågt värde ger förutsägbar kod och stabila verktygsanrop. |
 | `OLLAMA_STUDIO_TRAIN_MENU` | `0` (av) | Sätt `1` för att visa **🎓 AI-träning** i menyn. Dold som standard – appen fokuserar på Codex. |
 
 Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):

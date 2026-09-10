@@ -519,6 +519,126 @@ class TestCodeAssistant(_DBTest):
         self.assertIn("Okänt verktyg", txt)
         self.assertIn("edit_file", txt)
 
+    def test_read_file_returns_a_window_not_the_whole_file(self):
+        # En stor fil får inte äta upp hela modellens kontext i ett enda anrop.
+        big = "\n".join("rad %d" % i for i in range(1, 1001))
+        w.ws_write_file("stor.txt", big)
+        r = w.ws_read_file("stor.txt")
+        self.assertEqual((r["start"], r["end"]), (1, w.CODE_READ_LINES))
+        self.assertEqual(r["total"], 1000)
+        self.assertTrue(r["more"])
+        self.assertIn("1\trad 1", r["content"])
+        self.assertNotIn("rad 999", r["content"])
+        # …och modellen får veta hur den bläddrar vidare.
+        txt, _ = w.agent_tool_exec("read_file", {"path": "stor.txt"})
+        self.assertIn('"start": %d' % (w.CODE_READ_LINES + 1), txt)
+        # Nästa fönster fortsätter där det förra slutade.
+        r2 = w.ws_read_file("stor.txt", start=w.CODE_READ_LINES + 1)
+        self.assertEqual(r2["start"], w.CODE_READ_LINES + 1)
+        self.assertIn("rad %d" % (w.CODE_READ_LINES + 1), r2["content"])
+        # Ett tilltaget intervall klipps till fönstret i stället för att svälla.
+        r3 = w.ws_read_file("stor.txt", start=1, end=1000)
+        self.assertEqual(r3["end"], w.CODE_READ_LINES)
+        # En liten fil ryms i ett fönster och flaggas inte som avkortad.
+        r4 = w.ws_read_file("app.py")
+        self.assertFalse(r4["more"])
+
+    def test_search_handles_regex_glob_and_case(self):
+        w.ws_write_file("a.py", "TODO: fixa\n")
+        w.ws_write_file("b.txt", "todo: annat\n")
+        # Ren delsträng, skiftlägeskänslig som förut (app.py har också ett TODO)
+        self.assertEqual(sorted(h["path"] for h in w.ws_search("TODO")["hits"]),
+                         ["a.py", "app.py"])
+        # Skiftlägesokänslig hittar båda
+        self.assertEqual(sorted(h["path"] for h in
+                                w.ws_search("todo", ignore_case=True)["hits"]),
+                         ["a.py", "app.py", "b.txt"])
+        # glob smalnar av till vissa filer
+        self.assertEqual([h["path"] for h in
+                          w.ws_search("todo", ignore_case=True, glob="*.txt")["hits"]],
+                         ["b.txt"])
+        # regex
+        hits = w.ws_search(r"^def \w+", regex=True)["hits"]
+        self.assertTrue(any(h["path"] == "app.py" for h in hits))
+        # trasigt mönster ger ett begripligt fel, ingen krasch
+        with self.assertRaises(ValueError):
+            w.ws_search("(oavslutad", regex=True)
+        # …och verktyget rapporterar felet i stället för att spricka
+        txt, _ = w.agent_tool_exec("search", {"query": "(oavslutad", "regex": True})
+        self.assertIn("Ogiltigt reguljärt uttryck", txt)
+
+    def test_agent_options_set_a_real_context_window(self):
+        # Utan num_ctx kör Ollama på sin standard (ofta 2048) och tappar tyst
+        # systemprompten mitt i en körning.
+        w.settings_set({"code_ctx": "8192", "code_temp": "0.2"})
+        opts = w.code_options()
+        self.assertEqual(opts["num_ctx"], 8192)
+        self.assertEqual(opts["temperature"], 0.2)
+        w.settings_set({"code_ctx": "0"})                 # 0 = låt Ollama bestämma
+        self.assertNotIn("num_ctx", w.code_options())
+        w.settings_set({"code_ctx": "skräp", "code_temp": "skräp"})
+        self.assertEqual(w.code_ctx(), 8192)               # faller tillbaka
+        self.assertEqual(w.code_temp(), 0.2)
+        w.settings_set({"code_temp": "0,7"})               # svenskt decimalkomma
+        self.assertEqual(w.code_temp(), 0.7)
+
+    def test_long_tool_output_is_capped_in_both_ends(self):
+        text = "BÖRJAN" + ("x" * 50000) + "SLUTET"
+        out = w.cap_tool_result(text, cap=1000)
+        self.assertLessEqual(len(out), 1000)      # taket ska hålla, markören inräknad
+        self.assertTrue(out.startswith("BÖRJAN"))
+        self.assertTrue(out.endswith("SLUTET"))     # felmeddelanden står ofta sist
+        self.assertIn("utelämnade", out)
+        self.assertEqual(w.cap_tool_result("kort", cap=1000), "kort")
+
+    def test_pruning_drops_oldest_tool_results_first(self):
+        def result(n):
+            return {"role": "user",
+                    "content": "%s (read_file):\n%s" % (w.TOOL_RESULT_PREFIX, "y" * 5000)}
+        convo = ([{"role": "system", "content": "systemprompt"},
+                  {"role": "user", "content": "gör en sak"}]
+                 + [m for n in range(6)
+                    for m in ({"role": "assistant", "content": "TOOL read_file {}"}, result(n))])
+        pruned = w.prune_convo(convo, budget=12000)
+        self.assertLessEqual(sum(len(m["content"]) for m in pruned), 12000)
+        # Systemprompten och frågan är orörda – det är dem modellen inte får tappa.
+        self.assertEqual(pruned[0]["content"], "systemprompt")
+        self.assertEqual(pruned[1]["content"], "gör en sak")
+        # De äldsta resultaten är de som tömts, de senaste är kvar i sin helhet.
+        # Ett beskuret resultat är fortfarande igenkännbart som ett verktygsresultat.
+        results = [m["content"] for m in pruned if w.is_tool_result(m)]
+        self.assertEqual(len(results), 6)
+        self.assertIn("borttaget", results[0])
+        self.assertNotIn("borttaget", results[-1])
+        # Ryms allt rörs ingenting.
+        small = [{"role": "system", "content": "kort"}, result(0)]
+        self.assertEqual(w.prune_convo(small, budget=100000), small)
+
+    def test_pruning_also_shrinks_recent_results_when_it_has_to(self):
+        # Räcker det inte att tömma de gamla måste även de senaste kortas – annars
+        # svämmar fönstret över ändå, och då är det Ollama som klipper (i fel ände).
+        def result():
+            return {"role": "user",
+                    "content": "%s (read_file):\n%s" % (w.TOOL_RESULT_PREFIX, "y" * 9000)}
+        convo = [{"role": "system", "content": "S" * 1000}]
+        for _ in range(3):
+            convo.append({"role": "assistant", "content": "TOOL read_file {}"})
+            convo.append(result())
+        pruned = w.prune_convo(convo, budget=5000)
+        self.assertLessEqual(sum(len(m["content"]) for m in pruned), 5000)
+        self.assertEqual(pruned[0]["content"], "S" * 1000)     # systemprompten orörd
+        # Det senaste resultatet finns kvar, fast nedkortat – inte bortkastat.
+        last = pruned[-1]["content"]
+        self.assertTrue(w.is_tool_result(pruned[-1]))
+        self.assertIn("utelämnade", last)
+        self.assertTrue(last.endswith("y"))                    # slutet bevarat
+
+    def test_result_cap_never_eats_the_whole_window(self):
+        w.settings_set({"code_ctx": "4096"})
+        self.assertLessEqual(w.code_result_cap(), w.code_char_budget() // 3 + 1)
+        w.settings_set({"code_ctx": "131072"})                 # stort fönster
+        self.assertEqual(w.code_result_cap(), w.CODE_TOOL_RESULT_CAP)
+
     def test_run_allowlist(self):
         w.settings_set({"code_run_enabled": True,
                         "code_run_allowlist": "python -c\npytest"})
@@ -539,13 +659,15 @@ class TestCodexAgentLoop(_DBTest):
 
     script = []          # modellsvar i tur och ordning
 
+    seen = []            # payloads som nådde "Ollama"
+
     class _ScriptedOllama(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
         def do_POST(self):
             length = int(self.headers.get("Content-Length", 0) or 0)
-            self.rfile.read(length)
+            TestCodexAgentLoop.seen.append(json.loads(self.rfile.read(length) or b"{}"))
             text = (TestCodexAgentLoop.script.pop(0)
                     if TestCodexAgentLoop.script else "Klart.")
             self.send_response(200)
@@ -556,6 +678,7 @@ class TestCodexAgentLoop(_DBTest):
     def setUp(self):
         super().setUp()
         TestCodexAgentLoop.script = []
+        TestCodexAgentLoop.seen = []
         self.ws = os.path.join(self.tmp, "ws")
         os.makedirs(self.ws)
         with open(os.path.join(self.ws, "app.py"), "w", encoding="utf-8") as f:
@@ -714,6 +837,38 @@ class TestCodexAgentLoop(_DBTest):
         # Det halvfärdiga verktygsanropet läcker inte ut som "svar" i chatten.
         self.assertFalse(any("TOOL read_file" in (e.get("text") or "")
                              for e in events if e["type"] == "message"))
+
+    def test_context_window_and_temperature_reach_ollama(self):
+        # Den tystaste buggen av alla: utan num_ctx kör Ollama på sin standard
+        # (ofta 2048 token) och kastar systemprompten med verktygen mitt i körningen.
+        w.settings_set({"code_permission": "full", "code_ctx": "8192", "code_temp": "0.1"})
+        TestCodexAgentLoop.script = ["Klart."]
+        self._run("hej")
+        opts = TestCodexAgentLoop.seen[0]["options"]
+        self.assertEqual(opts["num_ctx"], 8192)
+        self.assertEqual(opts["temperature"], 0.1)
+
+    def test_a_long_run_keeps_the_system_prompt(self):
+        # Läs en stor fil flera varv och kontrollera att systemprompten ligger kvar
+        # och att konversationen hålls inom budgeten – det är hela poängen.
+        with open(self._path("stor.txt"), "w", encoding="utf-8") as f:
+            # under CODE_MAX_FILE_BYTES, annars vägrar read_file och vi testar inget
+            f.write("\n".join("rad %d %s" % (i, "z" * 110) for i in range(1, 1500)))
+        w.settings_set({"code_permission": "full", "code_ctx": "4096",
+                        "code_max_steps": "8"})
+        TestCodexAgentLoop.script = (
+            ['TOOL read_file {"path": "stor.txt", "start": %d}' % (1 + 400 * n)
+             for n in range(7)] + ["Klart."])
+        self._run("läs igenom filen")
+        budget = w.code_char_budget()
+        for payload in TestCodexAgentLoop.seen:
+            msgs = payload["messages"]
+            self.assertEqual(msgs[0]["role"], "system")
+            self.assertIn("TOOL edit_file", msgs[0]["content"])   # verktygen finns kvar
+            self.assertLessEqual(sum(len(m["content"]) for m in msgs), budget)
+        # Sista anropet ska ha hunnit beskära något – annars testar vi inget.
+        last = TestCodexAgentLoop.seen[-1]["messages"]
+        self.assertTrue(any("beskuret" in m["content"] for m in last))
 
     def test_mode_endpoint_switches_permission(self):
         self.assertEqual(w.code_mode(), "ask")

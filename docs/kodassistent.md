@@ -40,13 +40,34 @@ Varje skrivning sparar det gamla innehållet. Klicka **↩ Ångra** på ändring
 **↩ Ångra senaste** i behörighetsraden. En fil agenten *skapade* tas bort igen. Stacken håller de
 50 senaste ändringarna, ligger i minnet (försvinner vid omstart) och töms när du byter arbetsyta.
 
+## Kontextfönstret – den tystaste fallgropen
+
+Ollama kör med **sitt eget standardfönster** (ofta 2048 token) om ingen `num_ctx` skickas
+med. En agent-körning växer fort: systemprompt + varje läst fil + varje kommandoutdata. När
+fönstret svämmar över kastar Ollama det **äldsta** – alltså systemprompten med verktygen – och
+modellen slutar tyst följa protokollet mitt i jobbet. Det ser ut som att modellen är dum; den
+har bara inte instruktionerna kvar.
+
+Codex sätter därför alltid `num_ctx` (**8192** som standard, ⚙ Inställningar → Codex) och
+håller själv konversationen inom fönstret:
+
+- `read_file` ger **400 rader åt gången** och talar om hur man bläddrar vidare, i stället för
+  att lägga en hel fil i kontexten.
+- Ett enskilt verktygsresultat kapas till **högst en tredjedel** av budgeten, i båda ändarna
+  (slutet sparas – felmeddelanden står sist).
+- Blir det ändå för mycket **töms de äldsta verktygsresultaten** först, och räcker inte det
+  kortas även de senaste ned. Systemprompten och dina frågor rörs aldrig.
+
+Temperaturen är **0.2** som standard – en kodagent ska vara förutsägbar och ge stabila
+verktygsanrop. Båda värdena ändras under ⚙ Inställningar → Codex.
+
 ## Verktyg agenten har
 
 | Verktyg | Vad | Kräver lov |
 | --- | --- | --- |
 | `list_dir`, `tree` | Lista mappar/filer | nej |
-| `read_file` | Läs en fil (radintervall stöds) | nej |
-| `search` | Sök i projektet | nej |
+| `read_file` | Läs ett radfönster (400 rader, bläddra med `start`) | nej |
+| `search` | Sök i projektet – `glob` (`"*.py"`), `regex`, `ignore_case` | nej |
 | `git_status`, `git_diff` | Se ändringar | nej |
 | `todo` | Lägg upp en plan – visas som checklista i vyn | nej |
 | `edit_file` | **Byt ut en exakt textbit** i en fil | ja (utom `auto_edit`/`full`) |

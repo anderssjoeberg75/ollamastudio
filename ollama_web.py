@@ -40,6 +40,7 @@ import socket
 import shutil
 import ipaddress
 import difflib
+import fnmatch
 import sqlite3
 import threading
 import subprocess
@@ -106,6 +107,11 @@ SETTINGS_SPEC = {
     # "full" (fria händer – gör allt utan att fråga).
     "code_permission":  ("OLLAMA_STUDIO_CODE_PERMISSION", "ask", "str", False),
     "code_max_steps":   ("OLLAMA_STUDIO_CODE_STEPS", "25", "str", False),
+    # Kontextlängd för agenten. Utan den kör Ollama på sin egen standard (ofta 2048
+    # token) – då trillar systemprompten med verktygen ut ur fönstret efter ett par
+    # steg och modellen slutar följa protokollet mitt i körningen.
+    "code_ctx":         ("OLLAMA_STUDIO_CODE_CTX", "8192", "str", False),
+    "code_temp":        ("OLLAMA_STUDIO_CODE_TEMP", "0.2", "str", False),
     # AI-träningen ligger dold i menyn som standard – fokus är Codex.
     "train_menu":       ("OLLAMA_STUDIO_TRAIN_MENU", "0", "bool", False),
 }
@@ -221,6 +227,8 @@ def settings_public():
     out["code_mode"] = code_mode()
     out["code_mode_label"] = CODE_MODE_LABELS[code_mode()]
     out["code_steps"] = code_max_steps()
+    out["code_ctx"] = code_ctx()
+    out["code_temp"] = setting_str("code_temp") or "0.2"
     out["server_time"] = format_now()          # så man ser om serverns klocka/TZ är fel
     out["train_module"] = TRAIN is not None    # ligger soup_train.py bredvid appen?
     out["train_active"] = train_toggle_on()
@@ -428,6 +436,39 @@ def code_max_steps():
         return max(1, min(100, int(setting_str("code_max_steps") or "25")))
     except ValueError:
         return 25
+
+
+def code_ctx():
+    """Kontextfönster (num_ctx) för agenten. 0 = låt Ollama bestämma."""
+    try:
+        return max(0, min(1000000, int(setting_str("code_ctx") or "8192")))
+    except ValueError:
+        return 8192
+
+
+def code_temp():
+    """Temperatur för agenten. Låg som standard – en kodagent ska vara förutsägbar."""
+    try:
+        return max(0.0, min(2.0, float((setting_str("code_temp") or "0.2").replace(",", "."))))
+    except ValueError:
+        return 0.2
+
+
+def code_options():
+    """Ollama-options för agent-körningen."""
+    opts = {"temperature": code_temp()}
+    if code_ctx():
+        opts["num_ctx"] = code_ctx()
+    return opts
+
+
+def code_char_budget():
+    """Ungefärlig teckenbudget för konversationen, med plats kvar till svaret.
+
+    Grovt ~3 tecken per token för svenska och kod. Hellre snålt än att fönstret
+    svämmar över – det är tyst när det händer, modellen bara tappar början."""
+    ctx = code_ctx() or 8192
+    return max(4000, ctx * 3 - 3000)
 
 
 def train_menu_on():
@@ -1201,6 +1242,7 @@ def mem0_context(memories):
 # filer själv, "full" ger fria händer. Varje skrivning går att ångra (undo-stacken).
 CODE_MAX_STEPS = 25          # standardtak för verktygsvarv (ändras i ⚙ Inställningar)
 CODE_MAX_FILE_BYTES = 200000  # läs/skriv-tak per fil
+CODE_READ_LINES = 400         # rader per read_file utan uttryckligt intervall
 CODE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
                   ".idea", ".vscode", "dist", "build", ".mypy_cache"}
 
@@ -1242,7 +1284,13 @@ def ws_list_dir(rel="."):
     return {"path": _ws_rel(full), "dirs": dirs, "files": files}
 
 
-def ws_read_file(rel, start=None, end=None):
+def ws_read_file(rel, start=None, end=None, window=None):
+    """Läs en fil, alltid som ett radfönster med radnummer.
+
+    Utan intervall gavs förut HELA filen tillbaka. En fil på några tusen rader
+    fyller då hela modellens kontextfönster i ett enda verktygsanrop, och resten
+    av körningen får inte plats. Nu läses ett fönster i taget och modellen får
+    veta hur den bläddrar vidare."""
     full = ws_resolve(rel)
     if not os.path.isfile(full):
         raise ValueError("Ingen fil: " + rel)
@@ -1250,39 +1298,74 @@ def ws_read_file(rel, start=None, end=None):
         raise ValueError("Filen är för stor för att läsa (>%d B)" % CODE_MAX_FILE_BYTES)
     with open(full, "r", encoding="utf-8", errors="replace") as f:
         lines = f.read().split("\n")
-    if start or end:
-        s = max(1, int(start or 1)); e = min(len(lines), int(end or len(lines)))
-        body = "\n".join("%d\t%s" % (i, lines[i - 1]) for i in range(s, e + 1))
-        return {"path": _ws_rel(full), "start": s, "end": e, "total": len(lines), "content": body}
-    return {"path": _ws_rel(full), "total": len(lines), "content": "\n".join(lines)}
+    total = len(lines)
+    win = CODE_READ_LINES if window is None else max(1, int(window))
+    try:
+        s = max(1, int(start)) if start else 1
+    except (TypeError, ValueError):
+        s = 1
+    try:
+        e = min(total, int(end)) if end else min(total, s + win - 1)
+    except (TypeError, ValueError):
+        e = min(total, s + win - 1)
+    if e < s:
+        e = s
+    if e - s + 1 > win:                      # be om hur mycket som helst – vi ger ett fönster
+        e = s + win - 1
+    e = min(e, total)
+    body = "\n".join("%d\t%s" % (i, lines[i - 1]) for i in range(s, e + 1))
+    return {"path": _ws_rel(full), "start": s, "end": e, "total": total,
+            "more": e < total, "content": body}
 
 
-def ws_search(query, max_results=40):
-    """Sök efter en textsträng i arbetsytan (ren Python; hoppar över binärt/stora filer)."""
+def ws_search(query, max_results=40, regex=False, ignore_case=False, glob=None):
+    """Sök i arbetsytan (ren Python; hoppar över binärt/stora filer).
+
+    Var förut bara ren delsträngssökning. En kodagent behöver mer: `regex` för
+    mönster, `ignore_case`, och `glob` för att bara söka i vissa filer (t.ex.
+    "*.py") – annars drunknar träfflistan och taket slår i innan rätt fil hittas."""
     root = code_workspace_root()
     if not root:
         raise ValueError("Ingen arbetsyta")
     q = (query or "").strip()
     if not q:
         return {"query": q, "hits": []}
-    hits = []
+    if regex:
+        try:
+            pat = re.compile(q, re.IGNORECASE if ignore_case else 0)
+        except re.error as e:
+            raise ValueError("Ogiltigt reguljärt uttryck: %s" % e)
+        match = lambda line: pat.search(line) is not None      # noqa: E731
+    elif ignore_case:
+        low = q.lower()
+        match = lambda line: low in line.lower()               # noqa: E731
+    else:
+        match = lambda line: q in line                         # noqa: E731
+    pats = [p.strip() for p in re.split(r"[,\s]+", glob or "") if p.strip()]
+    hits, scanned = [], 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in CODE_SKIP_DIRS]
-        for name in filenames:
+        for name in sorted(filenames):
             full = os.path.join(dirpath, name)
+            rel = _ws_rel(full).replace(os.sep, "/")
+            if pats and not any(fnmatch.fnmatch(rel, p) or fnmatch.fnmatch(name, p)
+                                for p in pats):
+                continue
             try:
                 if os.path.getsize(full) > CODE_MAX_FILE_BYTES:
                     continue
+                scanned += 1
                 with open(full, "r", encoding="utf-8", errors="strict") as f:
                     for n, line in enumerate(f, 1):
-                        if q in line:
-                            hits.append({"path": _ws_rel(full), "line": n,
+                        if match(line):
+                            hits.append({"path": rel, "line": n,
                                          "text": line.rstrip()[:200]})
                             if len(hits) >= max_results:
-                                return {"query": q, "hits": hits, "truncated": True}
+                                return {"query": q, "hits": hits, "truncated": True,
+                                        "scanned": scanned}
             except (OSError, UnicodeDecodeError):
                 continue
-    return {"query": q, "hits": hits}
+    return {"query": q, "hits": hits, "scanned": scanned}
 
 
 def ws_tree(max_entries=500):
@@ -1528,8 +1611,9 @@ def _tools_help(mode):
 AGENT_TOOLS_TEXT = (
     "  TOOL list_dir {\"path\": \".\"}\n"
     "  TOOL tree {}                              (alla filer i projektet)\n"
-    "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1, \"end\": 200}\n"
-    "  TOOL search {\"query\": \"text att söka\"}\n"
+    "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1}   (ett radfönster i taget)\n"
+    "  TOOL search {\"query\": \"text\", \"glob\": \"*.py\", \"regex\": false, "
+    "\"ignore_case\": false}\n"
     "  TOOL edit_file {\"path\": \"fil.py\", \"old_text\": \"exakt text som finns\", "
     "\"new_text\": \"det den ska bli\"}\n"
     "  TOOL write_file {\"path\": \"ny.py\", \"content\": \"hela filens innehåll\"}\n"
@@ -1564,6 +1648,11 @@ def agent_system_prompt(mode=None):
         "- Alla sökvägar är relativa till arbetsytan. Du kommer inte utanför den.\n"
         "- edit_file kräver att old_text finns exakt en gång. Ta med omgivande rader så det blir "
         "unikt, och kopiera texten ordagrant ur read_file (utan radnumren).\n"
+        "- read_file ger " + str(CODE_READ_LINES) + " rader åt gången. Behöver du mer, läs "
+        "vidare med \"start\" – läs inte om samma rader.\n"
+        "- search: smalna av med \"glob\" (t.ex. \"*.py\") när träffarna blir för många, och "
+        "sätt \"regex\": true för mönster.\n"
+        "- Kontexten är begränsad. Läs det du behöver, inte hela projektet.\n"
         "- Uppfinn inga verktyg och kör inga verktyg du inte fått resultat för.\n"
         "- När du är klar: skriv svaret som vanlig text utan TOOL-rad."
     )
@@ -1688,6 +1777,89 @@ def strip_edits(text):
     return out.strip()
 
 
+# ---- Kontextbudget: håll konversationen inom modellens fönster ---------------
+# En agent-körning växer fort: varje läst fil och varje kommandoutdata läggs till.
+# Svämmar fönstret över kastar Ollama det ÄLDSTA – alltså systemprompten med
+# verktygen – och modellen slutar tyst följa protokollet. Vi kortar hellre ned de
+# äldsta verktygsresultaten själva, så systemprompt och frågor alltid ligger kvar.
+TOOL_RESULT_PREFIX = "VERKTYGSRESULTAT"
+CODE_TOOL_RESULT_CAP = 12000     # tak per verktygsresultat som matas till modellen
+# Behåll prefixet: en beskuren post ska fortfarande gå att känna igen som ett
+# verktygsresultat (annars ser en andra beskärningsrunda den inte), och modellen
+# ska förstå att det HAR funnits ett resultat här – inte att steget aldrig hände.
+_PRUNED_NOTE = (TOOL_RESULT_PREFIX + " (beskuret):\n(äldre resultat borttaget för att spara "
+                "plats i kontexten – kör verktyget igen om du behöver innehållet)")
+
+
+def code_result_cap():
+    """Tak för ETT verktygsresultat. Aldrig mer än en tredjedel av budgeten – ett
+    enda resultat får inte kunna fylla hela fönstret, för då finns ingen plats kvar
+    till vare sig instruktionerna eller nästa steg."""
+    return max(1500, min(CODE_TOOL_RESULT_CAP, code_char_budget() // 3))
+
+
+def cap_tool_result(text, cap=CODE_TOOL_RESULT_CAP):
+    """Korta ett verktygsresultat i BÅDA ändarna – slutet är ofta det intressanta
+    (felmeddelanden, sista raderna i en logg), början ger sammanhanget."""
+    text = text or ""
+    if len(text) <= cap:
+        return text
+    tmpl = "\n\n… (%d tecken utelämnade i mitten) …\n\n"
+    # Räkna med markörens längd i taket – annars blir resultatet längre än cap,
+    # och den som budgeterar utifrån cap får inte det den bad om.
+    reserve = len(tmpl % len(text))          # övre gräns för markören
+    room = cap - reserve
+    if room < 200:                           # för litet för att dela – klipp rakt av
+        return text[:cap]
+    head = int(room * 0.6)
+    tail = room - head
+    return text[:head] + (tmpl % (len(text) - head - tail)) + text[-tail:]
+
+
+def is_tool_result(msg):
+    return (isinstance(msg, dict) and msg.get("role") == "user"
+            and str(msg.get("content") or "").startswith(TOOL_RESULT_PREFIX))
+
+
+def prune_convo(convo, budget):
+    """Håll konversationen under teckenbudgeten.
+
+    Två steg: först töms de ÄLDSTA verktygsresultaten helt, för de har modellen
+    oftast redan använt. Räcker inte det kortas även de senaste – men bara ned,
+    aldrig bort, och alltid med slutet kvar (felmeddelanden står sist). Systemprompten
+    och användarens frågor rörs aldrig; tappas de slutar agenten följa protokollet."""
+    out = [dict(m) for m in convo]
+
+    def total():
+        return sum(len(str(m.get("content") or "")) for m in out)
+
+    if total() <= budget:
+        return out
+
+    # Steg 1: töm de äldsta resultaten (de senaste fyra meddelandena lämnas i fred).
+    for i, msg in enumerate(out):
+        if total() <= budget:
+            return out
+        if not is_tool_result(msg) or i >= len(out) - 4:
+            continue
+        if len(str(msg.get("content") or "")) > len(_PRUNED_NOTE):
+            msg["content"] = _PRUNED_NOTE
+
+    # Steg 2: fortfarande för stort – korta ned de resultat som är kvar, störst först.
+    remaining = [m for m in out if is_tool_result(m)
+                 and len(str(m.get("content") or "")) > len(_PRUNED_NOTE)]
+    remaining.sort(key=lambda m: -len(str(m.get("content") or "")))
+    for msg in remaining:
+        over = total() - budget
+        if over <= 0:
+            break
+        cur = str(msg.get("content") or "")
+        target = max(600, len(cur) - over)
+        if target < len(cur):
+            msg["content"] = cap_tool_result(cur, target)
+    return out
+
+
 def _denied(what):
     return ("NEKAT: användaren sa nej till %s. Gör inte om samma sak – föreslå ett annat "
             "sätt, eller fråga användaren vad hen vill i stället." % what)
@@ -1733,14 +1905,27 @@ def agent_tool_exec(name, args, ctx=None):
 
         if name == "read_file":
             r = ws_read_file(args.get("path", ""), args.get("start"), args.get("end"))
-            return ("Fil %s (rad %s–%s av %s):\n%s" % (
-                    r["path"], r.get("start", 1), r.get("end", r["total"]), r["total"], r["content"]),
-                    {"summary": "%s rader" % r["total"]})
+            more = ("\n… fortsätter till rad %d. Läs vidare med "
+                    "TOOL read_file {\"path\": \"%s\", \"start\": %d}"
+                    % (r["total"], r["path"], r["end"] + 1)) if r["more"] else ""
+            return ("Fil %s (rad %d–%d av %d):\n%s%s" % (
+                    r["path"], r["start"], r["end"], r["total"], r["content"], more),
+                    {"summary": "rad %d–%d av %d" % (r["start"], r["end"], r["total"])})
 
         if name == "search":
-            r = ws_search(args.get("query", ""))
+            r = ws_search(args.get("query", ""),
+                          regex=bool(args.get("regex")),
+                          ignore_case=bool(args.get("ignore_case")),
+                          glob=args.get("glob") or args.get("path"))
             lines = ["%s:%d: %s" % (h["path"], h["line"], h["text"]) for h in r["hits"]]
-            return ("Sökträffar för %r:\n%s" % (r["query"], "\n".join(lines) or "(inga)"),
+            tail = ""
+            if r.get("truncated"):
+                tail = ("\n… (taket på %d träffar nåddes – sök smalare, t.ex. med "
+                        "\"glob\": \"*.py\")" % len(r["hits"]))
+            elif not r["hits"]:
+                tail = "\n(sökte i %d filer)" % r.get("scanned", 0)
+            return ("Sökträffar för %r:\n%s%s" % (r["query"],
+                    "\n".join(lines) or "(inga)", tail),
                     {"summary": "%d träffar" % len(r["hits"])})
 
         if name == "git_status":
@@ -3984,6 +4169,20 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
               <span class="hint">Hur många varv agenten får ta (läsa, ändra, köra tester) innan
                 den stannar. 1–100. Fler steg = den orkar längre, men tar längre tid.</span>
             </div>
+            <div class="set-row">
+              <label>Kontextlängd (num_ctx)</label>
+              <input id="stCodeCtx" placeholder="8192">
+              <span class="hint"><b>Viktig.</b> Utan den kör Ollama på sin egen standard (ofta
+                2048 token) – då trillar instruktionerna ut ur fönstret efter ett par steg och
+                agenten slutar följa protokollet mitt i jobbet. 8192 räcker långt; höj om din
+                modell klarar mer och projektet är stort. 0 = låt Ollama bestämma.</span>
+            </div>
+            <div class="set-row">
+              <label>Temperatur</label>
+              <input id="stCodeTemp" placeholder="0.2">
+              <span class="hint">Lågt värde ger förutsägbar kod och stabila verktygsanrop.
+                0–2, standard 0.2.</span>
+            </div>
           </div>
           <label class="set-check" style="margin-top:14px"><input id="stRunEnabled" type="checkbox">
             <span>▶ Tillåt kommandokörning
@@ -5744,6 +5943,8 @@ async function loadSettingsForm(){
   set('stCodeWs', s.code_workspace);
   set('stCodePerm', s.code_mode || 'ask');
   set('stCodeSteps', s.code_steps);
+  set('stCodeCtx', s.code_ctx);
+  set('stCodeTemp', s.code_temp);
   const permHint = document.getElementById('stCodePermHint');
   if(permHint) permHint.textContent = CODE_MODE_HINTS[s.code_mode] || CODE_MODE_HINTS.ask;
   const permSel = document.getElementById('stCodePerm');
@@ -5790,6 +5991,7 @@ async function loadSettingsForm(){
       parts.push(s.code_run_active ? 'kommandokörning PÅ' : 'kommandokörning av');
       parts.push('behörighet: ' + (s.code_mode_label || s.code_mode || 'ask'));
       parts.push('max ' + (s.code_steps || 25) + ' steg');
+      parts.push('kontext ' + (s.code_ctx ? s.code_ctx + ' token' : 'Ollamas standard'));
       cg.textContent = 'Status: ' + parts.join(' · ');
     }
   }
@@ -5842,7 +6044,9 @@ function collectSettings(){
     code_run_allowlist: document.getElementById('stRunAllow').value,
     code_run_timeout: val('stRunTimeout'),
     code_permission: val('stCodePerm'),
-    code_max_steps: val('stCodeSteps')
+    code_max_steps: val('stCodeSteps'),
+    code_ctx: val('stCodeCtx'),
+    code_temp: val('stCodeTemp')
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
@@ -5935,6 +6139,7 @@ function clearCode(){
   if(codeController) codeController.abort();
   codeMessages = [];
   codeWrites = [];
+  planNode = null;
   updateModeBar();
   try{ localStorage.removeItem(CODE_MSGS_KEY); }catch(e){}
   if(box) box.innerHTML = '<div class="chat-empty">Be Codex läsa koden, ändra en fil eller köra '
@@ -6065,10 +6270,18 @@ async function answerAsk(nodeId, allow, always){
       body: JSON.stringify({id: node._askId, allow, always})});
   }catch(e){ toast('Kunde inte skicka svaret: '+e.message, true); }
 }
+let planNode = null;      // planen ritas om i samma panel under en körning
 function renderPlan(items){
-  const html = (items||[]).map(i=>'<div class="i'+(i.done?' done':(i.active?' active':''))+'">'
-    + (i.done?'✓ ':(i.active?'▸ ':'○ ')) + esc(i.text) + '</div>').join('');
-  codeAppend('<div class="code-plan"><div class="t">PLAN</div>'+html+'</div>');
+  const list = items || [];
+  const done = list.filter(i=>i.done).length;
+  const html = '<div class="t">PLAN · '+done+'/'+list.length+' klara</div>'
+    + list.map(i=>'<div class="i'+(i.done?' done':(i.active?' active':''))+'">'
+      + (i.done?'✓ ':(i.active?'▸ ':'○ ')) + esc(i.text) + '</div>').join('');
+  // Uppdatera den befintliga panelen – annars staplas en ny kopia för varje gång
+  // agenten bockar av en punkt, och loggen blir omöjlig att följa.
+  if(planNode && planNode.isConnected){ planNode.innerHTML = html; return planNode; }
+  planNode = codeAppend('<div class="code-plan">'+html+'</div>');
+  return planNode;
 }
 /* En ändring som agenten redan skrivit (auto_edit / fria händer) – med Ångra.
    I lokalt mappläge sparas det gamla innehållet i webbläsaren i stället för på servern. */
@@ -6240,6 +6453,7 @@ async function sendAgent(){
   if(!model){ toast('Ingen modell vald', true); return; }
   if(codeController || !text) return;
   codeMessages.push({role:'user', content:text});
+  planNode = null;          // ny fråga → ny plan
   saveCodeMsgs();
   codeAppend('<div class="code-user">'+esc(text)+'</div>');
   inp.value='';
@@ -6276,7 +6490,8 @@ async function runAgentServer(model){
       else if(ev.type==='start'){
         if(ev.mode && ev.mode!==cfg.code_mode){ cfg.code_mode = ev.mode; updateModeBar(); }
         codeAppend('<div class="code-step">Behörighet: '+esc(ev.mode_label||ev.mode||'')
-          + ' · max '+(ev.steps||'?')+' steg</div>');
+          + ' · max '+(ev.steps||'?')+' steg'
+          + (ev.ctx ? ' · kontext '+ev.ctx+' token' : '')+'</div>');
       }
       else if(ev.type==='delta'){
         thinkText += ev.text; assistantFull += ev.text;
@@ -7948,7 +8163,7 @@ class Handler(BaseHTTPRequestHandler):
             # Ett enda modellsvar, inga verktyg, ingen diff/disk – bara kod att kopiera.
             full = ""
             try:
-                up = self._open_chat_stream(convo, model, None, base)
+                up = self._open_chat_stream(convo, model, code_options(), base)
                 for raw in up:
                     if not raw:
                         continue
@@ -7980,14 +8195,18 @@ class Handler(BaseHTTPRequestHandler):
         ctx = AgentRun(self._emit, mode)
         max_steps = code_max_steps()
         self._emit({"type": "start", "mode": mode, "mode_label": CODE_MODE_LABELS[mode],
-                    "steps": max_steps})
+                    "steps": max_steps, "ctx": code_ctx()})
         finished = False
         try:
             for step in range(max_steps):
                 self._emit({"type": "step", "n": step + 1, "of": max_steps})
                 full = ""
                 try:
-                    up = self._open_chat_stream(convo, model, None, base)
+                    # Beskär FÖRE anropet: annars kastar Ollama tyst början av
+                    # konversationen (systemprompten med verktygen) när fönstret
+                    # är fullt, och modellen slutar följa protokollet mitt i.
+                    sent = prune_convo(convo, code_char_budget())
+                    up = self._open_chat_stream(sent, model, code_options(), base)
                 except Exception as e:
                     self._emit({"type": "error", "text": "Kunde inte nå modellen: %s" % e})
                     finished = True      # avbrutet av ett fel, inte av stegtaket
@@ -8021,7 +8240,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._emit(ev)
                     convo.append({"role": "assistant", "content": full})
                     convo.append({"role": "user",
-                                  "content": "VERKTYGSRESULTAT (%s):\n%s" % (call["name"], result)})
+                                  "content": "%s (%s):\n%s" % (
+                                      TOOL_RESULT_PREFIX, call["name"],
+                                      cap_tool_result(result, code_result_cap()))})
                     continue
 
                 if call:
