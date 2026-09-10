@@ -8,38 +8,60 @@
 
 ## Var koden bor
 
-`ollama_web.py` var 8 543 rader och 401 kB – halva filen var en enda sträng med hela
-webb-UI:t. Koden ligger nu uppdelad per ansvarsområde:
+`ollama_web.py` var 8 543 rader och 401 kB. Den är nu en startfil på 72 rader; koden
+ligger uppdelad per ansvarsområde:
 
 ```
-ollama_web.py          starten (python3 ollama_web.py) + HTTP-hanteraren
+ollama_web.py            startfil – kör appen och re-exporterar allt
 studio/
-  config.py            inställningar, miljövariabler, alla getters
+  config.py              inställningar, miljövariabler, alla getters
+  backends.py            en eller flera Ollama-instanser
+  sysinfo.py             CPU, RAM och GPU
+  websearch.py           DuckDuckGo-sök, sidhämtning, nu-kontext
+  memory.py              Mem0 (delat långtidsminne)
+  models.py              modellkatalog och biblioteks-sök
+  training.py            AI-träning (soup_train.py)
+  selfupdate.py          "Uppdatera"-knappen (git pull + omstart)
+  huggingface_bridge.py  Hugging Face-tillägget
   codex/
-    workspace.py       path-jail, läs/skriv/sök i projektmappen, ångra
-    permissions.py     godkännanden, loop-vakt, en körnings tillstånd
-    context.py         kontextbudget: kapa och beskär så fönstret räcker
-    protocol.py        systemprompt, tolkning av TOOL-rader, verktygen
-    commands.py        kommandokörning (allowlist, ingen shell)
-    gitops.py          git mot arbetsytan
-    github.py          repo-listning, hämta hem, pull requests
-  web/assets/
-    page.html          sidans stomme
-    styles.css         all CSS
-    app.js             all JavaScript
+    workspace.py         path-jail, läs/skriv/sök i projektmappen, ångra
+    permissions.py       godkännanden, loop-vakt, en körnings tillstånd
+    context.py           kontextbudget: kapa och beskär så fönstret räcker
+    protocol.py          systemprompt, tolkning av TOOL-rader, verktygen
+    commands.py          kommandokörning (allowlist, ingen shell)
+    gitops.py            git mot arbetsytan
+    github.py            repo-listning, hämta hem, pull requests
+  web/
+    server.py            HTTP-hanteraren, all routing, sidan och main()
+    assets/page.html     sidans stomme
+    assets/styles.css    all CSS
+    assets/app.js        all JavaScript
 ```
 
 Webbläsaren laddar fortfarande inga externa filer – `build_page()` bakar in CSS och JS
-i sidan vid start, precis som förut. Sidan som skickas ut är tecken för tecken densamma.
+i sidan vid start. Sidan som skickas ut är tecken för tecken densamma som före
+uppdelningen (kontrollerat med sha256).
 
 `ollama_web.py` är kvar som både startfil och det namn resten känner till: allt som fanns
-där förut går fortfarande att nå som `ollama_web.X`. Det som **inte** följer med är
-monkeypatchning – byter man ut en funktion ska det göras i modulen som äger den
-(`studio.codex.gitops._authed_push_url`, inte `ollama_web._authed_push_url`), för det är
-där den slås upp.
+där förut går fortfarande att nå som `ollama_web.X`, så `python3 ollama_web.py`, `run.sh`,
+systemd-tjänsten och självuppdateringen fungerar oförändrat.
+
+**Ett undantag: monkeypatchning.** Byter man ut en funktion ska det göras där den *slås upp*,
+inte på `ollama_web`:
+
+| Byta ut | Patcha i |
+| --- | --- |
+| `DB_PATH`, `APP_DIR` | `studio.config` |
+| `PRIMARY`, `BACKENDS` | `studio.backends` |
+| `nvidia_gpus` | `studio.sysinfo` |
+| `_ddg_fetch`, `url_is_public` | `studio.websearch` |
+| `GITHUB_API` | `studio.codex.github` |
+| `_authed_push_url` | `studio.codex.gitops` |
+| något som Handler anropar | `studio.web.server` |
 
 `studio/config.py` importerar avsiktligt inget från de andra modulerna: den ligger underst
-så att inget blir cirkulärt.
+så att inget blir cirkulärt. Den enda kopplingen uppåt – `settings_set()` måste tömma
+ångra-stacken när arbetsytan byts – görs med en lokal import.
 
 ## Behörighet – hur långt koppel agenten får
 

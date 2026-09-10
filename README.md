@@ -18,11 +18,13 @@ Ollama Studio finns i **två varianter** – välj den som passar dig:
 
 Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons standardbibliotek.
 
-> **Filstruktur (webbversionen):** `ollama_web.py` är starten. Koden ligger i `studio/`,
-> uppdelad per ansvarsområde – `config.py` för inställningar, `codex/` för kodagenten
-> (arbetsyta, behörigheter, protokoll, kommandon, git, GitHub) och `web/assets/` för
-> sidans HTML, CSS och JavaScript. Webbläsaren laddar fortfarande inga externa filer:
-> allt bakas in i sidan vid start.
+> **Filstruktur (webbversionen):** `ollama_web.py` är startfilen. Koden ligger i `studio/`,
+> uppdelad per ansvarsområde – `config.py` (inställningar), `backends.py`, `sysinfo.py`,
+> `websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `codex/` för
+> kodagenten (arbetsyta, behörigheter, protokoll, kommandon, git, GitHub) och `web/` för
+> HTTP-hanteraren och sidan (`web/assets/` = HTML, CSS, JavaScript). Webbläsaren laddar
+> fortfarande inga externa filer: allt bakas in i sidan vid start. Se
+> [`docs/kodassistent.md`](docs/kodassistent.md) för hela kartan.
 
 ---
 

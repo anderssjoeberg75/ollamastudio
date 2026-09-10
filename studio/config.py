@@ -11,6 +11,15 @@ import sys
 import threading
 
 
+# Appens identitet och de miljövariabler som styr själva servern.
+APP_TITLE = "Ollama Studio"
+APP_VERSION = "1.0.0"
+
+LISTEN_HOST = os.environ.get("OLLAMA_STUDIO_HOST", "0.0.0.0")
+LISTEN_PORT = int(os.environ.get("OLLAMA_STUDIO_PORT", "8080"))
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
+
 # Projektets rot – mappen som ollama_web.py ligger i, alltså EN nivå upp från
 # studio/. Används av självuppdateringen (git pull + omstart) och för att hitta
 # webb-UI:ts filer. Skild från Codex-arbetsytan.

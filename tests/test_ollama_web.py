@@ -27,6 +27,10 @@ import ollama_web as w  # noqa: E402
 import studio.config as cfg  # noqa: E402
 import studio.codex.github as gh_mod  # noqa: E402
 import studio.codex.gitops as git_mod  # noqa: E402
+import studio.backends as be_mod  # noqa: E402
+import studio.sysinfo as sys_mod  # noqa: E402
+import studio.websearch as ws_mod  # noqa: E402
+import studio.models as models_mod  # noqa: E402
 
 
 class TestHuggingFaceWiring(unittest.TestCase):
@@ -200,9 +204,9 @@ class TestWebSearchParsing(unittest.TestCase):
 
     def test_gpu_cache(self):
         # Två snabba anrop ska ge SAMMA cachade objekt (ingen ny subprocess) – board #11.
-        w._GPU_CACHE = None
-        a = w.nvidia_gpus()
-        b = w.nvidia_gpus()
+        sys_mod._GPU_CACHE = None
+        a = sys_mod.nvidia_gpus()
+        b = sys_mod.nvidia_gpus()
         self.assertIs(a, b)
 
 
@@ -764,10 +768,10 @@ class TestCodexAgentLoop(_DBTest):
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._ScriptedOllama)
         threading.Thread(target=self.ollama.serve_forever,
                          kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_primary, self._old_backends = w.PRIMARY, w.BACKENDS
-        w.PRIMARY = {"label": "test", "gpu": None,
+        self._old_primary, self._old_backends = be_mod.PRIMARY, be_mod.BACKENDS
+        be_mod.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
-        w.BACKENDS = [w.PRIMARY]
+        be_mod.BACKENDS = [be_mod.PRIMARY]
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
         threading.Thread(target=self.studio.serve_forever,
                          kwargs={"poll_interval": 0.02}, daemon=True).start()
@@ -778,7 +782,7 @@ class TestCodexAgentLoop(_DBTest):
         for srv in (self.studio, self.ollama):
             srv.shutdown()
             srv.server_close()
-        w.PRIMARY, w.BACKENDS = self._old_primary, self._old_backends
+        be_mod.PRIMARY, be_mod.BACKENDS = self._old_primary, self._old_backends
         super().tearDown()
 
     def _post(self, path, body):
@@ -1036,8 +1040,8 @@ class TestPullFallback(_DBTest):
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._FakeOllama)
         threading.Thread(target=self.ollama.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_primary = w.PRIMARY
-        w.PRIMARY = {"label": "test", "gpu": None,
+        self._old_primary = be_mod.PRIMARY
+        be_mod.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
         threading.Thread(target=self.studio.serve_forever,
@@ -1054,7 +1058,7 @@ class TestPullFallback(_DBTest):
         for srv in (self.studio, self.ollama):
             srv.shutdown()
             srv.server_close()
-        w.PRIMARY = self._old_primary
+        be_mod.PRIMARY = self._old_primary
         super().tearDown()
 
     def _pull(self, name):
@@ -1154,15 +1158,15 @@ class TestPageReading(unittest.TestCase):
         threading.Thread(target=self.srv.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
-        self._old_check = w.url_is_public
+        self._old_check = ws_mod.url_is_public
 
     def tearDown(self):
-        w.url_is_public = self._old_check
+        ws_mod.url_is_public = self._old_check
         self.srv.shutdown()
         self.srv.server_close()
 
     def _allow_local(self):
-        w.url_is_public = lambda url: url.startswith("http")
+        ws_mod.url_is_public = lambda url: url.startswith("http")
 
     # ---- textutvinning ----
     def test_html_to_text(self):
@@ -1288,8 +1292,8 @@ class TestExcerptAndCache(unittest.TestCase):
 
     def test_search_is_cached(self):
         calls = []
-        real = w._ddg_fetch
-        w._ddg_fetch = lambda url, timeout: calls.append(url) or (
+        real = ws_mod._ddg_fetch
+        ws_mod._ddg_fetch = lambda url, timeout: calls.append(url) or (
             '<a class="result__a" href="https://x.se">Titel</a>')
         try:
             first = w.web_search("vuelta 2026")
@@ -1297,7 +1301,7 @@ class TestExcerptAndCache(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(len(calls), 1)               # bara ett nätanrop
         finally:
-            w._ddg_fetch = real
+            ws_mod._ddg_fetch = real
 
     def test_expired_cache_is_refetched(self):
         w._cache_put(w._search_cache, "x", [{"title": "gammal"}])
@@ -1399,11 +1403,11 @@ class TestChatClock(_DBTest):
         self.ollama = ThreadingHTTPServer(("127.0.0.1", 0), self._EchoOllama)
         threading.Thread(target=self.ollama.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
-        self._old_primary = w.PRIMARY
-        w.PRIMARY = {"label": "test", "gpu": None,
+        self._old_primary = be_mod.PRIMARY
+        be_mod.PRIMARY = {"label": "test", "gpu": None,
                      "url": "http://127.0.0.1:%d" % self.ollama.server_address[1]}
-        self._old_backends = w.BACKENDS
-        w.BACKENDS = [w.PRIMARY]
+        self._old_backends = be_mod.BACKENDS
+        be_mod.BACKENDS = [be_mod.PRIMARY]
         self.studio = ThreadingHTTPServer(("127.0.0.1", 0), w.Handler)
         threading.Thread(target=self.studio.serve_forever,
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
@@ -1414,7 +1418,7 @@ class TestChatClock(_DBTest):
         for srv in (self.studio, self.ollama):
             srv.shutdown()
             srv.server_close()
-        w.PRIMARY, w.BACKENDS = self._old_primary, self._old_backends
+        be_mod.PRIMARY, be_mod.BACKENDS = self._old_primary, self._old_backends
         super().tearDown()
 
     def _chat(self, **extra):
@@ -1491,8 +1495,8 @@ class TestModelSearch(_DBTest):
         self.assertTrue(w.catalog_matches("embeddings"))
 
     def test_model_search_merges_sources_without_duplicates(self):
-        old_lib, old_hf = w.ollama_library_search, w.HF.search_models
-        w.ollama_library_search = lambda q, limit=20, timeout=8: (
+        old_lib, old_hf = models_mod.ollama_library_search, w.HF.search_models
+        models_mod.ollama_library_search = lambda q, limit=20, timeout=8: (
             w.parse_ollama_library(self.LIBRARY_HTML, limit)
             + [{"pull": "qwen2.5", "name": "qwen2.5", "desc": "", "sizes": [],
                 "source": "ollama", "url": ""}])          # dubblett mot katalogen
@@ -1507,10 +1511,10 @@ class TestModelSearch(_DBTest):
             self.assertEqual(result["hf"][0]["pull"], "hf.co/bartowski/Qwen3-8B-GGUF")
             self.assertEqual(result["hf"][0]["source"], "hf")
         finally:
-            w.ollama_library_search, w.HF.search_models = old_lib, old_hf
+            models_mod.ollama_library_search, w.HF.search_models = old_lib, old_hf
 
     def test_model_search_survives_dead_network(self):
-        old_lib, old_hf = w.ollama_library_search, w.HF.search_models
+        old_lib, old_hf = models_mod.ollama_library_search, w.HF.search_models
         w.ollama_library_search = lambda *a, **k: []        # som vid nätverksfel
         def boom(*a, **k):
             raise OSError("nätet nere")
@@ -1521,7 +1525,7 @@ class TestModelSearch(_DBTest):
                              ["qwen2.5:3b", "qwen2.5"])     # inbyggda katalogen räcker
             self.assertEqual(result["hf"], [])
         finally:
-            w.ollama_library_search, w.HF.search_models = old_lib, old_hf
+            models_mod.ollama_library_search, w.HF.search_models = old_lib, old_hf
 
     def test_empty_query(self):
         self.assertEqual(w.model_search("  "), {"query": "", "library": [], "hf": []})
@@ -1589,13 +1593,13 @@ class TestTraining(_DBTest):
 
     def test_gpu_hint_unpacks_tuple(self):
         # nvidia_gpus() returnerar (lista, fel) – hinten får inte snubbla på det.
-        old = w.nvidia_gpus
-        w.nvidia_gpus = lambda: ([{"name": "RTX 4060", "mem_total_mb": 8188}], None)
+        old = sys_mod.nvidia_gpus
+        sys_mod.nvidia_gpus = lambda: ([{"name": "RTX 4060", "mem_total_mb": 8188}], None)
         try:
             self.assertEqual(w.train_gpu_hint(), (8188, "RTX 4060"))
             self.assertEqual(w.train_status()["suggest_profile"], "8gb")
         finally:
-            w.nvidia_gpus = old
+            sys_mod.nvidia_gpus = old
 
     # ---- jobbkörningen ----
     def test_job_parses_progress_and_finishes(self):
@@ -1925,15 +1929,15 @@ class TestSelfUpdate(_DBTest):
     def test_not_a_git_repo(self):
         plain = os.path.join(self.tmp, "plain")
         os.makedirs(plain)
-        old = w.APP_DIR
-        w.APP_DIR = plain
+        old = cfg.APP_DIR
+        cfg.APP_DIR = plain
         try:
             r = w.self_update()
             self.assertFalse(r["ok"])
             self.assertFalse(r["restart"])
             self.assertIn("git-repo", r["output"])
         finally:
-            w.APP_DIR = old
+            cfg.APP_DIR = old
 
     @unittest.skipUnless(shutil.which("git"), "git saknas")
     def test_up_to_date_then_update(self):
@@ -1959,8 +1963,8 @@ class TestSelfUpdate(_DBTest):
         # Appklonen som self_update() kör i
         subprocess.run(["git", "clone", remote, app], capture_output=True, text=True)
 
-        old = w.APP_DIR
-        w.APP_DIR = app
+        old = cfg.APP_DIR
+        cfg.APP_DIR = app
         try:
             r = w.self_update()                       # inget nytt på remote ännu
             self.assertTrue(r["ok"], r["output"])
@@ -1977,7 +1981,7 @@ class TestSelfUpdate(_DBTest):
             self.assertTrue(r2["restart"])
             self.assertTrue(r2["updated"])
         finally:
-            w.APP_DIR = old
+            cfg.APP_DIR = old
 
 
 class TestGit(_DBTest):
