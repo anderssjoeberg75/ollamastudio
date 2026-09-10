@@ -9,6 +9,8 @@ import subprocess
 import threading
 import time
 
+from . import backends
+
 
 # --------------------------------------------------------------------------
 # Systemresurser (CPU/RAM) och GPU-info (via nvidia-smi)
@@ -167,7 +169,8 @@ def _nvidia_gpus_query():
                 g["procs"].append({k: p[k] for k in ("pid", "name", "mem_mb", "is_ollama")})
         # Koppla in vilka Studio-backends (GPU-instanser) som pekar på varje GPU-index
         for g in gpus:
-            g["backends"] = [b["label"] for b in BACKENDS if str(b.get("gpu")) == str(g["index"])]
+            g["backends"] = [b["label"] for b in backends.BACKENDS
+                             if str(b.get("gpu")) == str(g["index"])]
         return gpus, err
     except Exception as e:
         return None, str(e)
