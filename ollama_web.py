@@ -47,6 +47,7 @@ from studio.models import *                                            # noqa: F
 from studio.models import CATALOG                                      # noqa: F401,E402
 from studio.training import *                                          # noqa: F401,F403,E402
 from studio.training import _soup_version_cached                       # noqa: F401,E402
+from studio.runtime import *                                           # noqa: F401,F403,E402
 from studio.selfupdate import *                                        # noqa: F401,F403,E402
 from studio.selfupdate import _restart_process                         # noqa: F401,E402
 from studio.huggingface_bridge import *                                # noqa: F401,F403,E402

@@ -226,6 +226,9 @@
   .usebar{height:8px;background:var(--border);border-radius:4px;overflow:hidden}
   .usebar>div{height:100%;width:0;background:var(--accent);transition:width .3s}
   .metric .sub{color:var(--faint);font-size:12px;margin-top:6px}
+  /* Ladda ur-knappen sitter längst till höger i GPU-kortets rubrik */
+  .gpu-card .title .gpu-unload{margin-left:auto;flex:none}
+  .gpu-card .title .gpu-unload[disabled]{opacity:.4;cursor:default}
   .gpu-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:8px 2px}
   .gpu-card .title{display:flex;align-items:center;gap:10px;margin-bottom:2px}
   .gpu-card .gidx{background:var(--accent-dim);color:var(--accent-hov);font-weight:700;font-size:12px;
