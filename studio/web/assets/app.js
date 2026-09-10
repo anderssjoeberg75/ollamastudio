@@ -2253,7 +2253,13 @@ async function sendAgent(){
   }
 }
 async function runAgentServer(model){
-  let think = null, thinkText='', assistantFull='';
+  // finalMessage = modellens rena slutsvar (servern har redan strippat TOOL-rader
+  // och FIL-block). Det är DET som ska sparas som konversationen – inte varje stegs
+  // råtext. Förut klistrades alla steg ihop UTAN avskiljare, så den sparade texten
+  // blev "TOOL list_dir {...}TOOL read_file {...}…" på en enda rad: omöjlig att
+  // städa, synlig i loggen efter omladdning, och skickad tillbaka till modellen som
+  // historik – vilket lärde den att fortsätta klistra ihop TOOL-rader.
+  let think = null, thinkText='', finalMessage='', stepTexts=[];
   const r = await api('/api/agent', {method:'POST', headers:headers(true),
     body: JSON.stringify({model, messages: codeMessages}), signal: codeController.signal});
   if(!r.ok){ const d=await r.json().catch(()=>({})); throw new Error(d.error||('HTTP '+r.status)); }
@@ -2268,6 +2274,7 @@ async function runAgentServer(model){
       if(!line) continue;
       let ev; try{ ev = JSON.parse(line); }catch(e){ continue; }
       if(ev.type==='step'){
+        if(thinkText.trim()) stepTexts.push(thinkText.trim());   // reserv, se nedan
         thinkText=''; think=null;
         // Utan steg-tak är det här enda tecknet på att den fortfarande jobbar.
         const send=document.getElementById('codeSend');
@@ -2280,7 +2287,7 @@ async function runAgentServer(model){
           + (ev.ctx ? ' · kontext '+ev.ctx+' token' : '')+'</div>');
       }
       else if(ev.type==='delta'){
-        thinkText += ev.text; assistantFull += ev.text;
+        thinkText += ev.text;
         if(!think) think = codeAppend('<div class="code-think"></div>');
         think.textContent = thinkText;
         codeLogEl().scrollTop = codeLogEl().scrollHeight;
@@ -2304,7 +2311,8 @@ async function runAgentServer(model){
       }
       else if(ev.type==='message'){
         if(think){ think.remove(); think=null; }
-        if(ev.text) codeAppend('<div class="code-msg">'+mdToHtml(ev.text)+'</div>');
+        if(ev.text){ finalMessage = ev.text;
+          codeAppend('<div class="code-msg">'+mdToHtml(ev.text)+'</div>'); }
       }
       else if(ev.type==='applied'){ if(think){ think.remove(); think=null; } renderApplied(ev); }
       else if(ev.type==='edit'){ renderEdit(ev); }
@@ -2321,7 +2329,14 @@ async function runAgentServer(model){
     }
   }
   appendBatchBar();
-  if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
+  // Spara slutsvaret. Kom inget (avbrutet, eller taket nått) faller vi tillbaka på
+  // stegens text – då med radbrytning MELLAN stegen, så TOOL-raderna går att städa.
+  let saved = finalMessage.trim();
+  if(!saved){
+    if(thinkText.trim()) stepTexts.push(thinkText.trim());
+    saved = codeMsgText(stepTexts.join('\n\n'));
+  }
+  if(saved) codeMessages.push({role:'assistant', content:saved});
 }
 /* Anropa modellen (via /api/chat) och strömma svaret. Returnerar full text. */
 async function streamModel(convo, onDelta){
@@ -2649,7 +2664,9 @@ async function runAgentLocal(model){
     break;
   }
   appendBatchBar();
-  if(assistantFull) codeMessages.push({role:'assistant', content:assistantFull});
+  // Samma sak lokalt: spara prosan, inte TOOL-raden som råkade vara sist.
+  const savedLocal = codeMsgText(assistantFull);
+  if(savedLocal) codeMessages.push({role:'assistant', content:savedLocal});
 }
 async function applyEditLocal(id){
   const node=document.getElementById(id); if(!node||!node._edit) return;
