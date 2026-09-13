@@ -15,9 +15,10 @@ Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 > cache-efter-commit, **kort `mem0_search`-timeout i chatten**, **DuckDuckGo lite-fallback**,
 > **atomisk/trådsäker inställnings-cache**, **startvarning när servern är öppen utan token (#1,
 > per ägarens beslut – defaults oförändrade)**, **Mem0-radering: footgun + tyst fel fixat (#22,
-> statisk genomgång)**, **tester för ny logik**). Kvar: bara **live-verifiering av #22** (Mem0
+> statisk genomgång)**, **tester för ny logik**). Kvar: **live-verifiering av #22** (Mem0
 > list/delete mot ett riktigt Mem0-konto – kräver API-nyckel). Tester finns i `tests/` – kör
 > `python3 -m unittest discover -s tests`.
+> Nytt: **#25** (dokumentera den optimerade Ollama-instansen) är öppet.
 
 ---
 
@@ -303,6 +304,68 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 - **Acceptans:**
   - [ ] `python3 -m unittest` täcker ovanstående och kör grönt utan beroenden.
 
+## 🟡 25. Dokumentera och koppla in den optimerade Ollama-instansen (GPU 1, port 11436)
+
+> **Till dig som tar det här ticketet (t.ex. Antigravity):** unit-filen är redan skriven och
+> incheckad – skriv inte om den. Det som återstår är att dokumentera den och göra den
+> upptäckbar. Punkt 1–3 kräver ingen GPU och kan göras helt statiskt. Punkt 4 kräver
+> hårdvara och får lämnas okryssad.
+
+- **Filer (alla sökvägar relativa reporoten):**
+
+  | Fil | Roll i det här ticketet |
+  |-----|------------------------|
+  | `ollama-gpu1-tuned.service` | **Ny, finns redan.** Fristående unit: GPU 1, port 11436, `OLLAMA_FLASH_ATTENTION=1` + `OLLAMA_KV_CACHE_TYPE=q8_0`. Ändra inget här. |
+  | `ollama-gpu@.service` | Befintlig mall, en instans per GPU. Porten är låst till `11434 + GPU-index` i `ExecStart` på **rad 43** – det är därför den inte kan ge en andra instans på samma GPU. |
+  | `ollama-studio-web.service` | Utkommenterat `OLLAMA_STUDIO_BACKENDS`-exempel på **rad 31**. Ska utökas med en tredje backend. |
+  | `README.md` | Env-tabellens rad för `OLLAMA_STUDIO_BACKENDS` på **rad 237**; avsnittet *Välj vilken GPU en modell körs på* från **rad 448**, med samma backends-exempel på **rad 470**. |
+  | `studio/backends.py` → `parse_backends()` | Läser formatet `"label,url,gpu ; ..."`. **Ingen kodändring behövs** – godtyckliga etiketter stöds redan. |
+
+- **Bakgrund:** `OLLAMA_FLASH_ATTENTION` och `OLLAMA_KV_CACHE_TYPE` är serverinställningar som
+  läses när Ollama-processen startar. De går **inte** att skicka per API-anrop och **inte** att
+  sätta per modell – de gäller allt den instansen laddar. `q8_0` halverar KV-cachens VRAM och
+  ger utrymme för längre `num_ctx` på ett 12 GB-kort, men har dokumenterade problem med vissa
+  modellfamiljer (Gemma 3: kraftigt sämre genomströmning och kvalitet, se ollama/ollama#10945
+  och #11949; ingen uppgift om Gemma 4). Därför en **separat instans** i stället för två rader i
+  mallen: den omodifierade vägen via 11434/11435 måste finnas kvar, så att enskilda modeller kan
+  flyttas till den optimerade instansen bara när de mår bra av det.
+
+- **Att göra:**
+  1. **`ollama-studio-web.service` rad 31** – lägg till en tredje backend i exemplet, och en rad
+     som förklarar att etiketten är fri text:
+     ```
+     # Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1 ; GPU 1 tuned,http://127.0.0.1:11436,1"
+     ```
+  2. **`README.md` rad 448 och framåt** – nytt underavsnitt efter *Välj vilken GPU en modell körs
+     på*, förslagsvis **"Extra instans med KV-cache-kvantisering"**. Ska täcka: vad de två
+     miljövariablerna gör, att de är serverglobala (varken per anrop eller per modell), att
+     `q8_0` kräver `OLLAMA_FLASH_ATTENTION=1` för att inte tyst falla tillbaka på f16,
+     installationsstegen för `ollama-gpu1-tuned.service`, samt **varningen** att instansen delar
+     VRAM med `ollama-gpu@1` – samma fysiska kort, så bara en av dem får ha en modell inladdad.
+     Uppdatera även backends-exemplet på **rad 470** likt punkt 1.
+  3. **`README.md` rad 237** – peka env-tabellens `OLLAMA_STUDIO_BACKENDS`-rad mot det nya
+     avsnittet, och lägg till rader för `OLLAMA_FLASH_ATTENTION` / `OLLAMA_KV_CACHE_TYPE` med
+     noteringen att de sätts på **Ollama-tjänsten**, inte på Ollama Studio.
+  4. **Mätning (kräver hårdvara).** Jämför tokens/sekund med och utan optimeringarna innan de
+     rekommenderas för en viss modell:
+     ```bash
+     OLLAMA_HOST=127.0.0.1:11436 ollama stop <modell>
+     OLLAMA_HOST=127.0.0.1:11435 ollama run --verbose <modell> "<samma prompt>"
+     OLLAMA_HOST=127.0.0.1:11435 ollama stop <modell>
+     OLLAMA_HOST=127.0.0.1:11436 ollama run --verbose <modell> "<samma prompt>"
+     ```
+     `--verbose` skriver ut **eval rate**. `ollama stop` mellan körningarna är nödvändigt
+     eftersom instanserna delar VRAM. Ligger 11436 lägre har modellen samma problem som Gemma 3
+     – notera det i README-avsnittet.
+
+- **Acceptans:**
+  - [ ] `ollama-studio-web.service` visar ett tre-backends-exempel med 11436.
+  - [ ] README har ett avsnitt om den optimerade instansen, inklusive VRAM-varningen och att
+        inställningarna är serverglobala.
+  - [ ] Env-tabellen nämner `OLLAMA_FLASH_ATTENTION` och `OLLAMA_KV_CACHE_TYPE` och var de sätts.
+  - [ ] Inga kodändringar i `studio/backends.py` – formatet räcker som det är.
+  - [ ] Live: uppmätt eval rate på 11435 vs 11436 för minst en modell, resultatet noterat i README.
+
 ---
 
 ### Snabböversikt
@@ -333,3 +396,4 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | 🟡 22 | 🟡 | `ollama_web.py` | Mem0 list/delete: footgun + tyst fel fixat; live-test kvar |
 | ✅ 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
 | ✅ 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |
+| 🟡 25 | 🟡 | `ollama-gpu1-tuned.service`, `README.md` | Dokumentera optimerad Ollama-instans (GPU 1, port 11436) |
