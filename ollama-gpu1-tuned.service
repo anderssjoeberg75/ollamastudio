@@ -1,0 +1,58 @@
+# En EXTRA Ollama-instans på GPU 1, port 11436, med minnesoptimeringar påslagna.
+#
+# Varför en egen fil och inte mallen ollama-gpu@.service? I mallen är porten låst
+# till 11434 + GPU-index, så instansnamnet styr båda. Vill du ha en annan port på
+# samma GPU måste de två frikopplas – därför står allt explicit här.
+#
+# --- Installera ------------------------------------------------------------
+#   sudo cp ollama-gpu1-tuned.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ollama-gpu1-tuned
+#
+# Kontrollera:  systemctl status ollama-gpu1-tuned
+#               journalctl -u ollama-gpu1-tuned -f
+#               curl http://127.0.0.1:11436/api/version
+#
+# ⚠ LÄS DETTA: den här instansen delar VRAM med ollama-gpu@1 (port 11435) – båda
+# ligger på GPU 1. Har båda en modell inladdad samtidigt ryms de inte på 12 GB,
+# och Ollama flyttar tyst ut lager på CPU. Kör bara en av dem åt gången, eller
+# sätt en kort keep_alive så den oanvända släpper minnet. Kontrollera med
+# `ollama ps` mot BÅDA portarna att bara en har något laddat.
+#
+# Vill du ha samma sak på en annan GPU/port: kopiera filen, byt
+# CUDA_VISIBLE_DEVICES, OLLAMA_HOST-porten och Description.
+# ---------------------------------------------------------------------------
+
+[Unit]
+Description=Ollama (GPU 1, flash attention + q8_0 KV-cache, port 11436)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Lås instansen till GPU 1. Processen ser bara det kortet – ryms inte modellen
+# där faller den tillbaka på CPU, den hoppar INTE över till en annan GPU.
+Environment=CUDA_VISIBLE_DEVICES=1
+# Samma modellkatalog som övriga instanser, så inget laddas ner två gånger.
+# Kör du Ollama som root? Byt till /root/.ollama/models och ta bort User/Group.
+Environment=OLLAMA_MODELS=/usr/share/ollama/.ollama/models
+
+# --- Minnesoptimeringarna (hela poängen med den här instansen) --------------
+# FlashAttention: samma attention-beräkning, men utan att hela attention-matrisen
+# materialiseras i minnet. Snabbare och snålare, mest vid lång kontext.
+Environment=OLLAMA_FLASH_ATTENTION=1
+# KV-cachen i 8 bitar i stället för 16 – halverar dess VRAM-åtgång. Kräver
+# FlashAttention ovan; utan den faller den tyst tillbaka på f16.
+Environment=OLLAMA_KV_CACHE_TYPE=q8_0
+
+# Bind-adress och port. 127.0.0.1 = bara lokalt på servern. Ska instansen nås
+# från en annan dator, byt till 0.0.0.0 och sätt brandvägg framför.
+Environment=OLLAMA_HOST=127.0.0.1:11436
+User=ollama
+Group=ollama
+ExecStart=/bin/sh -c 'exec ollama serve'
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
