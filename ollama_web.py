@@ -63,6 +63,7 @@ from studio.codex.gitops import *                                      # noqa: F
 from studio.codex.gitops import _git, _authed_push_url                 # noqa: F401,E402
 from studio.codex.github import *                                      # noqa: F401,F403,E402
 from studio.codex.github import _rmtree_force, _repos_cache            # noqa: F401,E402
+from studio.codex.gitlab import *                                      # noqa: F401,F403,E402
 from studio.web.page import *                                          # noqa: F401,F403,E402
 from studio.web.page import (                                          # noqa: F401,E402
     ASSETS_DIR, PAGE, _PAGE_BYTES, _asset, build_page, render_page,

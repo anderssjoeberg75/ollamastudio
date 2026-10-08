@@ -8,7 +8,8 @@ import os
 import sys
 
 from studio.codex.commands import code_run_enabled
-from studio.codex.gitops import git_available, git_is_repo, git_remote_slug
+from studio.codex.gitops import (
+    git_available, git_is_repo, git_remote_info, git_remote_slug)
 from studio.config import (
     APP_DIR, CODE_MODE_LABELS, DB_PATH, SETTINGS_SPEC, TOKEN, code_ctx,
     code_enabled, code_max_steps, code_mode, code_toggle_on,
@@ -59,6 +60,8 @@ def settings_public():
         if out["git_repo"]:
             _o, _r = git_remote_slug()
             out["git_slug"] = ("%s/%s" % (_o, _r)) if (_o and _r) else ""
+            _info = git_remote_info()
+            out["git_provider"] = _info.get("provider", "git") if _info else "git"
     out["db_path"] = DB_PATH
     return out
 

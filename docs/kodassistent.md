@@ -299,13 +299,18 @@ repot låg kvar. Förvalet faller därför tillbaka på `cfg.code_ws_path`. Code
 intill modellväljaren heter **🧹 Töm loggen** (inte 🗑): den rensar bara loggen och
 konversationen, aldrig filer.
 
-**Hämta repo från UI:t (v2):** rullmenyn högst upp i Codex-vyn listar repon som
-GitHub-token ger tillgång till (`GET /api/github/repos`). Vid **⬇ Hämta & arbeta här**
-(`POST /api/github/fetch`) klonas repot till `OLLAMA_STUDIO_REPOS_DIR`
+**Hämta repo från UI:t (v2 & v3):** rullmenyn högst upp i Codex-vyn låter dig välja
+mellan **GitLab** (t.ex. `gitlab.andrix.se` eller `gitlab.com`) och **GitHub**. Med en
+sparad token listas dina tillgängliga repon automatiskt (`GET /api/gitlab/repos` eller
+`GET /api/github/repos`). Du kan även klicka **➕ Ange repo…** för att ange valfri slug
+(t.ex. `anderssjoeberg75/ollamastudio`) eller full git-URL direkt. Vid **⬇ Hämta & arbeta här**
+(`POST /api/gitlab/fetch` eller `POST /api/github/fetch`) klonas repot till `OLLAMA_STUDIO_REPOS_DIR`
 (standard `~/ollama-studio-repos/ägare__namn`) och `code_workspace` pekas om dit.
-Kloningen sker via en autentiserad URL, men `origin` sätts därefter till den rena
-https-adressen – token hamnar aldrig i `.git/config`. Är repot redan hämtat görs
+Kloningen sker via en autentiserad URL om token finns, men `origin` sätts därefter till den rena
+adressen – token hamnar aldrig i `.git/config`. Är repot redan hämtat görs
 `fetch` + `merge --ff-only`, och har arbetsträdet osparade ändringar rörs det inte alls.
+När du arbetar i ett GitLab-repo kan du skapa nya grenar, committa, pusha och öppna **Merge Requests**
+(`POST /api/gitlab/mr`) direkt från Codex-vyn.
 
 ## UI-flöde (ny vy "Kod")
 

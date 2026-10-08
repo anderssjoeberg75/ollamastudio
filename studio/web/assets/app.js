@@ -1768,6 +1768,8 @@ async function loadSettingsForm(){
     }
   }
   set('stGhBase', s.github_base);
+  set('stGlUrl', s.gitlab_url || 'http://gitlab.andrix.se');
+  set('stGlBase', s.gitlab_base || 'main');
   chk('stRunEnabled', s.code_run_enabled);
   set('stRunAllow', s.code_run_allowlist);
   set('stRunTimeout', s.code_run_timeout);
@@ -1782,8 +1784,10 @@ async function loadSettingsForm(){
       const parts = ['✓ Aktiv'];
       parts.push(s.git_available ? 'git finns' : '⚠ git saknas på servern');
       if(s.git_repo){
-        parts.push(s.git_slug ? ('GitHub: '+s.git_slug) : '⚠ ingen github.com-remote (push/PR funkar ej)');
-        parts.push(s.github_token_set ? 'token satt' : '⚠ ingen token (push/PR kräver token)');
+        const prov = (s.git_provider === 'gitlab') ? 'GitLab' : ((s.git_provider === 'github') ? 'GitHub' : 'Git');
+        parts.push(s.git_slug ? (prov + ': ' + s.git_slug) : 'git-repo aktivt');
+        const tokSet = (s.git_provider === 'gitlab') ? s.gitlab_token_set : s.github_token_set;
+        parts.push(tokSet ? 'token satt' : '⚠ ingen token för ' + prov + ' (push/MR/PR kräver token)');
       }else{
         parts.push('⚠ arbetsytan är inte ett git-repo (git/PR-knapparna döljs)');
       }
@@ -1798,6 +1802,11 @@ async function loadSettingsForm(){
   const ghEl = document.getElementById('stGhToken'); if(ghEl) ghEl.value='';
   const ghState = document.getElementById('stGhTokenState');
   if(ghState) ghState.textContent = ghTokenIsSet
+    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+  glTokenIsSet = !!s.gitlab_token_set; glTokenClear = false;
+  const glEl = document.getElementById('stGlToken'); if(glEl) glEl.value='';
+  const glState = document.getElementById('stGlTokenState');
+  if(glState) glState.textContent = glTokenIsSet
     ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
   document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
 }
@@ -1815,6 +1824,11 @@ function clearGhToken(){
   ghTokenClear = true; ghTokenIsSet = false;
   const el = document.getElementById('stGhToken'); if(el) el.value='';
   document.getElementById('stGhTokenState').textContent = '✕ Token tas bort när du sparar';
+}
+function clearGlToken(){
+  glTokenClear = true; glTokenIsSet = false;
+  const el = document.getElementById('stGlToken'); if(el) el.value='';
+  document.getElementById('stGlTokenState').textContent = '✕ Token tas bort när du sparar';
 }
 function collectSettings(){
   const val = id => (document.getElementById(id).value||'').trim();
@@ -1839,6 +1853,8 @@ function collectSettings(){
     code_enabled: document.getElementById('stCodeEnabled').checked,
     code_workspace: val('stCodeWs'),
     github_base: val('stGhBase'),
+    gitlab_url: val('stGlUrl') || 'http://gitlab.andrix.se',
+    gitlab_base: val('stGlBase'),
     code_run_enabled: document.getElementById('stRunEnabled').checked,
     code_run_allowlist: document.getElementById('stRunAllow').value,
     code_run_timeout: val('stRunTimeout'),
@@ -1853,6 +1869,9 @@ function collectSettings(){
   const gh = val('stGhToken');
   if(ghTokenClear && !gh) body.github_token = null;    // rensa
   else if(gh) body.github_token = gh;                  // ny token (annars orörd)
+  const gl = val('stGlToken');
+  if(glTokenClear && !gl) body.gitlab_token = null;    // rensa
+  else if(gl) body.gitlab_token = gl;                  // ny token (annars orörd)
   const hft = val('stHfToken');
   if(hfTokenClear && !hft) body.hf_token = null;       // rensa
   else if(hft) body.hf_token = hft;                    // ny token (annars orörd)
@@ -2753,28 +2772,48 @@ function gitMsg(text, err){
   const el = document.getElementById('codeGitMsg');
   if(el){ el.innerHTML = text || ''; el.style.color = err ? 'var(--danger)' : 'var(--faint)'; }
 }
-/* ---- GitHub-repo: välj i listan, hämta hem, arbeta, pusha tillbaka ---- */
+/* ---- Git / GitLab & GitHub (fas 3) ---- */
+let lastGit = null;
+function gitMsg(text, err){
+  const el = document.getElementById('codeGitMsg');
+  if(el){ el.innerHTML = text || ''; el.style.color = err ? 'var(--danger)' : 'var(--faint)'; }
+}
+/* ---- Repo: välj i listan eller ange själv, hämta hem, arbeta, pusha tillbaka ---- */
+let repoProvider = 'gitlab';
 let repoList = [];
 let localRepos = [];        // repon som redan ligger på serverns disk
 let repoDir = '';           // mappen på servern där hämtade repon hamnar
+
+function onProviderChange(){
+  const el = document.getElementById('codeRepoProvider');
+  if(el) repoProvider = el.value || 'gitlab';
+  repoList = [];
+  loadRepos(true);
+}
+
 async function loadRepos(force){
   const sel = document.getElementById('codeRepoSelect');
   const hint = document.getElementById('codeRepoHint');
+  const provEl = document.getElementById('codeRepoProvider');
+  if(provEl && provEl.value) repoProvider = provEl.value;
   if(!sel) return;
   if(repoList.length && !force){ renderRepos(); return; }
-  sel.innerHTML = '<option value="">Hämtar dina repon…</option>';
+  sel.innerHTML = '<option value="">Hämtar dina '+(repoProvider==='gitlab'?'GitLab':'GitHub')+'-repon…</option>';
+  const endpoint = (repoProvider === 'gitlab') ? '/api/gitlab/repos' : '/api/github/repos';
   try{
-    const r = await api('/api/github/repos', {headers: headers(false)});
+    const r = await api(endpoint, {headers: headers(false)});
     const d = await r.json();
     repoList = d.repos || [];
     localRepos = d.local || [];
+    repoDir = d.dir || '';
     if(d.error){
       sel.innerHTML = '<option value="">'+esc(d.error)+'</option>';
-      hint.innerHTML = 'Lägg in en GitHub-token i <a href="#" onclick="showView(\'settings\');'
-        + 'return false" style="color:var(--accent-hov)">Inställningar</a> för att kunna välja repo.';
+      const provName = repoProvider === 'gitlab' ? 'GitLab-token' : 'GitHub-token';
+      hint.innerHTML = 'Lägg in en ' + provName + ' i <a href="#" onclick="showView(\'settings\');'
+        + 'return false" style="color:var(--accent-hov)">Inställningar</a> för att lista repon automatiskt, eller klicka <b>➕ Ange repo…</b> för att ange direkt.';
+      renderRepos(d.current);
       return;
     }
-    repoDir = d.dir || '';
     renderRepos(d.current);
   }catch(e){
     sel.innerHTML = '<option value="">Kunde inte hämta listan</option>';
@@ -2783,22 +2822,29 @@ async function loadRepos(force){
 }
 function renderRepos(currentPath){
   const sel = document.getElementById('codeRepoSelect');
-  if(!repoList.length){
-    sel.innerHTML = '<option value="">Inga repon hittades för din token</option>';
+  if(!sel) return;
+  const seen = new Set();
+  const options = [];
+  repoList.forEach(r => {
+    seen.add(r.slug);
+    options.push({slug: r.slug, desc: r.desc, priv: r.private});
+  });
+  localRepos.forEach(lr => {
+    if(!seen.has(lr.slug)){
+      options.push({slug: lr.slug, desc: '📁 Hämtat lokalt', priv: false});
+    }
+  });
+  if(!options.length){
+    sel.innerHTML = '<option value="">Inga repon i listan (klicka "➕ Ange repo…" för att ange direkt)</option>';
+    onRepoPick();
     return;
   }
-  sel.innerHTML = '<option value="">Välj ett repo…</option>' + repoList.map(r=>
-    '<option value="'+esc(r.slug)+'">'+esc(r.slug)+(r.private?'  🔒':'')
+  sel.innerHTML = '<option value="">Välj ett repo…</option>' + options.map(r=>
+    '<option value="'+esc(r.slug)+'">'+esc(r.slug)+(r.priv?'  🔒':'')
     + (r.desc ? '  –  '+esc(r.desc) : '')+'</option>').join('');
-  // Är arbetsytan redan ett hämtat repo? Förvälj det. cfg.code_ws_path är med
-  // därför att listan cachas: nästa gång man öppnar Codex anropas renderRepos()
-  // utan currentPath, och utan reserven tappades valet – och med det knappen
-  // "Ta bort lokalt" – trots att repot fortfarande låg kvar på disken.
   const mine = (currentPath || cfg.code_ws_path || '').split('/').pop();
-  const match = repoList.find(r=>mine && mine === r.slug.replace('/','__'));
+  const match = options.find(r=>mine && mine === r.slug.replace('/','__'));
   if(match) sel.value = match.slug;
-  // Utan det här står valet kvar men knapparna vet inte om det: "Ta bort lokalt"
-  // förblev dold tills man bytte i listan.
   onRepoPick();
 }
 function localRepo(slug){
@@ -2808,7 +2854,6 @@ function onRepoPick(){
   const slug = document.getElementById('codeRepoSelect').value;
   const btn = document.getElementById('codeRepoFetch');
   if(btn) btn.disabled = !slug;
-  // "Ta bort lokalt" visas bara för repon som faktiskt ligger på servern
   const rm = document.getElementById('codeRepoRemove');
   const local = localRepo(slug);
   if(rm){
@@ -2827,35 +2872,40 @@ function onRepoPick(){
   }else if(slug){
     hint.textContent = 'Inte hämtat än – klicka "⬇ Hämta & arbeta här".';
   }else{
-    // Inget valt: låt inte förra repots text stå kvar och se aktuell ut.
     const fetched = localRepos.length;
     hint.textContent = fetched
-      ? ('Välj ett repo i listan. ' + fetched + (fetched === 1
-          ? ' repo ligger hämtat på servern' : ' repon ligger hämtade på servern')
-        + ' – välj det för att arbeta vidare eller ta bort det.')
+      ? ('Välj ett repo eller klicka "➕ Ange repo…". ' + fetched + (fetched === 1
+          ? ' repo ligger hämtat på servern.' : ' repon ligger hämtade på servern.'))
       : (repoDir ? ('Hämtas till ' + repoDir) : '');
   }
+}
+async function promptCustomRepo(){
+  const prov = repoProvider === 'gitlab' ? 'GitLab' : 'GitHub';
+  const ex = repoProvider === 'gitlab'
+    ? 'anderssjoeberg75/ollamastudio eller http://gitlab.andrix.se/anderssjoeberg75/ollamastudio.git'
+    : 'ägare/repo eller https://github.com/…';
+  const val = prompt('Ange '+prov+'-repo (slug eller URL):\nExempel: '+ex, '');
+  if(!val || !val.trim()) return;
+  await doFetchRepo(val.trim());
 }
 async function removeRepo(){
   const slug = document.getElementById('codeRepoSelect').value;
   const local = localRepo(slug);
   if(!local){ toast('Repot är inte hämtat', true); return; }
 
-  // Varning nummer ett: vad som raderas, och vad som går förlorat.
   const risk = [];
   if(local.dirty) risk.push(local.dirty + (local.dirty === 1
     ? ' osparad ändring' : ' osparade ändringar'));
   if(local.ahead) risk.push(local.ahead + (local.ahead === 1
-    ? ' commit som inte pushats till GitHub' : ' commits som inte pushats till GitHub'));
-  if(local.ahead === null) risk.push('grenen "' + (local.branch||'?') + '" finns inte på GitHub '
+    ? ' commit som inte pushats' : ' commits som inte pushats'));
+  if(local.ahead === null) risk.push('grenen "' + (local.branch||'?') + '" finns inte på origin '
     + '– allt arbete i den är opushat');
   const warn = risk.length
     ? '\n\n⚠ DU FÖRLORAR:\n· ' + risk.join('\n· ') + '\nDet går inte att ångra.'
-    : '\n\nAllt arbete verkar pushat till GitHub, så det går att hämta hem igen.';
+    : '\n\nAllt arbete verkar pushat till servern, så det går att hämta hem igen.';
   if(!confirm('Radera ' + slug + ' från serverns disk?\n\nMappen som tas bort:\n' + local.path
       + warn)) return;
 
-  // Varning nummer två – bara när något faktiskt riskerar att försvinna.
   if(risk.length && !confirm('Sista kontrollen: ' + risk.join(' och ')
       + ' i ' + slug + ' försvinner för alltid.\n\nRadera ändå?')) return;
 
@@ -2871,7 +2921,6 @@ async function removeRepo(){
     localRepos = d.local || [];
     hint.textContent = '✓ ' + d.message;
     toast(d.message);
-    // Arbetsytan kan ha släppts på servern – hämta om läget
     try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
     updateCodeView(); onRepoPick();
     if(cfg.code_ws){ loadTree(); gitStatus(); }
@@ -2886,25 +2935,27 @@ async function removeRepo(){
 async function fetchRepo(){
   const slug = document.getElementById('codeRepoSelect').value;
   if(!slug){ toast('Välj ett repo först', true); return; }
+  await doFetchRepo(slug);
+}
+async function doFetchRepo(target){
   const btn = document.getElementById('codeRepoFetch');
   const hint = document.getElementById('codeRepoHint');
-  btn.disabled = true;
-  hint.textContent = 'Hämtar ' + slug + '… (första gången kan ta en stund)';
-  analyzeNote('⬇ <b>Hämtar ' + esc(slug) + '…</b> repot analyseras så fort det är nere.', 'warn');
+  if(btn) btn.disabled = true;
+  hint.textContent = 'Hämtar ' + target + '… (första gången kan ta en stund)';
+  analyzeNote('⬇ <b>Hämtar ' + esc(target) + '…</b> repot analyseras så fort det är nere.', 'warn');
+  const endpoint = (repoProvider === 'gitlab') ? '/api/gitlab/fetch' : '/api/github/fetch';
   try{
-    const r = await api('/api/github/fetch', {method:'POST', headers:headers(true),
-      body: JSON.stringify({repo: slug})});
+    const r = await api(endpoint, {method:'POST', headers:headers(true),
+      body: JSON.stringify({repo: target})});
     const d = await r.json();
     if(!d.ok) throw new Error(d.message || d.error || ('HTTP '+r.status));
     hint.textContent = '✓ ' + d.message + ' · arbetsyta: ' + d.path;
-    toast('Arbetar nu mot ' + slug);
-    await loadRepos(true);                      // repot finns nu lokalt
-    document.getElementById('codeRepoSelect').value = slug;
+    toast('Arbetar nu mot ' + target);
+    await loadRepos(true);
+    document.getElementById('codeRepoSelect').value = target;
     onRepoPick();
-    // Arbetsytan bytte på servern – hämta om konfig, filträd och git-status
     try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
     updateCodeView(); loadTree(); gitStatus();
-    // Repot är nytt – servern har redan analyserat det vid hämtningen.
     analyzedPath = cfg.code_ws_path || '';
     if(d.analysis) analyzeNote('✓ <b>Repot är analyserat.</b> ' + esc(d.analysis)
       + ' — Codex vet nu vad projektet innehåller och var funktionerna finns.', 'ok');
@@ -2913,7 +2964,7 @@ async function fetchRepo(){
     hint.textContent = '✕ ' + e.message;
     toast('Kunde inte hämta repot: '+e.message, true);
   }finally{
-    btn.disabled = false;
+    if(btn) btn.disabled = false;
   }
 }
 
@@ -2924,10 +2975,15 @@ async function gitStatus(){
     const g = await r.json(); lastGit = g;
     if(!g.repo){ bar.style.display='none'; return; }
     bar.style.display='flex';
-    const slug = (g.owner && g.repo_name) ? (g.owner+'/'+g.repo_name) : 'ingen GitHub-remote';
+    const slug = g.slug || ((g.owner && g.repo_name) ? (g.owner+'/'+g.repo_name) : 'git-remote');
+    const provName = g.provider === 'gitlab' ? 'GitLab' : (g.provider === 'github' ? 'GitHub' : 'Git');
     document.getElementById('codeGitInfo').innerHTML =
-      'Gren <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' ändrade filer · '+esc(slug)
+      'Gren <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' ändrade filer · '+provName+': '+esc(slug)
       + (g.has_token ? '' : ' · <span style="color:var(--amber)">ingen token</span>');
+    const prBtn = document.getElementById('codePrMrBtn');
+    if(prBtn){
+      prBtn.textContent = (g.provider === 'gitlab') ? 'Skapa MR' : 'Skapa PR';
+    }
   }catch(e){ bar.style.display='none'; }
 }
 async function gitPost(path, body){
@@ -2952,10 +3008,34 @@ async function gitCommit(){
 }
 async function gitPush(){
   const branch = lastGit && lastGit.branch;
-  if(!confirm('Pusha grenen "'+(branch||'')+'" till GitHub?')) return;
+  const prov = (lastGit && lastGit.provider === 'gitlab') ? 'GitLab' : ((lastGit && lastGit.provider === 'github') ? 'GitHub' : 'remote');
+  if(!confirm('Pusha grenen "'+(branch||'')+'" till '+prov+'?')) return;
   gitMsg('Pushar…');
   const d = await gitPost('/api/git/push', {});
   gitMsg(d.ok ? '✓ Pushad' : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+}
+async function createPrOrMr(){
+  if(lastGit && lastGit.provider === 'gitlab'){
+    await gitlabMR();
+  } else {
+    await githubPR();
+  }
+}
+async function gitlabMR(){
+  if(lastGit && lastGit.branch && !lastGit.has_token){
+    gitMsg('✕ Ingen GitLab-token sparad (⚙ Inställningar).', true); return;
+  }
+  const title = prompt('Merge Request-titel:', 'Ändringar via kodassistenten');
+  if(title===null) return;
+  const body = prompt('MR-beskrivning (valfritt):', '') || '';
+  gitMsg('Skapar Merge Request…');
+  const d = await gitPost('/api/gitlab/mr', {title, body});
+  if(d.ok && d.url){
+    gitMsg('✓ MR skapad: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a>');
+    toast('Merge Request skapad');
+  }else{
+    gitMsg('✕ '+esc(d.message||d.error||'kunde inte skapa MR'), true);
+  }
 }
 async function githubPR(){
   if(lastGit && lastGit.branch && !lastGit.has_token){

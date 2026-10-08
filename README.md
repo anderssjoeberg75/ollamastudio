@@ -21,7 +21,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 > **Filstruktur (webbversionen):** `ollama_web.py` är startfilen. Koden ligger i `studio/`,
 > uppdelad per ansvarsområde – `config.py` (inställningar), `backends.py`, `sysinfo.py`,
 > `websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `codex/` för
-> kodagenten (arbetsyta, behörigheter, protokoll, kommandon, git, GitHub) och `web/` för
+> kodagenten (arbetsyta, behörigheter, protokoll, kommandon, git, GitLab, GitHub) och `web/` för
 > webblagret – routingtabellen i `server.py`, arbetet i `routes_*.py`, och sidan i
 > `web/assets/` (HTML, CSS, JavaScript). Webbläsaren laddar
 > fortfarande inga externa filer: allt bakas in i sidan vid start. Se
@@ -255,6 +255,9 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_REPOS_DIR` | `~/ollama-studio-repos` | Mappen där repon du hämtar från rullmenyn i Codex hamnar (en undermapp per repo, `ägare__namn`). |
 | `GITHUB_TOKEN` | *(tomt)* | GitHub-token för kodassistentens push och att öppna pull requests. Kan också sättas i ⚙ Inställningar (maskeras och sparas lokalt). |
 | `OLLAMA_STUDIO_GITHUB_BASE` | `main` | Standard bas-gren när kodassistenten öppnar en pull request. |
+| `OLLAMA_STUDIO_GITLAB_URL` | `http://gitlab.andrix.se` | Bas-URL till GitLab-servern (t.ex. din egen instans eller `https://gitlab.com`). |
+| `GITLAB_TOKEN` | *(tomt)* | GitLab Personal Access Token för att lista projekt, pusha och öppna Merge Requests. Kan också sättas i ⚙ Inställningar. |
+| `OLLAMA_STUDIO_GITLAB_BASE` | `main` | Standard bas-gren när kodassistenten öppnar en Merge Request på GitLab. |
 | `OLLAMA_STUDIO_CODE_RUN` | `0` (av) | Sätt `1` för att låta kodassistenten köra kommandon (tester/linters). Huvudströmbrytaren: är den av kör Codex inga kommandon alls, oavsett behörighetsläge. Kommandon på allowlisten körs utan att fråga; övriga kräver ett godkännande (eller läget `full`). |
 | `OLLAMA_STUDIO_CODE_ALLOWLIST` | *(förinställd)* | Tillåtna kommando-prefix (ett per rad/komma), t.ex. `pytest`, `npm test`. Redigeras enklast i ⚙ Inställningar. |
 | `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Max körtid i sekunder per kommando (klamras 1–600). |

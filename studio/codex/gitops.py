@@ -48,14 +48,68 @@ def git_current_branch():
     return out if rc == 0 else ""
 
 
-def git_remote_slug():
-    """(owner, repo) från origin-URL, eller (None, None)."""
+def git_remote_info():
+    """Information om origin-URL: provider, host, slug, owner, repo, scheme."""
     rc, url, _ = _git(["remote", "get-url", "origin"])
     if rc != 0 or not url:
-        return None, None
-    m = re.search(r"github\.com[:/]+([^/]+)/(.+?)(?:\.git)?/?$", url)
-    if m:
-        return m.group(1), m.group(2)
+        return None
+    url = url.strip()
+    scheme = "https"
+    host = ""
+    path = ""
+
+    m_ssh = re.match(r"^git@([^:]+):(.+?)(?:\.git)?/?$", url)
+    if m_ssh:
+        host = m_ssh.group(1)
+        path = m_ssh.group(2)
+        scheme = "ssh"
+    else:
+        m_http = re.match(r"^(https?)://(?:[^@]+@)?([^/]+)/(.+?)(?:\.git)?/?$", url)
+        if m_http:
+            scheme = m_http.group(1)
+            host = m_http.group(2)
+            path = m_http.group(3)
+        else:
+            parts = url.split("://", 1)
+            if len(parts) == 2:
+                scheme = parts[0]
+                rest = parts[1]
+                host, _, path = rest.partition("/")
+                if path.endswith(".git"):
+                    path = path[:-4]
+
+    path = path.strip("/")
+    parts = path.split("/")
+    owner = parts[0] if parts else ""
+    repo = parts[-1] if len(parts) > 1 else parts[0] if parts else ""
+
+    gl_url = (setting_str("gitlab_url") or "").lower()
+    gl_host = ""
+    if gl_url:
+        gl_host = urllib.parse.urlparse(gl_url).netloc or gl_url.replace("http://", "").replace("https://", "").split("/")[0]
+
+    provider = "git"
+    if "github.com" in host.lower():
+        provider = "github"
+    elif "gitlab" in host.lower() or (gl_host and gl_host == host.lower()):
+        provider = "gitlab"
+
+    return {
+        "url": url,
+        "provider": provider,
+        "scheme": scheme,
+        "host": host,
+        "slug": path,
+        "owner": owner,
+        "repo": repo,
+    }
+
+
+def git_remote_slug():
+    """(owner, repo) från origin-URL, eller (None, None)."""
+    info = git_remote_info()
+    if info and info["owner"] and info["repo"]:
+        return info["owner"], info["repo"]
     return None, None
 
 
@@ -65,14 +119,30 @@ def git_status_info():
         return {"repo": False}
     rc, out, _ = _git(["status", "--porcelain"])
     changes = [l for l in out.splitlines() if l.strip()] if rc == 0 else []
-    owner, repo = git_remote_slug()
+    info = git_remote_info()
+    owner, repo = (info["owner"], info["repo"]) if info else (None, None)
+    provider = info.get("provider", "git") if info else "git"
+    slug = info.get("slug", "") if info else ""
+    if not slug and owner and repo:
+        slug = f"{owner}/{repo}"
+
+    has_token = False
+    if provider == "gitlab":
+        has_token = bool(setting_str("gitlab_token"))
+    elif provider == "github":
+        has_token = bool(setting_str("github_token"))
+    else:
+        has_token = bool(setting_str("gitlab_token") or setting_str("github_token"))
+
     return {
         "repo": True,
         "branch": git_current_branch(),
         "changed": len(changes),
         "files": [l[3:] if len(l) > 3 else l for l in changes[:50]],
         "owner": owner, "repo_name": repo,
-        "has_token": bool(setting_str("github_token")),
+        "slug": slug,
+        "provider": provider,
+        "has_token": has_token,
     }
 
 
@@ -113,16 +183,30 @@ def _authed_push_url(owner, repo, token):
     return "https://x-access-token:%s@github.com/%s/%s.git" % (token, owner, repo)
 
 
+def _authed_gitlab_push_url(host, slug, token, scheme="http"):
+    return "%s://oauth2:%s@%s/%s.git" % (scheme, token, host, slug)
+
+
 def git_push(branch=None):
     branch = (branch or git_current_branch() or "").strip()
     if not branch:
         return False, "Ingen gren att pusha"
-    token = setting_str("github_token")
-    owner, repo = git_remote_slug()
-    if token and owner and repo:
-        url = _authed_push_url(owner, repo, token)
+    info = git_remote_info()
+    provider = info.get("provider") if info else ""
+    token = ""
+    url = None
+
+    if provider == "gitlab":
+        token = setting_str("gitlab_token")
+        if token and info and info.get("host") and info.get("slug"):
+            url = _authed_gitlab_push_url(info["host"], info["slug"], token, info.get("scheme", "http"))
+    elif provider == "github":
+        token = setting_str("github_token")
+        if token and info and info.get("owner") and info.get("repo"):
+            url = _authed_push_url(info["owner"], info["repo"], token)
+
+    if url and token:
         rc, out, err = _git(["push", url, "HEAD:refs/heads/" + branch], timeout=120)
-        # dölj token om den råkar dyka upp i felmeddelanden
         err = (err or "").replace(token, "***")
         out = (out or "").replace(token, "***")
     else:

@@ -36,6 +36,8 @@ from studio.codex.commands import (
 from studio.codex.github import (
     code_repos_root, github_create_pr, github_fetch_repo, github_list_repos,
     local_repos, remove_local_repo)
+from studio.codex.gitlab import (
+    gitlab_create_mr, gitlab_fetch_repo, gitlab_list_repos)
 from studio.codex.gitops import (
     git_available, git_commit_all, git_create_branch, git_is_repo, git_push,
     git_status_info)
@@ -126,10 +128,13 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     return self._send_json({"path": rel, "content": ws_current(rel)})
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
-            if path == "/api/github/repos":
+            if path in ("/api/github/repos", "/api/gitlab/repos"):
                 if not code_toggle_on():
                     return self._send_json({"repos": [], "error": "Codex är av"}, 400)
-                items, err = github_list_repos()
+                if path == "/api/gitlab/repos":
+                    items, err = gitlab_list_repos()
+                else:
+                    items, err = github_list_repos()
                 return self._send_json({"repos": items, "error": err,
                                         "dir": code_repos_root() or "",
                                         "local": local_repos(),
@@ -429,13 +434,17 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             return self._send_json({"ok": True, "mode": mode,
                                     "label": CODE_MODE_LABELS[mode]})
 
-        if path == "/api/github/fetch":
+        if path in ("/api/github/fetch", "/api/gitlab/fetch"):
             # Hämta ett repo och gör det till arbetsyta (kräver bara att Codex är på –
             # till skillnad från de andra git-vägarna som kräver en arbetsyta redan).
             if not code_toggle_on():
                 return self._send_json({"ok": False, "error": "Codex är av"}, 400)
-            ok, message, target = github_fetch_repo(data.get("repo", ""),
-                                                    data.get("branch", ""))
+            if path == "/api/gitlab/fetch":
+                ok, message, target = gitlab_fetch_repo(data.get("repo", ""),
+                                                        data.get("branch", ""))
+            else:
+                ok, message, target = github_fetch_repo(data.get("repo", ""),
+                                                        data.get("branch", ""))
             analysis = ""
             if ok and target:
                 settings_set({"code_workspace": target})   # peka om Codex hit
@@ -457,7 +466,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             return self._send_json({"ok": ok, "message": message,
                                     "local": local_repos()}, 200 if ok else 400)
 
-        if path in ("/api/git/branch", "/api/git/commit", "/api/git/push", "/api/github/pr"):
+        if path in ("/api/git/branch", "/api/git/commit", "/api/git/push", "/api/github/pr", "/api/gitlab/mr"):
             if not code_enabled():
                 return self._send_json({"ok": False, "error": "Kodassistenten är av"}, 400)
             if not git_is_repo():
@@ -468,10 +477,13 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 ok, msg = git_commit_all(data.get("message", ""))
             elif path == "/api/git/push":
                 ok, msg = git_push(data.get("branch"))
+            elif path == "/api/gitlab/mr":
+                ok, msg = gitlab_create_mr(data.get("title", ""), data.get("body", ""),
+                                           data.get("base"), data.get("head"))
             else:  # /api/github/pr
                 ok, msg = github_create_pr(data.get("title", ""), data.get("body", ""),
                                            data.get("base"), data.get("head"))
-            key = "url" if (ok and path == "/api/github/pr") else "message"
+            key = "url" if (ok and path in ("/api/github/pr", "/api/gitlab/mr")) else "message"
             return self._send_json({"ok": ok, key: msg, "status": git_status_info()})
 
         if path == "/api/chat":

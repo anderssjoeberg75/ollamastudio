@@ -165,11 +165,15 @@
         </div>
         <div class="code-main">
           <div id="codeRepoBar" class="code-repobar" style="display:none">
-            <label>GitHub-repo:</label>
+            <select id="codeRepoProvider" onchange="onProviderChange()" style="max-width:115px;padding:6px 8px;font-size:12.5px;font-weight:600">
+              <option value="gitlab">🦊 GitLab</option>
+              <option value="github">🐙 GitHub</option>
+            </select>
             <select id="codeRepoSelect" onchange="onRepoPick()">
               <option value="">Laddar…</option>
             </select>
             <button class="btn accent small" id="codeRepoFetch" onclick="fetchRepo()">⬇ Hämta &amp; arbeta här</button>
+            <button class="btn ghost small" id="codeRepoCustom" onclick="promptCustomRepo()" title="Ange ett specifikt repo (slug eller URL)">➕ Ange repo…</button>
             <button class="btn ghost small" id="codeRepoRemove" onclick="removeRepo()"
                     title="Radera det hämtade repot från serverns disk" style="display:none">🗑 Ta bort lokalt</button>
             <button class="btn ghost small" onclick="loadRepos(true)" title="Uppdatera listan">↻</button>
@@ -181,7 +185,7 @@
               <button class="btn ghost small" onclick="gitBranch()">Ny gren</button>
               <button class="btn ghost small" onclick="gitCommit()">Committa</button>
               <button class="btn ghost small" onclick="gitPush()">Push</button>
-              <button class="btn accent small" onclick="githubPR()">Skapa PR</button>
+              <button class="btn accent small" id="codePrMrBtn" onclick="createPrOrMr()">Skapa PR</button>
               <button class="btn ghost small" onclick="gitStatus()" title="Uppdatera">↻</button>
             </span>
           </div>
@@ -621,8 +625,24 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
             </div>
           </div>
           <div class="set-row" style="max-width:260px">
-            <label>Standard bas-gren för PR</label>
+            <label>Standard bas-gren för PR (GitHub)</label>
             <input id="stGhBase" placeholder="main">
+          </div>
+          <div class="set-row">
+            <label>GitLab-server <span class="hint">(t.ex. http://gitlab.andrix.se eller https://gitlab.com)</span></label>
+            <input id="stGlUrl" placeholder="http://gitlab.andrix.se">
+          </div>
+          <div class="set-row">
+            <label>GitLab-token <span class="hint">(Personal Access Token för push &amp; Merge Requests)</span></label>
+            <input id="stGlToken" type="password" autocomplete="off" placeholder="glpat-…">
+            <div class="set-keyrow">
+              <span id="stGlTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearGlToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div class="set-row" style="max-width:260px">
+            <label>Standard bas-gren för Merge Requests (GitLab)</label>
+            <input id="stGlBase" placeholder="main">
           </div>
           <div class="set-grid">
             <div class="set-row">
