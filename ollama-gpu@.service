@@ -32,13 +32,21 @@ Environment=CUDA_VISIBLE_DEVICES=%i
 # Använder den vanliga Ollama-tjänstens katalog. Kör din Ollama som root i stället?
 # Byt då till:  Environment=OLLAMA_MODELS=/root/.ollama/models  och ta bort User/Group nedan.
 Environment=OLLAMA_MODELS=/usr/share/ollama/.ollama/models
+Environment="OLLAMA_ORIGINS=*"
+
+# --- Generella optimeringar för byte mellan olika modeller ---
+# Max 1 aktiv modell per instans: avlastar automatiskt föregående modell vid byte
+# så att nya modeller alltid får 100% av grafikkortets VRAM utan att spilla till CPU.
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+# Dedikera minnesbuffertarna till 1 parallell sekvens för att spara VRAM.
+Environment=OLLAMA_NUM_PARALLEL=1
+# Håll modellen i minnet i 15 minuter för snabb respons under aktiv användning.
+Environment=OLLAMA_KEEP_ALIVE=15m
+
 User=ollama
 Group=ollama
-# Bind-adress. Standard 127.0.0.1 = bara lokalt på servern (räcker för Ollama Studio
-# som kör på samma maskin). Vill du nå instanserna från EN ANNAN dator (t.ex. en app
-# på nätverket) – byt till 0.0.0.0 så lyssnar de på alla nätverkskort. OBS: då kan vem
-# som helst på nätverket använda Ollama; begränsa med brandvägg.
-Environment=OLLAMA_BIND=127.0.0.1
+# Bind-adress. 0.0.0.0 lyssnar på alla nätverkskort så att instanserna kan nås från nätverket.
+Environment=OLLAMA_BIND=0.0.0.0
 # Lyssnar på OLLAMA_BIND:(11434 + GPU-index).
 ExecStart=/bin/sh -c 'OLLAMA_HOST=${OLLAMA_BIND}:$((11434 + %i)) exec ollama serve'
 Restart=on-failure

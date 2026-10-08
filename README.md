@@ -47,6 +47,7 @@ Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons st
 - [🎓 AI-träning – finjustera en egen modell](#-ai-träning--finjustera-en-egen-modell)
 - [Rekommenderade modeller](#rekommenderade-modeller)
 - [Felsökning](#felsökning)
+- [🛠️ Codex Skills – färdigheter & automatisering](#️-codex-skills--färdigheter--automatisering)
 - [Så fungerar det (teknik)](#så-fungerar-det-teknik)
 - [Licens](#licens)
 
@@ -234,7 +235,9 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_PORT` | `8080` | Porten webbappen körs på. |
 | `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
 | `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
-| `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu). |
+| `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU eller optimerad instans). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu) och [Extra instans med KV-cache-kvantisering](#extra-instans-med-kv-cache-kvantisering-gpu-1-port-11436). |
+| `OLLAMA_FLASH_ATTENTION` | *(sätts på Ollama)* | Sätts på **Ollama-tjänsten** (ej Ollama Studio). Aktiverar FlashAttention (`1`). Krävs bl.a. för kvantiserad KV-cache. Se [Extra instans](#extra-instans-med-kv-cache-kvantisering-gpu-1-port-11436). |
+| `OLLAMA_KV_CACHE_TYPE` | *(sätts på Ollama)* | Sätts på **Ollama-tjänsten** (ej Ollama Studio). Typ av KV-cache, t.ex. `q8_0` för att halvera minnesåtgången för KV-cachen. Kräver `OLLAMA_FLASH_ATTENTION=1`. |
 | `OLLAMA_STUDIO_CHAT_TIME` | `1` (på) | Skickar med serverns datum och tid till modellen i chatten, så den kan svara på "vilken dag är det?" och slutar gissa om pågående händelser. Sätt `0` för att stänga av. |
 | `TZ` | *(systemets)* | Tidszon för datum/tid i chatten, t.ex. `Europe/Stockholm`. Sätts i systemd-tjänsten. Serverns klocka visas i ⚙ Inställningar → Chatt. |
 | `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
@@ -467,7 +470,7 @@ sudo systemctl enable --now ollama-gpu@1
 # 3. Peka Ollama Studio på instanserna
 #    (lägg till raden i [Service] i /etc/systemd/system/ollama-studio-web.service).
 #    OBS: citattecken runt hela raden krävs – värdet innehåller mellanslag:
-#    Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1"
+#    Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1 ; GPU 1 tuned,http://127.0.0.1:11436,1"
 sudo systemctl daemon-reload
 sudo systemctl restart ollama-studio-web
 ```
@@ -479,6 +482,66 @@ under **Mina modeller** visas på vilken GPU varje aktiv modell körs.
 > **Kontrollera GPU-index och namn:** kör `nvidia-smi -L` för att se vilka index dina kort
 > har. Justera `User`/`OLLAMA_MODELS` i `ollama-gpu@.service` om din Ollama inte kör som
 > användaren `ollama` (kommentarer finns i filen).
+
+### Extra instans med KV-cache-kvantisering (GPU 1, port 11436)
+
+Ollama stödjer optimeringar för att sänka VRAM-åtgången vid längre kontext, framför allt:
+- **`OLLAMA_FLASH_ATTENTION=1`**: Beräknar attention utan att hela attention-matrisen materialiseras i minnet. Snabbare och minnessnålare, särskilt vid lång kontext.
+- **`OLLAMA_KV_CACHE_TYPE=q8_0`**: Lagrar modellens KV-cache (nyckel/värde-cache) i 8-bitars precision i stället för standard 16 bitar (f16). Detta halverar KV-cachens VRAM-åtgång och skapar utrymme för betydligt längre kontextfönster (`num_ctx`) på t.ex. ett 12 GB-grafikkort.
+
+#### Viktigt att veta om optimeringarna:
+1. **De är serverglobala:** Både FlashAttention och KV-cache-typ läses in när `ollama serve`-processen startar. De kan **varken** sättas per API-anrop eller definieras per modell i en `Modelfile` – inställningarna gäller allt som instansen laddar.
+2. **Krav på FlashAttention:** `OLLAMA_KV_CACHE_TYPE=q8_0` kräver att `OLLAMA_FLASH_ATTENTION=1` också är aktivt. Utan FlashAttention faller Ollama tyst tillbaka på standard f16.
+3. **Modellkompatibilitet:** Vissa modellfamiljer (t.ex. Gemma 3, se ollama/ollama#10945 och #11949) kan få kraftigt sämre genomströmning eller försämrad utskriftskvalitet med q8_0 KV-cache. Därför körs optimeringarna som en **separat instans** i stället för att ändra standardmallen: den omodifierade vägen (`ollama-gpu@1` på port 11435) finns kvar intakt, och modeller kan flyttas selektivt till den optimerade instansen via GPU-väljaren i chatten när de fungerar väl där.
+
+#### Installera `ollama-gpu1-tuned.service`
+
+Mallen `ollama-gpu@.service` låser porten till `11434 + GPU-index`. För att köra en andra instans på samma GPU med en frikopplad port finns en färdig unit-fil, `ollama-gpu1-tuned.service`, som lyssnar på port **11436**:
+
+```bash
+# 1. Installera och starta unit-filen
+sudo cp /opt/ollamastudio/ollama-gpu1-tuned.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ollama-gpu1-tuned
+
+# 2. Kontrollera status och logg
+systemctl status ollama-gpu1-tuned
+journalctl -u ollama-gpu1-tuned -f
+curl http://127.0.0.1:11436/api/version
+```
+
+Lägg därefter till instansen i `OLLAMA_STUDIO_BACKENDS` i `/etc/systemd/system/ollama-studio-web.service`:
+```systemd
+Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1 ; GPU 1 tuned,http://127.0.0.1:11436,1"
+```
+och starta om webbtjänsten (`sudo systemctl daemon-reload && sudo systemctl restart ollama-studio-web`). Etiketten ("GPU 1 tuned") är fri text och dyker automatiskt upp i GPU-väljaren i chatten.
+
+> [!WARNING]
+> **VRAM-konflikt – dela inte minnet samtidigt:**
+> Både `ollama-gpu@1` (port 11435) och `ollama-gpu1-tuned` (port 11436) körs på samma fysiska grafikkort (GPU 1). Har båda instanserna en modell inladdad samtidigt ryms de inte i VRAM (t.ex. 12 GB), vilket gör att Ollama tyst flyttar ut lager på CPU/RAM med stor prestandaförlust.
+> Kör bara en modell åt gången på GPU 1. Du kan frigöra VRAM direkt från Ollama Studio via knappen **Ladda ur modell** i vyn **System / GPU**, eller via terminalen med `ollama stop`.
+
+#### Mäta och jämföra prestanda (eval rate)
+
+Innan en modell rekommenderas för den optimerade instansen bör du jämföra dess tokenhastighet med och utan optimeringarna:
+
+```bash
+# 1. Mät på standardinstansen (11435)
+OLLAMA_HOST=127.0.0.1:11436 ollama stop <modell>
+OLLAMA_HOST=127.0.0.1:11435 ollama run --verbose <modell> "Skriv en förklaring av hur neuronnät tränas."
+
+# 2. Mät på den optimerade instansen (11436)
+OLLAMA_HOST=127.0.0.1:11435 ollama stop <modell>
+OLLAMA_HOST=127.0.0.1:11436 ollama run --verbose <modell> "Skriv en förklaring av hur neuronnät tränas."
+```
+Flaggan `--verbose` skriver ut **eval rate** (tokens/s). `ollama stop` mellan körningarna säkerställer att inte båda instanserna delar minnet. Ligger port 11436 lägre har modellen sannolikt problem med kvantiserad KV-cache.
+
+##### Uppmätt referensmätning (`qwen2.5:14b` på RTX 3060 12 GB)
+- **Port 11435 (standard f16 KV-cache):** eval rate ~**34.6 tokens/s**
+- **Port 11436 (FlashAttention + q8_0 KV-cache):** eval rate ~**33.9 tokens/s**
+Modellen presterar i princip likvärdig tokenhastighet, men med q8_0 KV-cache sparas värdefullt VRAM vilket tillåter längre kontextfönster (`num_ctx`) på 12 GB-kortet utan att minnet tar slut.
+
+
 
 ### Uppdatera (hämta senaste kod + starta om)
 
@@ -724,6 +787,103 @@ Osäker på var du ska börja? (Storlekar är ungefärliga.)
 | `./run.sh: Permission denied` | Gör skriptet körbart: `chmod +x run.sh`. |
 | Nedladdningen fastnar eller misslyckas | Kontrollera internet och att modellnamnet finns exakt på [ollama.com/library](https://ollama.com/library) (inkl. eventuell tagg efter `:`). |
 | En modell du hämtade i terminalen syns inte | Klicka **↻ Uppdatera**. |
+
+---
+
+## 🛠️ Codex Skills – färdigheter & automatisering
+
+Projektet innehåller en uppsättning förkonfigurerade **Agent Skills** och regler under mappen [`.agents/`](.agents/) (samt speglade i `.codex/`). Dessa följer den öppna **Agent Skills-standarden** och är direkt kompatibla med Codex, Antigravity och moderna AI-kodassistenter.
+
+Instruktioner och skill-index definieras i [`AGENTS.md`](AGENTS.md) och [`CODEX.md`](CODEX.md).
+
+### Hur Codex hittar och laddar skills
+
+Codex läser automatiskt projektets [`AGENTS.md`](AGENTS.md) vid start. Varje skill har en `SKILL.md` med YAML-frontmatter och detaljerade instruktioner. Codex aktiverar relevant skill baserat på:
+1. **Slash-kommandon** (t.ex. `/ponytail-audit` eller `/ponytail-review`).
+2. **Nyckelord och triggers** (t.ex. *"kör en security audit"*, *"förenkla koden"*, *"visa ponytail debt"*).
+3. **Explicita uppmaningar** i din prompt.
+
+---
+
+### Översikt över tillgängliga skills
+
+| Skill | Sökväg | Syfte / Beskrivning | Typiska triggers & kommandon |
+|---|---|---|---|
+| 🦹 **`ponytail`** | [`.agents/skills/ponytail/`](.agents/skills/ponytail/SKILL.md) | **Lazy Senior Dev Mode**: Tvingar fram den enklaste och mest minimalistiska lösningen. Följer YAGNI, standardbiblioteket före externa paket och minsta möjliga diff. | `/ponytail`, *"var lat"*, *"skriv minimalistisk kod"*, *"YAGNI"*, *"simplest solution"* |
+| 🔍 **`ponytail-audit`** | [`.agents/skills/ponytail-audit/`](.agents/skills/ponytail-audit/SKILL.md) | **Audit för överkonstruktion**: Skannar hela kodbasen och rangordnar vad som kan raderas, förenklas eller ersättas med inbyggda funktioner. | `/ponytail-audit`, *"audit this codebase"*, *"vad kan vi ta bort?"*, *"hitta onödig kod"* |
+| 📜 **`ponytail-debt`** | [`.agents/skills/ponytail-debt/SKILL.md`](.agents/skills/ponytail-debt/SKILL.md) | **Teknisk skuld & genvägsspårare**: Samlar ihop alla `ponytail:`-kommentarer och medvetna genvägar i en överskådlig ledger. | `/ponytail-debt`, *"vad har vi skjutit upp?"*, *"visa ponytail debt"*, *"ponytail ledger"* |
+| 📊 **`ponytail-gain`** | [`.agents/skills/ponytail-gain/`](.agents/skills/ponytail-gain/SKILL.md) | **Effektöversikt**: Visar en kompakt resultattavla över uppmätta besparingar i kodrader, minskat underhåll och ökad hastighet. | `/ponytail-gain`, *"visa ponytail gain"*, *"vad sparar ponytail?"* |
+| ❓ **`ponytail-help`** | [`.agents/skills/ponytail-help/`](.agents/skills/ponytail-help/SKILL.md) | **Lathund & referenskort**: Snabbguide över alla Ponytail-lägen, intensiteter och kommandon. | `/ponytail-help`, *"ponytail help"*, *"hur använder jag ponytail?"* |
+| ✂️ **`ponytail-review`** | [`.agents/skills/ponytail-review/`](.agents/skills/ponytail-review/SKILL.md) | **Förenklande kodgranskning**: Granskar en git diff eller specifik fil enbart med fokus på att hitta och stryka överflödig komplexitet. | `/ponytail-review`, *"granska för överkonstruktion"*, *"simplify review"*, *"vad kan tas bort här?"* |
+| 🛡️ **`security-audit`** | [`.agents/skills/security-audit/`](.agents/skills/security-audit/SKILL.md) | **Säkerhetsgranskning & sårbarhetsanalys**: Djupgående säkerhetsanalys, hotmodellering, källkodsgranskning och prioritering av åtgärder. | *"kör en security audit"*, *"hitta sårbarheter i API:et"*, *"pen-testa auth-flödet"* |
+
+---
+
+### Detaljerade instruktioner & exempel
+
+#### 1. `ponytail` – Lazy Senior Dev Mode
+Använd denna när du vill implementera nya funktioner, buggfixar eller refaktoriseringar utan onödig "bloat", onödiga bibliotek eller överflödiga klasshierarkier.
+- **Intensitetsnivåer**:
+  - `lite`: Mjukare förenkling, fokuserar på att undvika onödiga paket.
+  - `full` (standard): Standardbiblioteket först, en rad istället för femtio, inga oombedda abstraktioner.
+  - `ultra`: Extrem minimalism.
+- **Exempel i Codex**:
+  > *"Skriv en funktion som hämtar GPU-statistik, men använd ponytail-läget så vi bara nyttjar standardbiblioteket."*
+
+#### 2. `ponytail-audit` – Hel-repo audit
+Skannar hela repot och genererar en rapport med konkreta förslag på kod, moduler eller beroenden som kan tas bort eller förenklas.
+- **Exempel i Codex**:
+  > *"/ponytail-audit"*
+  > *"Gör en audit på hela repot och lista allt vi kan rensa bort."*
+
+#### 3. `ponytail-review` – Kodgranskning mot komplexitet
+Till skillnad från vanliga kodgranskningar letar `ponytail-review` specifikt efter återuppfunna hjul, spekulativ generalisering och död flexibilitet.
+- **Exempel i Codex**:
+  > *"/ponytail-review på senaste commiten"*
+  > *"Granska ändringarna i `studio/web/routes_codex.py` och visa vad som kan förenklas."*
+
+#### 4. `ponytail-debt` – Spåra genvägar
+När Ponytail implementerar en medveten förenkling märks koden med kommentaren `# ponytail: <beskrivning och tak>`. Detta kommando sammanställer alla sådana kommentarer till en rapport.
+- **Exempel i Codex**:
+  > *"/ponytail-debt"*
+
+#### 5. `security-audit` – Säkerhetsgranskning
+Innehåller metodik för att identifiera sårbarheter, brister i autentisering/auktorisering, injektionsrisker och felaktig dataisolering.
+- **Två lägen**:
+  - **Guidance mode** (standard): Svarar på specifika säkerhetsfrågor, granskar enskilda funktioner eller triagerar misstänkta sårbarheter.
+  - **Full audit mode**: Körs vid uttrycklig begäran och går igenom alla sex faser (kartläggning, attack-klasser, verifiering, rapport).
+- **Exempel i Codex**:
+  > *"Gör en security-audit på hur tokens och sessioner hanteras i webbservern."*
+  > *"Kör en fullständig säkerhetsgranskning av API-endpoints."*
+
+---
+
+### Projektregler (`.agents/rules/`)
+
+Codex följer dessutom automatiskt de fastställda reglerna i mappen [`.agents/rules/`](.agents/rules/):
+- [`ponytail.md`](.agents/rules/ponytail.md) – Grundläggande principer: YAGNI, standardbiblioteket först, inga onödiga abstraktioner.
+- [`compile.md`](.agents/rules/compile.md) – Instruktioner för Python-miljö, virtuella miljöer och testkörning.
+- [`accounts.md`](.agents/rules/accounts.md) – Regler kring miljövariabler, lokala konton och hemligheter.
+- [`github.md`](.agents/rules/github.md) – Riktlinjer för git-grenar, commits och pull requests.
+
+---
+
+### Skapa egna skills
+
+För att lägga till en ny skill för Codex:
+1. Skapa en mapp: `.agents/skills/<min-nya-skill>/`
+2. Skapa en fil: `.agents/skills/<min-nya-skill>/SKILL.md`
+3. Lägg till YAML-frontmatter överst:
+   ```markdown
+   ---
+   name: min-nya-skill
+   description: Beskrivning av vad skillen gör och när den ska aktiveras.
+   ---
+   
+   # Instruktioner för skillen
+   ...
+   ```
+Codex kommer då automatiskt att upptäcka och kunna använda skillen direkt.
 
 ---
 

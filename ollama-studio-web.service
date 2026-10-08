@@ -25,10 +25,11 @@ Environment=OLLAMA_STUDIO_PORT=8080
 Environment=OLLAMA_URL=http://localhost:11434
 # Rekommenderas starkt på ett nätverk – kräver ett lösenord för att hantera modeller:
 # Environment=OLLAMA_STUDIO_TOKEN=byt-till-nagot-hemligt
-# Kör du en Ollama-instans per GPU (se ollama-gpu@.service)? Lista dem här som
-# "label,url,gpu ; label,url,gpu" så får du en GPU-väljare i chatten.
+# Kör du en Ollama-instans per GPU (se ollama-gpu@.service, eller ollama-gpu1-tuned.service)?
+# Lista dem här som "label,url,gpu ; label,url,gpu". Etiketten är fri text och
+# visas i GPU-väljaren i chatten.
 # OBS: citattecken runt HELA raden krävs eftersom värdet innehåller mellanslag.
-# Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1"
+# Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1 ; GPU 1 tuned,http://127.0.0.1:11436,1"
 
 # Tidszon: chatten skickar med serverns datum och tid till modellen. Ligger klockan
 # fel i chattsvaren är det den här som saknas (syns i ⚙ Inställningar → Chatt).

@@ -6,7 +6,7 @@ utgå från funktions-/symbolnamnen.
 
 Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 
-> **✅ Åtgärdat hittills:** punkt **2–21, 23, 24** utom 1 och 22 är fixade
+> **✅ Åtgärdat hittills:** punkt **2–21, 23–25** utom 1 och 22 är fixade
 > (konstant-tids-token, POST-storleksgräns, **trådsäker `_PREV_CPU`**, `OLLAMA_URL` i
 > skrivbordsappen, **enhetstester**, docstrings, **delad `catalog.py`**, vänligt portfel, cachad
 > sida, **TTL-cache på `nvidia-smi`**, **parallell `_running_union` med kort timeout**,
@@ -15,10 +15,10 @@ Prioritet: 🔴 hög · 🟡 medel · ⚪ låg
 > cache-efter-commit, **kort `mem0_search`-timeout i chatten**, **DuckDuckGo lite-fallback**,
 > **atomisk/trådsäker inställnings-cache**, **startvarning när servern är öppen utan token (#1,
 > per ägarens beslut – defaults oförändrade)**, **Mem0-radering: footgun + tyst fel fixat (#22,
-> statisk genomgång)**, **tester för ny logik**). Kvar: **live-verifiering av #22** (Mem0
+> statisk genomgång)**, **tester för ny logik**, **dokumentation och inkoppling av optimerad
+> Ollama-instans (#25, inkl. live-eval rate på RTX 3060)**). Kvar: **live-verifiering av #22** (Mem0
 > list/delete mot ett riktigt Mem0-konto – kräver API-nyckel). Tester finns i `tests/` – kör
 > `python3 -m unittest discover -s tests`.
-> Nytt: **#25** (dokumentera den optimerade Ollama-instansen) är öppet.
 
 ---
 
@@ -304,7 +304,7 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 - **Acceptans:**
   - [ ] `python3 -m unittest` täcker ovanstående och kör grönt utan beroenden.
 
-## 🟡 25. Dokumentera och koppla in den optimerade Ollama-instansen (GPU 1, port 11436)
+## ✅ 25. Dokumentera och koppla in den optimerade Ollama-instansen (GPU 1, port 11436)
 
 > **Till dig som tar det här ticketet (t.ex. Antigravity):** unit-filen är redan skriven och
 > incheckad – skriv inte om den. Det som återstår är att dokumentera den och göra den
@@ -359,12 +359,12 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
      – notera det i README-avsnittet.
 
 - **Acceptans:**
-  - [ ] `ollama-studio-web.service` visar ett tre-backends-exempel med 11436.
-  - [ ] README har ett avsnitt om den optimerade instansen, inklusive VRAM-varningen och att
+  - [x] `ollama-studio-web.service` visar ett tre-backends-exempel med 11436.
+  - [x] README har ett avsnitt om den optimerade instansen, inklusive VRAM-varningen och att
         inställningarna är serverglobala.
-  - [ ] Env-tabellen nämner `OLLAMA_FLASH_ATTENTION` och `OLLAMA_KV_CACHE_TYPE` och var de sätts.
-  - [ ] Inga kodändringar i `studio/backends.py` – formatet räcker som det är.
-  - [ ] Live: uppmätt eval rate på 11435 vs 11436 för minst en modell, resultatet noterat i README.
+  - [x] Env-tabellen nämner `OLLAMA_FLASH_ATTENTION` och `OLLAMA_KV_CACHE_TYPE` och var de sätts.
+  - [x] Inga kodändringar i `studio/backends.py` – formatet räcker som det är.
+  - [x] Live: uppmätt eval rate på 11435 vs 11436 för minst en modell, resultatet noterat i README.
 
 ---
 
@@ -396,4 +396,4 @@ gäller fortfarande, ingenting av dem har åtgärdats ännu.
 | 🟡 22 | 🟡 | `ollama_web.py` | Mem0 list/delete: footgun + tyst fel fixat; live-test kvar |
 | ✅ 23 | ⚪ | `ollama_web.py` | Trådsäker läsning av inställnings-cache |
 | ✅ 24 | ⚪ | `tests/` | Enhetstester för ny ren logik (sök/Mem0/inställningar) |
-| 🟡 25 | 🟡 | `ollama-gpu1-tuned.service`, `README.md` | Dokumentera optimerad Ollama-instans (GPU 1, port 11436) |
+| ✅ 25 | 🟡 | `ollama-gpu1-tuned.service`, `README.md` | Dokumentera optimerad Ollama-instans (GPU 1, port 11436) |

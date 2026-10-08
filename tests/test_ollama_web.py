@@ -139,11 +139,20 @@ class TestSmallHelpers(unittest.TestCase):
     def test_parse_backends(self):
         old = os.environ.get("OLLAMA_STUDIO_BACKENDS")
         try:
-            os.environ["OLLAMA_STUDIO_BACKENDS"] = "GPU 0,http://x:1,0 ; GPU 1,http://y:2,1"
+            os.environ["OLLAMA_STUDIO_BACKENDS"] = (
+                "GPU 0,http://127.0.0.1:11434,0 ; "
+                "GPU 1,http://127.0.0.1:11435,1 ; "
+                "GPU 1 tuned,http://127.0.0.1:11436,1"
+            )
             b = w.parse_backends()
-            self.assertEqual([x["label"] for x in b], ["GPU 0", "GPU 1"])
-            self.assertEqual(b[0]["url"], "http://x:1")
+            self.assertEqual([x["label"] for x in b], ["GPU 0", "GPU 1", "GPU 1 tuned"])
+            self.assertEqual(b[0]["url"], "http://127.0.0.1:11434")
+            self.assertEqual(b[0]["gpu"], "0")
+            self.assertEqual(b[1]["url"], "http://127.0.0.1:11435")
             self.assertEqual(b[1]["gpu"], "1")
+            self.assertEqual(b[2]["url"], "http://127.0.0.1:11436")
+            self.assertEqual(b[2]["gpu"], "1")
+
             os.environ["OLLAMA_STUDIO_BACKENDS"] = ""
             self.assertEqual(len(w.parse_backends()), 1)   # faller tillbaka på en backend
         finally:
@@ -236,6 +245,20 @@ class TestWebSearchParsing(unittest.TestCase):
         finally:
             sys_mod.shutil.which, sys_mod.subprocess.run = old_which, old_run
             be_mod.BACKENDS = old_backends
+
+    def test_gpu_exit_code_18_gives_reboot_hint(self):
+        class _FailRes:
+            stdout, stderr, returncode = "", "", 18
+        old_which, old_run = sys_mod.shutil.which, sys_mod.subprocess.run
+        sys_mod.shutil.which = lambda name: "/usr/bin/nvidia-smi"
+        sys_mod.subprocess.run = lambda *a, **k: _FailRes()
+        try:
+            gpus, err = sys_mod._nvidia_gpus_query()
+            self.assertEqual(gpus, [])
+            self.assertIn("kod 18", err)
+            self.assertIn("sudo reboot", err)
+        finally:
+            sys_mod.shutil.which, sys_mod.subprocess.run = old_which, old_run
 
     def test_gpu_cache(self):
         # Två snabba anrop ska ge SAMMA cachade objekt (ingen ny subprocess) – board #11.

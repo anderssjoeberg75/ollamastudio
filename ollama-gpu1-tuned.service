@@ -44,10 +44,16 @@ Environment=OLLAMA_FLASH_ATTENTION=1
 # KV-cachen i 8 bitar i stället för 16 – halverar dess VRAM-åtgång. Kräver
 # FlashAttention ovan; utan den faller den tyst tillbaka på f16.
 Environment=OLLAMA_KV_CACHE_TYPE=q8_0
+# Tillåt endast 1 aktiv modell åt gången så den aldrig spills ut i system-RAM
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+# Dedikera minnesbuffertarna till 1 parallell sekvens för maximalt VRAM-utrymme
+Environment=OLLAMA_NUM_PARALLEL=1
+# Håll modellen laddad i VRAM i 30 minuter efter anrop (eliminerar omladdningstid)
+Environment=OLLAMA_KEEP_ALIVE=30m
 
-# Bind-adress och port. 127.0.0.1 = bara lokalt på servern. Ska instansen nås
-# från en annan dator, byt till 0.0.0.0 och sätt brandvägg framför.
-Environment=OLLAMA_HOST=127.0.0.1:11436
+# Bind-adress och port. 0.0.0.0 lyssnar på alla nätverksgränssnitt så att
+# instansen kan nås över nätverket. Begränsa med brandvägg vid behov.
+Environment=OLLAMA_HOST=0.0.0.0:11436
 User=ollama
 Group=ollama
 ExecStart=/bin/sh -c 'exec ollama serve'

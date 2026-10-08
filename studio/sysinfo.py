@@ -154,10 +154,19 @@ def _nvidia_gpus_query():
             ["nvidia-smi", "--query-gpu=" + gq, "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=8)
         gpus = parse_gpu_csv(gout.stdout)
-        # Fånga upp varningar/fel från nvidia-smi (t.ex. ett kort som inte kan läsas)
         err = (gout.stderr or "").strip() or None
-        if err is None and gout.returncode != 0:
-            err = "nvidia-smi avslutades med kod %d" % gout.returncode
+        if gout.returncode != 0:
+            hint = ""
+            if gout.returncode == 18 or (err and "version mismatch" in err.lower()):
+                hint = " (drivrutinen har uppdaterats i bakgrunden – omstart krävs: kör 'sudo reboot')"
+            elif gout.returncode == 9:
+                hint = " (NVIDIA-drivrutinen är inte laddad)"
+            elif gout.returncode == 15:
+                hint = " (GPU lost – tappad kontakt på PCIe-buss)"
+            if err is None:
+                err = f"nvidia-smi avslutades med kod {gout.returncode}{hint}"
+            else:
+                err = f"{err}{hint}"
         by_uuid = {g["uuid"]: g for g in gpus}
         pout = subprocess.run(
             ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",

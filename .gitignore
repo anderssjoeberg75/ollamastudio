@@ -16,7 +16,11 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+.codex/
 
 # Lokal inställningsdatabas (innehåller ev. hemligheter, t.ex. Mem0-nyckel)
 *.db
 ollama_studio.db
+
+# graphify local output
+graphify-out/
