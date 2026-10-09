@@ -2766,12 +2766,6 @@ async function runManual(){
   }catch(e){ codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>'); }
 }
 
-/* ---- Git / GitHub (fas 3) ---- */
-let lastGit = null;
-function gitMsg(text, err){
-  const el = document.getElementById('codeGitMsg');
-  if(el){ el.innerHTML = text || ''; el.style.color = err ? 'var(--danger)' : 'var(--faint)'; }
-}
 /* ---- Git / GitLab & GitHub (fas 3) ---- */
 let lastGit = null;
 function gitMsg(text, err){
