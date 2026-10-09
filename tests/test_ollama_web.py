@@ -1735,7 +1735,7 @@ class TestTraining(_DBTest):
         root = os.path.realpath(self.ws)
         self.assertTrue(w.train_resolve("data/x.jsonl", create=True).startswith(root + os.sep))
         # Absoluta vägar tolkas som relativa mot roten (samma regel som Codex arbetsyta)
-        self.assertEqual(w.train_resolve("/etc/passwd"), os.path.join(root, "etc/passwd"))
+        self.assertEqual(w.train_resolve("/etc/passwd"), os.path.join(root, "etc", "passwd"))
         for bad in ("../hemligt", "data/../../ute", "../../../etc/shadow"):
             with self.assertRaises(ValueError, msg=bad):
                 w.train_resolve(bad)

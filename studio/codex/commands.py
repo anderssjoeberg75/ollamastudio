@@ -38,20 +38,37 @@ def code_run_timeout():
         return 120
 
 
+def _split_cmd(cmd):
+    """Dela upp kommandorad i argument, med stöd för både POSIX och Windows-sökvägar."""
+    cmd = (cmd or "").strip()
+    if not cmd:
+        return []
+    if os.name == "nt":
+        raw_toks = shlex.split(cmd, posix=False)
+        toks = []
+        for t in raw_toks:
+            if len(t) >= 2 and ((t[0] == '"' and t[-1] == '"') or (t[0] == "'" and t[-1] == "'")):
+                toks.append(t[1:-1])
+            else:
+                toks.append(t)
+        return toks
+    return shlex.split(cmd)
+
+
 def code_run_allowed(cmd):
     """Är kommandot tillåtet enligt allowlist? Token-medveten prefixmatchning."""
     cmd = (cmd or "").strip()
     if not cmd or _SHELL_META.search(cmd):
         return False
     try:
-        toks = shlex.split(cmd)
+        toks = _split_cmd(cmd)
     except ValueError:
         return False
     if not toks:
         return False
     for allowed in code_run_allowlist():
         try:
-            atoks = shlex.split(allowed)
+            atoks = _split_cmd(allowed)
         except ValueError:
             continue
         if atoks and toks[:len(atoks)] == atoks:
@@ -77,7 +94,7 @@ def run_command(cmd, force=False):
         # Även ett godkänt kommando får inte kedja/omdirigera – vi kör aldrig via shell.
         return False, "Kommandot innehåller tecken som inte tillåts (; & | < > `)"
     try:
-        toks = shlex.split(cmd)
+        toks = _split_cmd(cmd)
     except ValueError as e:
         return False, "Kunde inte tolka kommandot: %s" % e
     env = dict(os.environ)
