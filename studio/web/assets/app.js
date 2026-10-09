@@ -2440,7 +2440,7 @@ document.getElementById('codeInput').addEventListener('keydown', e=>{
 document.getElementById('codeModel').addEventListener('change', saveCodeModel);
 
 function runSecurityAudit(){
-  if(codeRunning){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
+  if(codeController){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
   const inp = document.getElementById('codeInput');
   if(!inp) return;
   inp.value = 'Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n'
@@ -2451,7 +2451,7 @@ function runSecurityAudit(){
 }
 
 function runPonytailAudit(){
-  if(codeRunning){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
+  if(codeController){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
   const inp = document.getElementById('codeInput');
   if(!inp) return;
   inp.value = 'Läs .agents/skills/ponytail-audit/SKILL.md och genomför en helkods-granskning (audit) för överarbetning, onödig komplexitet och död kod. Ge en lista på vad som kan tas bort eller förenklas.';
