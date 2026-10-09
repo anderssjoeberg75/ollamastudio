@@ -2444,10 +2444,23 @@ function runSecurityAudit(){
   const inp = document.getElementById('codeInput');
   if(!inp) return;
   inp.value = 'Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n'
-    + '1. Läs .agents/skills/security-audit/SKILL.md och kartlägg attackytor med tree och search.\n'
-    + '2. Granska autentisering, sessioner, databasfrågor (SQL injection), input-sanitering och tokens.\n'
-    + '3. För VARJE bekräftad sårbarhet/risk du hittar: anropa direkt TOOL create_issue {"title": "[SEC] ...", "description": "Beskrivning, risk och åtgärd", "labels": "security,P1"} så att den skapas som ett Work Item i GitLab!\n'
-    + '4. Skriv en sammanfattande slutrapport när du är klar.';
+    + 'ARBETSSÄTT & KRAV:\n'
+    + '1. Undersök källkoden noggrant med TOOL search och TOOL read_file.\n'
+    + '2. Granska autentisering, sessioner, databasfrågor, input-sanitering, tokens, API-nycklar och felmeddelanden.\n'
+    + '3. FÖR VARJE ENSKILT FYND / SÅRBARHET: anropa OMEDELBART verktyget TOOL create_issue med:\n'
+    + '   - title: "[SEC-X] Beskrivande rubrik för detta specifika problem"\n'
+    + '   - description: En komplett och utförlig åtgärdsbeskrivning formaterad i markdown så vem som helst kan lösa problemet:\n'
+    + '       ### Plats & Berörd kod\n'
+    + '       Exakt filnamn, funktion och radnummer.\n'
+    + '       ### Problem & Säkerhetsrisk\n'
+    + '       Vad problemet är, varför det är en risk och potentiell konsekvens.\n'
+    + '       ### Steg-för-steg åtgärdsplan & Kodexempel\n'
+    + '       Exakta instruktioner och fullständiga kodexempel (före/efter) som visar exakt hur koden ska ändras.\n'
+    + '       ### Acceptanskriterier & Verifiering\n'
+    + '       Hur utvecklaren eller testaren kontrollerar att fixen fungerar.\n'
+    + '   - labels: "security,P1" (eller P2/P3)\n'
+    + '4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n'
+    + '5. Avsluta med en kort sammanfattning av de issues som skapats.';
   sendAgent();
 }
 

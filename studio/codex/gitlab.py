@@ -288,35 +288,56 @@ def gitlab_create_issue(title, description="", labels=None):
 
 
 def extract_findings_from_text(text):
-    """Extrahera strukturerade säkerhetsfynd ur modellens svarstext om inga TOOL create_issue anropades."""
+    """Extrahera strukturerade säkerhetsfynd ur modellens svarstext om inga TOOL create_issue anropades.
+    Delar upp både markdown-rubriker (###) och numrerade listpunkter (1. **...**) i separata issues.
+    """
     if not text:
         return []
-    sections = re.split(r'\n(?=#{2,4}\s+)', text)
-    findings = []
+
+    # Dela först vid markdown-rubriker (### / ####)
+    sections = [s.strip() for s in re.split(r'\n(?=#{2,4}\s+)', text) if s.strip()]
+    
+    # Om ingen uppdelning skedde, eller om en sektion innehåller en numrerad lista:
+    refined = []
     for sec in sections:
-        sec = sec.strip()
-        if not sec:
+        numbered = [n.strip() for n in re.split(r'\n(?=\s*\d+[\.\)]\s+)', sec) if n.strip()]
+        if len(numbered) > 1:
+            refined.extend(numbered)
+        else:
+            refined.append(sec)
+
+    findings = []
+    for item in refined:
+        lines = item.splitlines()
+        if not lines:
             continue
-        lines = sec.splitlines()
-        first = lines[0].lstrip('#').strip()
-        low = first.lower()
+        raw_title = lines[0].lstrip('#').strip()
+        # Tvätta titeln från inledande siffror och fetstilsmarkörer: "1. **Titel (fil.py):**" -> "Titel (fil.py)"
+        cleaned_title = re.sub(r'^\d+[\.\)]\s*', '', raw_title).strip('* :')
+        low = cleaned_title.lower()
+
+        # Filtrera bort generella rubriker som inte är fynd
+        if any(low.startswith(skip) for skip in (
+            'sammanfattning', 'översikt', 'slutsats', 'rekommendation',
+            'metod', 'identifierade risker', 'identifierade sårbarheter', 'resultat'
+        )):
+            continue
+
         is_finding = bool(
-            re.search(r'(\[sec|\[sa|sårbarhet|vulnerability|risk|brist|problem|\b\d+[\.\)]\s+)', low)
-            and len(first) > 5
-            and not low.startswith('sammanfattning')
-            and not low.startswith('översikt')
-            and not low.startswith('slutsats')
-            and not low.startswith('rekommendationer')
-            and not low.startswith('metod')
+            (re.search(r'(\[sec|\[sa|sårbarhet|vulnerability|risk|brist|problem|\.py\b|auth|token|sql|ssrf|undantag|lagring|export|mfa)', low)
+             or re.match(r'^\d+[\.\)]', raw_title))
+            and len(cleaned_title) >= 5
         )
+
         if is_finding and len(lines) > 1:
             desc = '\n'.join(lines[1:]).strip()
-            if len(desc) > 30:
+            if len(desc) >= 20:
                 findings.append({
-                    "title": first,
+                    "title": cleaned_title if cleaned_title.startswith('[') else f"[SEC] {cleaned_title}",
                     "description": desc,
                     "labels": "security,P2"
                 })
     return findings
+
 
 
