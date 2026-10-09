@@ -319,23 +319,28 @@ def extract_findings_from_text(text):
         # Filtrera bort generella rubriker som inte är fynd
         if any(low.startswith(skip) for skip in (
             'sammanfattning', 'översikt', 'slutsats', 'rekommendation',
-            'metod', 'identifierade risker', 'identifierade sårbarheter', 'resultat'
+            'metod', 'identifierade risker', 'identifierade sårbarheter', 'resultat',
+            'skisser', 'plan'
         )):
             continue
 
-        is_finding = bool(
-            (re.search(r'(\[sec|\[sa|sårbarhet|vulnerability|risk|brist|problem|\.py\b|auth|token|sql|ssrf|undantag|lagring|export|mfa)', low)
-             or re.match(r'^\d+[\.\)]', raw_title))
-            and len(cleaned_title) >= 5
-        )
+        is_ponytail = bool(re.search(r'(\[ponytail|delete:|stdlib:|native:|reuse:|yagni:|shrink:|överarbet|förenkl|död kod|komplexitet|refactor)', low))
+        is_security = bool(re.search(r'(\[sec|\[sa|sårbarhet|vulnerability|risk|brist|problem|\.py\b|auth|token|sql|ssrf|undantag|lagring|export|mfa)', low))
+        is_finding = bool((is_ponytail or is_security or re.match(r'^\d+[\.\)]', raw_title)) and len(cleaned_title) >= 5)
 
         if is_finding and len(lines) > 1:
             desc = '\n'.join(lines[1:]).strip()
             if len(desc) >= 20:
+                if is_ponytail:
+                    title_prefix = "" if cleaned_title.startswith('[') else "[PONYTAIL] "
+                    default_labels = "refactor,ponytail,P2"
+                else:
+                    title_prefix = "" if cleaned_title.startswith('[') else "[SEC] "
+                    default_labels = "security,P2"
                 findings.append({
-                    "title": cleaned_title if cleaned_title.startswith('[') else f"[SEC] {cleaned_title}",
+                    "title": f"{title_prefix}{cleaned_title}",
                     "description": desc,
-                    "labels": "security,P2"
+                    "labels": default_labels
                 })
     return findings
 

@@ -2468,7 +2468,24 @@ function runPonytailAudit(){
   if(codeController){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
   const inp = document.getElementById('codeInput');
   if(!inp) return;
-  inp.value = 'Läs .agents/skills/ponytail-audit/SKILL.md och genomför en helkods-granskning (audit) för överarbetning, onödig komplexitet och död kod. Ge en lista på vad som kan tas bort eller förenklas.';
+  inp.value = 'Läs .agents/skills/ponytail-audit/SKILL.md och genomför en helkods-granskning (ponytail-audit) för att identifiera överarbetning, onödig komplexitet, duplicerad logik och död kod.\n\n'
+    + 'ARBETSSÄTT & KRAV:\n'
+    + '1. Undersök källkoden noggrant med TOOL tree {} och TOOL search / TOOL read_file.\n'
+    + '2. Identifiera ställen där standardbiblioteket kan ersätta egen kod, onödiga abstraktioner/wrappers, oanvänd kod eller överdriven komplexitet (taggar: delete, stdlib, native, reuse, yagni, shrink).\n'
+    + '3. FÖR VARJE ENSKILT FYND / FÖRENKLINGSPUNKT: anropa OMEDELBART verktyget TOOL create_issue med:\n'
+    + '   - title: "[PONYTAIL-X] Beskrivande rubrik för förenklingen"\n'
+    + '   - description: En komplett och utförlig åtgärdsbeskrivning formaterad i markdown så vem som helst kan implementera förenklingen:\n'
+    + '       ### Plats & Berörd kod\n'
+    + '       Exakt filnamn, funktion och radnummer.\n'
+    + '       ### Problem & Överarbetning / Komplexitet\n'
+    + '       Varför detta är onödigt, överarbetat, duplicerat eller död kod och vilken förenklingstag som gäller (delete/stdlib/native/reuse/yagni/shrink).\n'
+    + '       ### Steg-för-steg förenklingsplan & Kodexempel\n'
+    + '       Exakta instruktioner och fullständiga kodexempel (före/efter) som visar hur koden rensas bort eller ersätts med enklare/stdlib-kod.\n'
+    + '       ### Acceptanskriterier & Verifiering\n'
+    + '       Hur utvecklaren eller testaren kontrollerar att testerna fortfarande går igenom och att funktionaliteten bibehålls.\n'
+    + '   - labels: "refactor,ponytail,P2" (eller P3)\n'
+    + '4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n'
+    + '5. Avsluta med en sammanfattning av hur många rader/beroenden som kan sparas.';
   sendAgent();
 }
 

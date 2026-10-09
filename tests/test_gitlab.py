@@ -122,6 +122,32 @@ class TestGitLabIntegration(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertIn("/issues/1", url)
 
+    def test_extract_findings_from_text_security_and_ponytail(self):
+        from studio.codex.gitlab import extract_findings_from_text
+        text = """
+Här är resultatet av granskningen:
+
+### [SEC-01] SQL Injection i auth.py
+Plats: backend/auth.py rad 45
+Problem: Rå sql-sträng används.
+Lösning: Använd parametriserade frågor.
+
+### [PONYTAIL-01] Ta bort oanvänd helper i utils.py
+Plats: backend/utils.py rad 120
+Problem: yagni: funktionen anropas aldrig.
+Lösning: Radera funktionen och spara 30 rader.
+
+### Sammanfattning
+Granskningen klar.
+"""
+        findings = extract_findings_from_text(text)
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(findings[0]["title"], "[SEC-01] SQL Injection i auth.py")
+        self.assertIn("security", findings[0]["labels"])
+        self.assertEqual(findings[1]["title"], "[PONYTAIL-01] Ta bort oanvänd helper i utils.py")
+        self.assertIn("ponytail", findings[1]["labels"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
