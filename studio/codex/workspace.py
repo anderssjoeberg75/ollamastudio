@@ -37,7 +37,12 @@ def ws_resolve(rel):
     root = code_workspace_root()
     if not root:
         raise ValueError("Ingen arbetsyta är konfigurerad")
-    rel = (rel or "").strip().lstrip("/")
+    raw = (rel or "").strip()
+    # Strippa eventuell enhetsbokstav på Windows (t.ex. C:\ vägar)
+    if len(raw) >= 2 and raw[1] == ":" and raw[0].isalpha():
+        raw = raw[2:]
+    # Strippa både framåt- och bakåtlutande snedstreck tidigt
+    rel = raw.lstrip("/\\")
     full = os.path.realpath(os.path.join(root, rel))
     if full != root and not full.startswith(root + os.sep):
         raise ValueError("Sökvägen ligger utanför arbetsytan")

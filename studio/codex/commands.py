@@ -98,6 +98,13 @@ def run_command(cmd, force=False):
     except ValueError as e:
         return False, "Kunde inte tolka kommandot: %s" % e
     env = dict(os.environ)
+    # Rensa bort känsliga API-nycklar och tokens så subprocesser inte kan komma åt dem
+    for k in list(env.keys()):
+        kl = k.lower()
+        if (k in ("GITLAB_TOKEN", "GITHUB_TOKEN", "HF_TOKEN", "MEM0_API_KEY",
+                  "OLLAMA_STUDIO_TOKEN", "TOKEN", "AWS_SECRET_ACCESS_KEY")
+                or any(sub in kl for sub in ("token", "secret", "password", "api_key"))):
+            del env[k]
     env["GIT_TERMINAL_PROMPT"] = "0"
     try:
         p = subprocess.run(toks, cwd=root, capture_output=True, text=True,

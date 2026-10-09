@@ -178,3 +178,63 @@ def model_search(query, limit=20):
     known = {c["pull"] for c in curated}
     merged = curated + [m for m in library if m["pull"] not in known]
     return {"query": query, "library": merged[:limit], "hf": hf_hits[:limit]}
+
+
+def select_optimal_model(models, task="code"):
+    """Väljer den mest optimala modellen för uppgiften bland tillgängliga modeller.
+
+    `models` kan vara en lista av strängar eller dictar med 'name' / 'model'.
+    För 'code' / 'audit':
+      - Prioriterar kod-specialiserade modeller (qwen2.5-coder > deepseek-coder > övriga coder).
+      - Balanserar resonemangsförmåga och VRAM-krav för optimal körning på GPU.
+    """
+    if not models:
+        return ""
+
+    names = []
+    for m in models:
+        if isinstance(m, dict):
+            names.append(m.get("name") or m.get("model") or "")
+        elif isinstance(m, str):
+            names.append(m)
+    names = [n.strip() for n in names if n and n.strip()]
+    if not names:
+        return ""
+
+    def _score(name):
+        n = name.lower()
+        score = 0
+        if task in ("code", "audit", "security", "ponytail"):
+            # Kodspecialisering
+            if "qwen2.5-coder" in n or "qwen2.5_coder" in n:
+                score += 1000
+            elif any(k in n for k in ("coder", "starcoder", "codellama", "deepseek-coder", "codeqwen")):
+                score += 750
+            elif "code" in n or "devstral" in n:
+                score += 550
+            elif "qwen" in n:
+                score += 400
+            elif any(k in n for k in ("llama3", "mistral", "command-r")):
+                score += 300
+            elif "gemma" in n:
+                score += 150
+            else:
+                score += 50
+
+            # Storleksbonus – 14b och 7b är optimal sweet spot för GPU VRAM (12 GB)
+            if "14b" in n:
+                score += 150
+            elif any(s in n for s in ("7b", "8b", "12b")):
+                score += 100
+            elif "32b" in n:
+                score += 50
+            elif "70b" in n:
+                score -= 100
+            elif any(s in n for s in ("1b", "2b", "3b")):
+                score -= 100
+
+        return score
+
+    ranked = sorted(names, key=_score, reverse=True)
+    return ranked[0]
+

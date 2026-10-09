@@ -299,10 +299,10 @@ def extract_findings_from_text(text):
     # Dela först vid markdown-rubriker (### / ####)
     sections = [s.strip() for s in re.split(r'\n(?=#{2,4}\s+)', text) if s.strip()]
     
-    # Om ingen uppdelning skedde, eller om en sektion innehåller en numrerad lista:
+    # Om ingen uppdelning skedde, eller om en sektion innehåller en numrerad lista eller punktlista:
     refined = []
     for sec in sections:
-        numbered = [n.strip() for n in re.split(r'\n(?=\s*\d+[\.\)]\s+)', sec) if n.strip()]
+        numbered = [n.strip() for n in re.split(r'\n(?=\s*(?:\d+[\.\)]|[-*]\s+\*\*)\s*)', sec) if n.strip()]
         if len(numbered) > 1:
             refined.extend(numbered)
         else:
@@ -314,8 +314,8 @@ def extract_findings_from_text(text):
         if not lines:
             continue
         raw_title = lines[0].lstrip('#').strip()
-        # Tvätta titeln från inledande siffror och fetstilsmarkörer: "1. **Titel (fil.py):**" -> "Titel (fil.py)"
-        cleaned_title = re.sub(r'^\d+[\.\)]\s*', '', raw_title).strip('* :')
+        # Tvätta titeln från inledande siffror, bindestreck och fetstilsmarkörer: "1. **Titel (fil.py):**" -> "Titel (fil.py)"
+        cleaned_title = re.sub(r'^(?:\d+[\.\)]|[-*])\s*', '', raw_title).strip('* :')
         low = cleaned_title.lower()
 
         # Filtrera bort generella rubriker som inte är fynd

@@ -32,6 +32,26 @@ class BaseHandler(BaseHTTPRequestHandler):
             return True
         return hmac.compare_digest(self.headers.get("X-Auth-Token", ""), TOKEN)
 
+    def _csrf_ok(self):
+        """CSRF-skydd: verifierar att tillståndsförändrande POST-anrop inte kommer cross-site."""
+        if TOKEN and hmac.compare_digest(self.headers.get("X-Auth-Token", ""), TOKEN):
+            return True
+
+        sec_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if sec_site == "cross-site":
+            return False
+
+        origin = self.headers.get("Origin")
+        if origin:
+            try:
+                origin_host = urllib.parse.urlparse(origin).netloc.lower()
+                req_host = (self.headers.get("Host") or "").lower()
+                if origin_host and req_host and origin_host != req_host:
+                    return False
+            except Exception:
+                return False
+        return True
+
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)

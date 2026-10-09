@@ -369,7 +369,7 @@ class TestCodeAssistant(_DBTest):
         self.ws = os.path.join(self.tmp, "ws")
         os.makedirs(os.path.join(self.ws, "sub"))
         with open(os.path.join(self.ws, "app.py"), "w", encoding="utf-8") as f:
-            f.write("def hej():\n    return 1  # TODO\n")
+            f.write("def hej():\n    return 1  # MARKER\n")
         w.settings_set({"code_enabled": True, "code_workspace": self.ws})
 
     def _p(self, name):
@@ -389,7 +389,7 @@ class TestCodeAssistant(_DBTest):
         self.assertTrue(any(f.startswith("app.py") for f in ld["files"]))
         rf = w.ws_read_file("app.py", 1, 1)
         self.assertIn("1\tdef hej", rf["content"])
-        sr = w.ws_search("TODO")
+        sr = w.ws_search("MARKER")
         self.assertEqual(sr["hits"][0]["line"], 2)
         self.assertIn("app.py", w.ws_tree())
 
@@ -411,7 +411,7 @@ class TestCodeAssistant(_DBTest):
         self.assertEqual(w.strip_edits("hej\n*** FIL: a\ny\n*** SLUT\ndå"), "hej\n\ndå".strip())
 
     def test_agent_tool_exec(self):
-        txt, meta = w.agent_tool_exec("search", {"query": "TODO"})
+        txt, meta = w.agent_tool_exec("search", {"query": "MARKER"})
         self.assertIn("app.py:2", txt)
         txt2, _ = w.agent_tool_exec("read_file", {"path": "app.py"})
         self.assertIn("def hej", txt2)
@@ -615,18 +615,18 @@ class TestCodeAssistant(_DBTest):
         self.assertFalse(r4["more"])
 
     def test_search_handles_regex_glob_and_case(self):
-        w.ws_write_file("a.py", "TODO: fixa\n")
-        w.ws_write_file("b.txt", "todo: annat\n")
-        # Ren delsträng, skiftlägeskänslig som förut (app.py har också ett TODO)
-        self.assertEqual(sorted(h["path"] for h in w.ws_search("TODO")["hits"]),
+        w.ws_write_file("a.py", "MARKER: fixa\n")
+        w.ws_write_file("b.txt", "marker: annat\n")
+        # Ren delsträng, skiftlägeskänslig som förut (app.py har också ett MARKER)
+        self.assertEqual(sorted(h["path"] for h in w.ws_search("MARKER")["hits"]),
                          ["a.py", "app.py"])
         # Skiftlägesokänslig hittar båda
         self.assertEqual(sorted(h["path"] for h in
-                                w.ws_search("todo", ignore_case=True)["hits"]),
+                                w.ws_search("marker", ignore_case=True)["hits"]),
                          ["a.py", "app.py", "b.txt"])
         # glob smalnar av till vissa filer
         self.assertEqual([h["path"] for h in
-                          w.ws_search("todo", ignore_case=True, glob="*.txt")["hits"]],
+                          w.ws_search("marker", ignore_case=True, glob="*.txt")["hits"]],
                          ["b.txt"])
         # regex
         hits = w.ws_search(r"^def \w+", regex=True)["hits"]

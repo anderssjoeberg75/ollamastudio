@@ -125,7 +125,26 @@ class TestScheduler(unittest.TestCase):
             model = _get_active_code_model()
             self.assertEqual(model, "fallback:latest")
 
+    def test_select_optimal_model(self):
+        from studio.models import select_optimal_model
+        models = ["gemma4:12b", "qwen3:14b", "qwen2.5-coder:14b", "qwen2.5:14b"]
+        chosen = select_optimal_model(models, task="code")
+        self.assertEqual(chosen, "qwen2.5-coder:14b")
+
+        fallback = select_optimal_model(["some-basic-model:latest"])
+        self.assertEqual(fallback, "some-basic-model:latest")
+
+    def test_select_optimal_backend(self):
+        from studio import backends
+        with patch.object(backends, "_backend_is_alive") as mock_alive:
+            # Simulera att port 11436 och 11434 är vid liv
+            mock_alive.side_effect = lambda u: ":11436" in u or ":11434" in u
+            with patch.dict(backends.BACKENDS[0], {"url": "http://127.0.0.1:11434"}):
+                chosen = backends.select_optimal_backend()
+                self.assertIn(":11436", chosen)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

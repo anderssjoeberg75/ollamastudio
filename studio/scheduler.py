@@ -58,6 +58,7 @@ def scheduler_db_init():
             conn.commit()
         finally:
             conn.close()
+    config.secure_db_permissions(config.DB_PATH)
 
 
 def schedule_list():
@@ -208,21 +209,25 @@ def _update_job_status(job_id, status=None, last_run=None, next_run=None):
             conn.close()
 
 
-def _get_active_code_model():
-    """Hämtar vald Codex-modell eller första tillgängliga Ollama-modell."""
+def _get_active_code_model(base_url=None):
+    """Hämtar vald Codex-modell eller den mest optimala modellen för kodgranskning."""
     try:
         m = (prefs_all().get("code_model") or "").strip()
-        if m:
+        if m and m.lower() != "auto":
             return m
     except Exception:
         pass
-    base = backends.PRIMARY["url"]
+    base = base_url or backends.select_optimal_backend()
     try:
         req = urllib.request.Request(base.rstrip("/") + "/api/tags")
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
             models = data.get("models") or []
             if models:
+                from .models import select_optimal_model
+                optimal = select_optimal_model(models, task="code")
+                if optimal:
+                    return optimal
                 return models[0].get("name") or models[0].get("model") or ""
     except Exception:
         pass
@@ -273,7 +278,7 @@ PONYTAIL_AUDIT_PROMPT = (
 
 
 def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
-    """Kör ett granskningsvarv i bakgrunden och returnerar antal skapade issues."""
+    """Kör ett granskningsvarv i bakgrunden och returnerar (antal_issues, felmeddelande)."""
     mode = "auto_edit"
     sys_prompt = agent_system_prompt(mode)
     convo = [
@@ -283,7 +288,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
     ctx = AgentRun(lambda ev: None, mode)
     guard = RepeatGuard()
     max_steps = 25
-    base = base_url or backends.PRIMARY["url"]
+    base = base_url or backends.select_optimal_backend()
 
     step = 0
     while step < max_steps:
@@ -303,9 +308,13 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
             headers={"Content-Type": "application/json"}
         )
         try:
-            with urllib.request.urlopen(req, timeout=180) as resp:
+            with urllib.request.urlopen(req, timeout=300) as resp:
                 resp_obj = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
-        except Exception:
+        except urllib.error.URLError as e:
+            setattr(ctx, "last_error", "Nätverks-/timeoutfel mot %s: %s" % (base, e))
+            break
+        except Exception as e:
+            setattr(ctx, "last_error", "Anropsfel mot %s: %s" % (base, e))
             break
 
         full = (resp_obj.get("message") or {}).get("content") or ""
@@ -348,21 +357,27 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
                     ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
         break
 
-    return getattr(ctx, "issues_created", 0)
+    return getattr(ctx, "issues_created", 0), getattr(ctx, "last_error", None)
 
 
 def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, status_cb=None):
-    """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items."""
+    """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
+
+    Väljer automatiskt den mest optimala hårdvaran (snabbaste GPU-instansen) och
+    den bäst lämpade kodmodellen (t.ex. qwen2.5-coder) för uppgiften.
+    """
     token = setting_str("gitlab_token")
     if not token:
         return False, "Ingen GitLab-token konfigurerad under ⚙ Inställningar", 0, 0
 
-    model = _get_active_code_model()
+    base_url = backends.select_optimal_backend()
+    model = _get_active_code_model(base_url=base_url)
     if not model:
-        return False, "Ingen Ollama-modell tillgänglig", 0, 0
+        return False, "Ingen Ollama-modell tillgänglig på %s" % base_url, 0, 0
 
     if status_cb:
-        status_cb("Hämtar / uppdaterar %s från GitLab..." % project)
+        status_cb("Optimal hårdvara (%s) och modell (%s) valda. Hämtar %s från GitLab..."
+                  % (base_url, model, project))
 
     ok, msg, target_dir = gitlab_fetch_repo(project, branch)
     if not ok or not target_dir:
@@ -373,26 +388,36 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     sec_count = 0
     pny_count = 0
+    errors = []
 
     try:
         if run_security:
             if status_cb:
-                status_cb("Kör säkerhetsgranskning mot %s..." % project)
-            sec_count = _run_single_headless_pass(SECURITY_AUDIT_PROMPT, model, project)
+                status_cb("Kör säkerhetsgranskning mot %s (%s på %s)..." % (project, model, base_url))
+            sec_count, sec_err = _run_single_headless_pass(SECURITY_AUDIT_PROMPT, model, project, base_url=base_url)
+            if sec_err:
+                errors.append("Säkerhetsgranskning: " + sec_err)
 
         if run_ponytail:
             if status_cb:
-                status_cb("Kör ponytail-audit mot %s..." % project)
-            pny_count = _run_single_headless_pass(PONYTAIL_AUDIT_PROMPT, model, project)
+                status_cb("Kör ponytail-audit mot %s (%s på %s)..." % (project, model, base_url))
+            pny_count, pny_err = _run_single_headless_pass(PONYTAIL_AUDIT_PROMPT, model, project, base_url=base_url)
+            if pny_err:
+                errors.append("Ponytail-audit: " + pny_err)
 
     finally:
         if prev_workspace and prev_workspace != target_dir:
             settings_set({"code_workspace": prev_workspace})
 
     total = sec_count + pny_count
-    summary = ("Klar: %d säkerhets- och %d ponytail-punkter sparade som GitLab Work Items."
-               % (sec_count, pny_count))
+    if errors and total == 0:
+        summary = "Fel under körning (%s på %s): %s" % (model, base_url, "; ".join(errors))
+        return False, summary, sec_count, pny_count
+
+    summary = ("Klar (%s på %s): %d säkerhets- och %d ponytail-punkter sparade som GitLab Work Items."
+               % (model, base_url, sec_count, pny_count))
     return True, summary, sec_count, pny_count
+
 
 
 def _execute_job(job_id):

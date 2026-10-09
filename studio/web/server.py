@@ -256,6 +256,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         path = self.path.split("?", 1)[0]
         if not self._auth_ok():
             return self._send_json({"error": "unauthorized"}, 401)
+        if not self._csrf_ok():
+            return self._send_json({"error": "cross-site request blocked (CSRF)"}, 403)
 
         length = int(self.headers.get("Content-Length", 0) or 0)
         if length > MAX_BODY_BYTES:

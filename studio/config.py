@@ -100,6 +100,16 @@ _settings_db = {}   # cache av det som ligger i databasen (nyckel -> str)
 _prefs_cache = {}   # UI-val (modell, GPU, chattinställningar) – nyckel -> str
 
 
+def secure_db_permissions(path=None):
+    """Säkerställ restriktiva rättigheter (0600) på databasfilen på POSIX-system."""
+    p = path or DB_PATH
+    if os.path.exists(p):
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+
+
 def db_init():
     """Skapa databasen/tabellerna om de saknas och läs in i cachen."""
     global _settings_db, _prefs_cache
@@ -123,11 +133,7 @@ def db_init():
             _prefs_cache = pfresh
         finally:
             conn.close()
-    # Databasen kan innehålla hemligheter (Mem0-nyckel, GitHub-token) – lås rättigheter.
-    try:
-        os.chmod(DB_PATH, 0o600)
-    except OSError:
-        pass   # t.ex. Windows – hoppa tyst
+    secure_db_permissions(DB_PATH)
 
 
 # UI-val (chatt + Codex) sparas i prefs-tabellen så de överlever omladdning/webbläsare.
