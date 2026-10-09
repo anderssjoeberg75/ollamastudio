@@ -286,3 +286,37 @@ def gitlab_create_issue(title, description="", labels=None):
     except Exception as e:
         return False, str(e)
 
+
+def extract_findings_from_text(text):
+    """Extrahera strukturerade säkerhetsfynd ur modellens svarstext om inga TOOL create_issue anropades."""
+    if not text:
+        return []
+    sections = re.split(r'\n(?=#{2,4}\s+)', text)
+    findings = []
+    for sec in sections:
+        sec = sec.strip()
+        if not sec:
+            continue
+        lines = sec.splitlines()
+        first = lines[0].lstrip('#').strip()
+        low = first.lower()
+        is_finding = bool(
+            re.search(r'(\[sec|\[sa|sårbarhet|vulnerability|risk|brist|problem|\b\d+[\.\)]\s+)', low)
+            and len(first) > 5
+            and not low.startswith('sammanfattning')
+            and not low.startswith('översikt')
+            and not low.startswith('slutsats')
+            and not low.startswith('rekommendationer')
+            and not low.startswith('metod')
+        )
+        if is_finding and len(lines) > 1:
+            desc = '\n'.join(lines[1:]).strip()
+            if len(desc) > 30:
+                findings.append({
+                    "title": first,
+                    "description": desc,
+                    "labels": "security,P2"
+                })
+    return findings
+
+

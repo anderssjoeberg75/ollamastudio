@@ -13,6 +13,7 @@ from studio.codex.permissions import AgentRun, RepeatGuard
 from studio.codex.protocol import (
     AGENT_SYSTEM_SCRATCH, agent_system_prompt, agent_tool_exec, parse_edits,
     parse_tool_call, strip_edits)
+from studio.codex.gitlab import extract_findings_from_text, gitlab_create_issue
 from studio.codex.workspace import ws_current, ws_diff, ws_write_file
 from studio.config import (
     CODE_MODE_LABELS, code_ctx, code_max_steps, code_mode, code_options,
@@ -167,6 +168,16 @@ class CodexRoutes(BaseHandler):
                 msg = strip_edits(full)
                 if msg:
                     self._emit({"type": "message", "text": msg})
+                    if not getattr(ctx, "issues_created", 0):
+                        findings = extract_findings_from_text(msg)
+                        for f in findings:
+                            ok, res = gitlab_create_issue(f["title"], f["description"], labels=f.get("labels"))
+                            if ok:
+                                ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
+                                self._emit({"type": "tool", "name": "create_issue",
+                                            "args": {"title": f["title"]},
+                                            "summary": "Skapade GitLab Issue: " + f["title"],
+                                            "url": res, "ok": True})
                 finished = True
                 break
             if not finished and max_steps:

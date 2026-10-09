@@ -480,6 +480,8 @@ def agent_tool_exec(name, args, ctx=None):
             if ctx.mode == "ask" and not ctx.ask("git", "issue:" + title, "Skapa GitLab Issue: " + title, desc):
                 return _denied("att skapa issue"), {"summary": "nekat", "denied": True}
             ok, res = gitlab_create_issue(title, desc, labels=labels)
+            if ok:
+                ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
             return (("OK: Skapade issue %s" if ok else "FEL: %s") % res,
                     {"summary": (("✓ Issue: " if ok else "✕ ") + title)[:60], "url": res if ok else "", "ok": ok})
 
