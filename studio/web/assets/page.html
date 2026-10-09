@@ -222,6 +222,10 @@
             <select id="codeModel"></select>
             <button class="btn ghost small" onclick="clearCode()"
                     title="Rensar bara loggen och konversationen – filerna i arbetsytan rörs inte">🧹 Töm loggen</button>
+            <button class="btn accent small" onclick="runSecurityAudit()"
+                    title="Startar automatisk säkerhetsgranskning enligt .agents/skills/security-audit/SKILL.md">🛡 Säkerhetsgranskning</button>
+            <button class="btn ghost small" onclick="runPonytailAudit()"
+                    title="Hitta överarbetning och onödig komplexitet enligt .agents/skills/ponytail-audit/SKILL.md">✂ Ponytail-audit</button>
             <span class="hint" style="color:var(--faint);font-size:12px">egen · oberoende av chatten</span>
           </div>
           <div id="codeLocalBar" class="chatbar" style="display:none">

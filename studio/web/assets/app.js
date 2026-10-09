@@ -2439,6 +2439,25 @@ document.getElementById('codeInput').addEventListener('keydown', e=>{
 });
 document.getElementById('codeModel').addEventListener('change', saveCodeModel);
 
+function runSecurityAudit(){
+  if(codeRunning){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
+  const inp = document.getElementById('codeInput');
+  if(!inp) return;
+  inp.value = 'Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n'
+    + '1. Läs .agents/skills/security-audit/SKILL.md och kartlägg attackytor med tree och search.\n'
+    + '2. Granska autentisering, sessioner, databasfrågor (SQL injection), input-sanitering och tokens.\n'
+    + '3. Skriv en sammanfattande rapport med alla bekräftade sårbarheter och åtgärdsförslag.';
+  sendAgent();
+}
+
+function runPonytailAudit(){
+  if(codeRunning){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
+  const inp = document.getElementById('codeInput');
+  if(!inp) return;
+  inp.value = 'Läs .agents/skills/ponytail-audit/SKILL.md och genomför en helkods-granskning (audit) för överarbetning, onödig komplexitet och död kod. Ge en lista på vad som kan tas bort eller förenklas.';
+  sendAgent();
+}
+
 /* ---- Lokal mapp i webbläsaren (File System Access API) ----
    Låter Codex arbeta mot en mapp på DIN dator även om servern kör någon annanstans.
    Filerna läses/skrivs lokalt i webbläsaren; bara modell-anropen går till servern. */
