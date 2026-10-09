@@ -93,6 +93,8 @@ def agent_system_prompt(mode=None):
         "- Kontexten är begränsad. Läs det du behöver, inte hela projektet.\n"
         "- Du har gott om steg – ta dem du behöver för att bli KLAR. Men upprepa aldrig ett "
         "verktygsanrop du redan fått svar på; resultatet blir detsamma.\n"
+        "- När du ombeds granska kod eller hitta buggar/säkerhetsbrister: anropa alltid "
+        "TOOL create_issue för att lägga upp varje enskilt fynd i GitLab under Work Items.\n"
         "- Uppfinn inga verktyg och kör inga verktyg du inte fått resultat för.\n"
         "- När du är klar: skriv svaret som vanlig text utan TOOL-rad."
     )
@@ -475,7 +477,7 @@ def agent_tool_exec(name, args, ctx=None):
             labels = args.get("labels") or args.get("etiketter") or "security"
             if not title:
                 return "FEL: title saknas", {"summary": "fel: title saknas"}
-            if not ctx.ask("git", "issue:" + title, "Skapa GitLab Issue: " + title, desc):
+            if ctx.mode == "ask" and not ctx.ask("git", "issue:" + title, "Skapa GitLab Issue: " + title, desc):
                 return _denied("att skapa issue"), {"summary": "nekat", "denied": True}
             ok, res = gitlab_create_issue(title, desc, labels=labels)
             return (("OK: Skapade issue %s" if ok else "FEL: %s") % res,
