@@ -324,12 +324,25 @@ def rank_candidates(query, models, min_similarity=0.55):
 # Nätverk (Hugging Faces öppna API – token är valfri)
 # --------------------------------------------------------------------------
 def _get_json(url, token=None, timeout=DEFAULT_TIMEOUT):
+    if not (url or "").lower().startswith("https://"):
+        raise ValueError("Endast säkra HTTPS-anslutningar är tillåtna för Hugging Face API")
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", errors="replace") or "null")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace") or "null")
+    except urllib.error.HTTPError as e:
+        msg = str(e)
+        if token:
+            msg = msg.replace(token, "***")
+        raise urllib.error.HTTPError(e.url, e.code, msg, e.hdrs, e.fp) from None
+    except Exception as e:
+        msg = str(e)
+        if token:
+            msg = msg.replace(token, "***")
+        raise RuntimeError("Hugging Face API-fel: %s" % msg) from None
 
 
 def search_models(query, limit=8, token=None, timeout=DEFAULT_TIMEOUT):

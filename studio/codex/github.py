@@ -119,9 +119,16 @@ def github_fetch_repo(slug, branch=""):
         return False, "Kunde inte skapa mappen för hämtade repon", ""
 
     owner, _, name = slug.partition("/")
-    target = os.path.join(root, repo_dir_name(slug))
     clean_url = "https://github.com/%s/%s.git" % (owner, name)
-    auth_url = gitops._authed_push_url(owner, name, token)
+    target = os.path.join(root, repo_dir_name(slug))
+    raw_source = gitops._authed_push_url(owner, name, token)
+    if os.path.exists(raw_source):
+        clone_source = raw_source
+        auth_env = None
+    else:
+        clone_source = clean_url
+        auth_env = gitops.git_auth_env(token, "github") if token else None
+
     branch = (branch or "").strip()
 
     def hide(text):
@@ -129,7 +136,8 @@ def github_fetch_repo(slug, branch=""):
 
     if os.path.isdir(os.path.join(target, ".git")):
         # Redan hämtat – uppdatera i stället för att klona om.
-        rc, _out, err = _git(["fetch", auth_url, "--prune"], timeout=180, cwd=target)
+        fetch_source = "origin" if not os.path.exists(raw_source) else raw_source
+        rc, _out, err = _git(["fetch", fetch_source, "--prune"], timeout=180, cwd=target, extra_env=auth_env)
         if rc != 0:
             return False, "Kunde inte hämta uppdateringar: " + hide(err), target
         if branch:
@@ -148,11 +156,11 @@ def github_fetch_repo(slug, branch=""):
     args = ["clone", "--depth", "50"]
     if branch:
         args += ["--branch", branch]
-    args += [auth_url, target]
-    rc, _out, err = _git(args, timeout=600, cwd=root)
+    args += [clone_source, target]
+    rc, _out, err = _git(args, timeout=600, cwd=root, extra_env=auth_env)
     if rc != 0:
         return False, "Kloningen misslyckades: " + hide(err)[:300], ""
-    _git(["remote", "set-url", "origin", clean_url], cwd=target)   # ingen token på disk
+    _git(["remote", "set-url", "origin", clean_url], cwd=target)
     current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target)[1] or "").strip()
     return True, "%s hämtat (gren %s)" % (slug, current or "?"), target
 

@@ -179,6 +179,24 @@ def git_commit_all(message):
     return True, (out or "commit ok")
 
 
+def git_auth_env(token, provider="gitlab"):
+    """Skapar miljövariabler för Git-autentisering via extraHeader.
+    Undviker att token exponeras i URL, processargument (ps) eller sparas i .git/config."""
+    if not token:
+        return {}
+    if provider == "gitlab":
+        header = "PRIVATE-TOKEN: %s" % token
+    else:  # github
+        import base64
+        b64 = base64.b64encode(("x-access-token:%s" % token).encode("ascii")).decode("ascii")
+        header = "Authorization: Basic %s" % b64
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.extraHeader",
+        "GIT_CONFIG_VALUE_0": header,
+    }
+
+
 def _authed_push_url(owner, repo, token):
     return "https://x-access-token:%s@github.com/%s/%s.git" % (token, owner, repo)
 
@@ -194,21 +212,21 @@ def git_push(branch=None):
     info = git_remote_info()
     provider = info.get("provider") if info else ""
     token = ""
-    url = None
+    extra_env = None
 
     if provider == "gitlab":
         token = setting_str("gitlab_token")
-        if token and info and info.get("host") and info.get("slug"):
-            url = _authed_gitlab_push_url(info["host"], info["slug"], token, info.get("scheme", "http"))
+        if token:
+            extra_env = git_auth_env(token, "gitlab")
     elif provider == "github":
         token = setting_str("github_token")
-        if token and info and info.get("owner") and info.get("repo"):
-            url = _authed_push_url(info["owner"], info["repo"], token)
+        if token:
+            extra_env = git_auth_env(token, "github")
 
-    if url and token:
-        rc, out, err = _git(["push", url, "HEAD:refs/heads/" + branch], timeout=120)
+    rc, out, err = _git(["push", "-u", "origin", "HEAD:refs/heads/" + branch],
+                        timeout=120, extra_env=extra_env)
+    if token:
         err = (err or "").replace(token, "***")
         out = (out or "").replace(token, "***")
-    else:
-        rc, out, err = _git(["push", "-u", "origin", branch], timeout=120)
     return (rc == 0), (err or out or ("pushade " + branch))
+

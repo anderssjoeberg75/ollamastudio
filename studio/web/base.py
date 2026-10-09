@@ -30,11 +30,16 @@ class BaseHandler(BaseHTTPRequestHandler):
     def _auth_ok(self):
         if not TOKEN:
             return True
-        return hmac.compare_digest(self.headers.get("X-Auth-Token", ""), TOKEN)
+        client_token = self.headers.get("X-Auth-Token", "")
+        if not client_token:
+            auth_header = self.headers.get("Authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                client_token = auth_header[7:].strip()
+        return bool(client_token) and hmac.compare_digest(client_token, TOKEN)
 
     def _csrf_ok(self):
         """CSRF-skydd: verifierar att tillståndsförändrande POST-anrop inte kommer cross-site."""
-        if TOKEN and hmac.compare_digest(self.headers.get("X-Auth-Token", ""), TOKEN):
+        if TOKEN and self._auth_ok():
             return True
 
         sec_site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()

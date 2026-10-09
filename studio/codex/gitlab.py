@@ -14,7 +14,7 @@ import urllib.request
 
 from ..config import setting_str, settings_set
 from . import gitops
-from .gitops import (_git, git_available, git_current_branch, git_is_repo,
+from .gitops import (_git, git_auth_env, git_available, git_current_branch, git_is_repo,
                      git_remote_info)
 from .github import (code_repos_root, local_repo_state, local_repos,
                      remove_local_repo, repo_dir_name)
@@ -143,11 +143,7 @@ def gitlab_fetch_repo(target, branch=""):
         return False, "Kunde inte skapa mappen för hämtade repon", ""
 
     target_dir = os.path.join(root, repo_dir_name(slug))
-    if token:
-        auth_url = "%s://oauth2:%s@%s/%s.git" % (scheme, token, host, slug)
-    else:
-        auth_url = clean_url
-
+    auth_env = git_auth_env(token, "gitlab") if token else None
     branch = (branch or "").strip()
 
     def hide(text):
@@ -157,7 +153,7 @@ def gitlab_fetch_repo(target, branch=""):
 
     if os.path.isdir(os.path.join(target_dir, ".git")):
         # Redan hämtat – hämta uppdateringar
-        rc, _out, err = _git(["fetch", auth_url, "--prune"], timeout=180, cwd=target_dir)
+        rc, _out, err = _git(["fetch", "origin", "--prune"], timeout=180, cwd=target_dir, extra_env=auth_env)
         if rc != 0:
             return False, "Kunde inte hämta uppdateringar: " + hide(err), target_dir
         if branch:
@@ -175,12 +171,11 @@ def gitlab_fetch_repo(target, branch=""):
     args = ["clone", "--depth", "50"]
     if branch:
         args += ["--branch", branch]
-    args += [auth_url, target_dir]
-    rc, _out, err = _git(args, timeout=600, cwd=root)
+    args += [clean_url, target_dir]
+    rc, _out, err = _git(args, timeout=600, cwd=root, extra_env=auth_env)
     if rc != 0:
         return False, "Kloningen misslyckades: " + hide(err)[:300], ""
 
-    _git(["remote", "set-url", "origin", clean_url], cwd=target_dir)  # ingen token på disk
     current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target_dir)[1] or "").strip()
     return True, "%s hämtat från GitLab (gren %s)" % (slug, current or "?"), target_dir
 
@@ -291,18 +286,57 @@ def gitlab_create_issue(title, description="", labels=None, project_slug=None):
 
 def extract_findings_from_text(text):
     """Extrahera strukturerade säkerhetsfynd ur modellens svarstext om inga TOOL create_issue anropades.
-    Delar upp både markdown-rubriker (###) och numrerade listpunkter (1. **...**) i separata issues.
+    Delar upp både markdown-rubriker (###) och numrerade listpunkter (1. **...**) i separata issues,
+    men håller ihop underrubriker (Problem, Plats, Steg-för-steg, Åtgärd, Acceptans etc.) med sitt fynd.
     """
     if not text:
         return []
 
-    # Dela först vid markdown-rubriker (### / ####)
-    sections = [s.strip() for s in re.split(r'\n(?=#{2,4}\s+)', text) if s.strip()]
-    
-    # Om ingen uppdelning skedde, eller om en sektion innehåller en numrerad lista eller punktlista:
+    # Om texten innehåller JSON (t.ex. ```json ... ``` eller ren JSON-lista)
+    json_match = re.search(r'```(?:json)?\s*(\[\s*\{.*?\}\s*\])\s*```', text, re.DOTALL)
+    candidate_json = json_match.group(1) if json_match else text.strip()
+    if candidate_json.startswith("[") and candidate_json.endswith("]"):
+        try:
+            parsed = json.loads(candidate_json)
+            if isinstance(parsed, list):
+                res = []
+                for item in parsed:
+                    if isinstance(item, dict) and item.get("title"):
+                        t = item["title"].strip()
+                        d = (item.get("description") or "").strip()
+                        l = item.get("labels") or ("security,P2" if "[sec" in t.lower() else "refactor,ponytail,P2")
+                        res.append({"title": t, "description": d, "labels": l})
+                if res:
+                    return res
+        except Exception:
+            pass
+
+    # Underrubriker som hör till ett fynd och INTE ska brytas ut till ett nytt issue
+    SUB_SECTIONS = (
+        'plats', 'berörd kod', 'problem', 'säkerhetsrisk', 'risk', 'beskrivning',
+        'steg', 'steg-för-steg', 'åtgärd', 'åtgärdsplan', 'lösning', 'kodexempel',
+        'exempel', 'acceptans', 'acceptanskriterier', 'verifiering', 'test',
+        'före', 'efter'
+    )
+
+    # Identifiera huvudsektioner (### rubriker som inte är subsektioner)
+    raw_sections = [s.strip() for s in re.split(r'\n(?=#{2,4}\s+)', text) if s.strip()]
+    merged_sections = []
+    for sec in raw_sections:
+        lines = sec.splitlines()
+        if not lines:
+            continue
+        header = lines[0].lstrip('#').strip().lower()
+        if merged_sections and any(header.startswith(sub) for sub in SUB_SECTIONS):
+            # Detta är en underrubrik till föregående sektion – slå ihop!
+            merged_sections[-1] += "\n\n" + sec
+        else:
+            merged_sections.append(sec)
+
+    # Om en sektion innehåller flera numrerade fyndpunkter (1. [SEC] ...):
     refined = []
-    for sec in sections:
-        numbered = [n.strip() for n in re.split(r'\n(?=\s*(?:\d+[\.\)]|[-*]\s+\*\*)\s*)', sec) if n.strip()]
+    for sec in merged_sections:
+        numbered = [n.strip() for n in re.split(r'\n(?=\s*(?:\d+[\.\)]|[-*]\s+\*\*)\s*(?:\[|SEC|PONYTAIL))', sec) if n.strip()]
         if len(numbered) > 1:
             refined.extend(numbered)
         else:
@@ -314,16 +348,14 @@ def extract_findings_from_text(text):
         if not lines:
             continue
         raw_title = lines[0].lstrip('#').strip()
-        # Tvätta titeln från inledande siffror, bindestreck och fetstilsmarkörer: "1. **Titel (fil.py):**" -> "Titel (fil.py)"
         cleaned_title = re.sub(r'^(?:\d+[\.\)]|[-*])\s*', '', raw_title).strip('* :')
         low = cleaned_title.lower()
 
-        # Filtrera bort generella rubriker som inte är fynd
         if any(low.startswith(skip) for skip in (
             'sammanfattning', 'översikt', 'slutsats', 'rekommendation',
             'metod', 'identifierade risker', 'identifierade sårbarheter', 'resultat',
             'skisser', 'plan'
-        )):
+        ) + SUB_SECTIONS):
             continue
 
         is_ponytail = bool(re.search(r'(\[ponytail|delete:|stdlib:|native:|reuse:|yagni:|shrink:|överarbet|förenkl|död kod|komplexitet|refactor)', low))
