@@ -210,9 +210,12 @@ def _update_job_status(job_id, status=None, last_run=None, next_run=None):
 
 def _get_active_code_model():
     """Hämtar vald Codex-modell eller första tillgängliga Ollama-modell."""
-    m = setting_str("code_model") or prefs_all().get("code_model")
-    if m:
-        return m
+    try:
+        m = (prefs_all().get("code_model") or "").strip()
+        if m:
+            return m
+    except Exception:
+        pass
     base = backends.PRIMARY["url"]
     try:
         req = urllib.request.Request(base.rstrip("/") + "/api/tags")

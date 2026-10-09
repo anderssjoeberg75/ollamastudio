@@ -109,6 +109,23 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(sec, 0)
         self.assertEqual(pny, 0)
 
+    @patch("studio.scheduler.prefs_all")
+    def test_get_active_code_model(self, mock_prefs):
+        from studio.scheduler import _get_active_code_model
+        mock_prefs.return_value = {"code_model": "qwen2.5-coder:14b"}
+        model = _get_active_code_model()
+        self.assertEqual(model, "qwen2.5-coder:14b")
+
+        mock_prefs.return_value = {}
+        with patch("urllib.request.urlopen") as mock_url:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"models": [{"name": "fallback:latest"}]}'
+            mock_resp.__enter__.return_value = mock_resp
+            mock_url.return_value = mock_resp
+            model = _get_active_code_model()
+            self.assertEqual(model, "fallback:latest")
+
 
 if __name__ == "__main__":
     unittest.main()
+
