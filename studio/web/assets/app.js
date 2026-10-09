@@ -3302,6 +3302,8 @@ async function unloadGpu(index, btn){
     toast('Kunde inte ladda ur: '+e.message, true);
     btn.disabled = false; btn.textContent = old;
   }
+}
+
 /* ---- Schemalagda granskningar (GitLab) ---- */
 let schPollTimer = null;
 
