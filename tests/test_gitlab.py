@@ -110,6 +110,18 @@ class TestGitLabIntegration(unittest.TestCase):
             self.assertEqual(info["host"], "github.com")
             self.assertEqual(info["slug"], "user/myproject")
 
+    def test_gitlab_create_issue_mock(self):
+        import unittest.mock
+        from studio.codex.gitlab import gitlab_create_issue
+        with unittest.mock.patch("studio.codex.gitlab.git_remote_info", return_value={"slug": "user/myproject"}):
+            with unittest.mock.patch("urllib.request.urlopen") as mock_open:
+                mock_resp = unittest.mock.MagicMock()
+                mock_resp.read.return_value = json.dumps({"web_url": "http://gitlab.andrix.se/user/myproject/-/issues/1"}).encode("utf-8")
+                mock_open.return_value.__enter__.return_value = mock_resp
+                ok, url = gitlab_create_issue("Test Issue", "Beskrivning", labels="security,P1")
+                self.assertTrue(ok)
+                self.assertIn("/issues/1", url)
+
 
 if __name__ == "__main__":
     unittest.main()

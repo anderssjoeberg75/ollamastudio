@@ -237,3 +237,52 @@ def gitlab_create_mr(title, body, target_branch=None, source_branch=None):
         return False, "GitLab HTTP %d: %s" % (e.code, msg or "kunde inte skapa Merge Request")
     except Exception as e:
         return False, str(e)
+
+
+def gitlab_create_issue(title, description="", labels=None):
+    """Skapa ett Work Item / Issue via GitLab REST API v4. Returnerar (ok, url_eller_fel)."""
+    token = setting_str("gitlab_token")
+    if not token:
+        return False, "Ingen GitLab-token angiven (⚙ Inställningar)"
+
+    info = git_remote_info()
+    if not info or not info.get("slug"):
+        return False, "Hittar inte GitLab-repo (origin måste peka på ett git-repo)"
+
+    slug = info["slug"]
+    encoded_project = urllib.parse.quote(slug, safe="")
+
+    payload_dict = {
+        "title": title or "Säkerhetsfynd",
+        "description": description or ""
+    }
+    if labels:
+        payload_dict["labels"] = labels if isinstance(labels, str) else ",".join(labels)
+
+    payload = json.dumps(payload_dict).encode("utf-8")
+    api = gitlab_api_url()
+    url = "%s/projects/%s/issues" % (api, encoded_project)
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "PRIVATE-TOKEN": token,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "OllamaStudio"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return True, data.get("web_url", "Issue skapad")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("message", "")
+        except Exception:
+            msg = ""
+        return False, "GitLab HTTP %d: %s" % (e.code, msg or "kunde inte skapa issue")
+    except Exception as e:
+        return False, str(e)
+

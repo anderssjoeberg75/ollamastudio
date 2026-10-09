@@ -13,6 +13,7 @@ from .analyze import analyze, find_symbol, project_brief
 from .context import cap_tool_result
 from .gitops import (git_commit_all, git_create_branch, git_diff_text,
                      git_status_info)
+from .gitlab import gitlab_create_issue
 from .workspace import (CODE_READ_LINES, ws_current, ws_diff, ws_edit_file,
                         ws_list_dir, ws_read_file, ws_resolve, ws_search,
                         ws_tree, ws_write_file)
@@ -48,6 +49,7 @@ AGENT_TOOLS_TEXT = (
     "  TOOL git_diff {\"path\": \"fil.py\"}\n"
     "  TOOL git_branch {\"name\": \"min-gren\"}\n"
     "  TOOL git_commit {\"message\": \"Vad ändringen gör\"}\n"
+    "  TOOL create_issue {\"title\": \"Rubrik\", \"description\": \"Beskrivning\", \"labels\": \"security,P1\"}\n"
     "  TOOL todo {\"items\": [\"Läs koden\", \"Ändra X\", \"Kör testerna\"]}\n"
 )
 
@@ -116,7 +118,7 @@ _EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)'
 AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "find_symbol",
                     "edit_file", "write_file",
                     "run_command", "git_status", "git_diff", "git_branch", "git_commit",
-                    "todo"}
+                    "create_issue", "todo"}
 
 
 def _json_object_at(text, i):
@@ -366,7 +368,7 @@ def agent_tool_exec(name, args, ctx=None):
                     {"summary": "%d/%d klara" % (done, len(items)), "todo": items})
 
         # ---- Skrivande verktyg: kräver en körning (och oftast ett godkännande) ----
-        if name in ("write_file", "edit_file", "run_command", "git_branch", "git_commit"):
+        if name in ("write_file", "edit_file", "run_command", "git_branch", "git_commit", "create_issue"):
             if ctx is None:
                 return ("FEL: %s kan bara användas i en Codex-körning." % name,
                         {"summary": "ingen körning"})
@@ -466,6 +468,18 @@ def agent_tool_exec(name, args, ctx=None):
                 return _denied("att committa"), {"summary": "nekat", "denied": True}
             ok, msg = git_commit_all(message)
             return (("OK: " if ok else "FEL: ") + msg, {"summary": msg[:60], "ok": ok})
+
+        if name == "create_issue":
+            title = (args.get("title") or args.get("titel") or "").strip()
+            desc = (args.get("description") or args.get("desc") or args.get("beskrivning") or "").strip()
+            labels = args.get("labels") or args.get("etiketter") or "security"
+            if not title:
+                return "FEL: title saknas", {"summary": "fel: title saknas"}
+            if not ctx.ask("git", "issue:" + title, "Skapa GitLab Issue: " + title, desc):
+                return _denied("att skapa issue"), {"summary": "nekat", "denied": True}
+            ok, res = gitlab_create_issue(title, desc, labels=labels)
+            return (("OK: Skapade issue %s" if ok else "FEL: %s") % res,
+                    {"summary": (("✓ Issue: " if ok else "✕ ") + title)[:60], "url": res if ok else "", "ok": ok})
 
         return ("Okänt verktyg: %s. Tillgängliga: %s"
                 % (name, ", ".join(sorted(AGENT_TOOL_NAMES))), {"summary": "okänt verktyg"})

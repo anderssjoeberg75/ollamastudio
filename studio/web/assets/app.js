@@ -2446,7 +2446,8 @@ function runSecurityAudit(){
   inp.value = 'Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n'
     + '1. Läs .agents/skills/security-audit/SKILL.md och kartlägg attackytor med tree och search.\n'
     + '2. Granska autentisering, sessioner, databasfrågor (SQL injection), input-sanitering och tokens.\n'
-    + '3. Skriv en sammanfattande rapport med alla bekräftade sårbarheter och åtgärdsförslag.';
+    + '3. För VARJE bekräftad sårbarhet/risk du hittar: anropa direkt TOOL create_issue {"title": "[SEC] ...", "description": "Beskrivning, risk och åtgärd", "labels": "security,P1"} så att den skapas som ett Work Item i GitLab!\n'
+    + '4. Skriv en sammanfattande slutrapport när du är klar.';
   sendAgent();
 }
 
