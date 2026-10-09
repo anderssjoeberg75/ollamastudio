@@ -3302,6 +3302,207 @@ async function unloadGpu(index, btn){
     toast('Kunde inte ladda ur: '+e.message, true);
     btn.disabled = false; btn.textContent = old;
   }
+/* ---- Schemalagda granskningar (GitLab) ---- */
+let schPollTimer = null;
+
+function escSch(s){
+  return (s || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function openScheduleModal(){
+  const ov = document.getElementById('scheduleOverlay');
+  if(ov) ov.style.display = 'flex';
+  populateScheduleProjects();
+  loadScheduleJobs();
+}
+
+function closeScheduleModal(){
+  const ov = document.getElementById('scheduleOverlay');
+  if(ov) ov.style.display = 'none';
+  if(schPollTimer){
+    clearInterval(schPollTimer);
+    schPollTimer = null;
+  }
+}
+
+async function populateScheduleProjects(){
+  const sel = document.getElementById('schProjectSelect');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">Laddar projekt från GitLab…</option>';
+  try{
+    const r = await api('/api/gitlab/repos');
+    const d = await r.json();
+    const repos = d.repos || [];
+    if(!repos.length){
+      sel.innerHTML = '<option value="">Inga GitLab-projekt hittades (kontrollera GitLab-token under ⚙ Inställningar)</option>';
+      return;
+    }
+    let html = '<option value="">-- Välj GitLab-projekt --</option>';
+    for(const repo of repos){
+      const slug = repo.slug || repo.name;
+      html += `<option value="${escSch(slug)}">${escSch(slug)}</option>`;
+    }
+    sel.innerHTML = html;
+  }catch(e){
+    sel.innerHTML = '<option value="">Kunde inte hämta GitLab-projekt: ' + escSch(e.message) + '</option>';
+  }
+}
+
+async function loadScheduleJobs(){
+  const container = document.getElementById('schJobsList');
+  if(!container) return;
+  try{
+    const r = await api('/api/schedule/jobs');
+    const d = await r.json();
+    const jobs = d.jobs || [];
+    if(!jobs.length){
+      container.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:12px;text-align:center;background:var(--bg);border-radius:8px">Inga schemalagda granskningar ännu. Välj ett projekt ovan och spara för att schemalägga.</div>';
+      return;
+    }
+    let hasRunning = false;
+    let html = '';
+    for(const job of jobs){
+      if(job.running || (job.last_status && job.last_status.includes('Körs nu'))) {
+        hasRunning = true;
+      }
+      const secBadge = job.run_security ? '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px">🛡 Säkerhet</span>' : '';
+      const pnyBadge = job.run_ponytail ? '<span style="background:var(--card);border:1px solid var(--green);color:var(--green);padding:2px 6px;border-radius:4px;font-size:11px">✂ Ponytail</span>' : '';
+      const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
+      const statusIcon = job.running ? '⏳ ' : '';
+      
+      const nextRunStr = job.next_run ? new Date(job.next_run * 1000).toLocaleString('sv-SE', {dateStyle:'short', timeStyle:'short'}) : '-';
+      const lastRunStr = job.last_run ? new Date(job.last_run * 1000).toLocaleString('sv-SE', {dateStyle:'short', timeStyle:'short'}) : 'Aldrig';
+
+      html += `
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-weight:600;font-size:14px;color:var(--text)">🦊 ${escSch(job.project)}</span>
+              ${secBadge} ${pnyBadge}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Kör granskningen direkt">
+                ${job.running ? '⏳ Körs nu…' : '▶ Kör nu'}
+              </button>
+              <button class="btn ghost small" onclick="toggleScheduleJob('${escSch(job.id)}', ${!job.enabled})" title="${job.enabled ? 'Pausa schemat' : 'Aktivera schemat'}">
+                ${job.enabled ? '⏸ Pausa' : '▶ Aktivera'}
+              </button>
+              <button class="btn ghost small" onclick="deleteScheduleJob('${escSch(job.id)}')" title="Ta bort detta schema" style="color:var(--danger)">
+                🗑
+              </button>
+            </div>
+          </div>
+          <div style="display:flex;gap:14px;font-size:12px;color:var(--faint);flex-wrap:wrap">
+            <span>⏱ Intervall: <b>var ${job.interval_hours}e timme</b></span>
+            <span>📅 Nästa körning: <b>${nextRunStr}</b></span>
+            <span>🕒 Senast körd: <b>${lastRunStr}</b></span>
+            <span>Status: <b style="color:${job.enabled ? 'var(--green)' : 'var(--faint)'}">${job.enabled ? 'Aktiv' : 'Pausad'}</b></span>
+          </div>
+          ${job.last_status ? `
+            <div style="font-size:12px;color:${statusColor};background:var(--card);padding:6px 10px;border-radius:6px;border:1px solid var(--border);word-break:break-word">
+              ${statusIcon}${escSch(job.last_status)}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+    container.innerHTML = html;
+
+    if(hasRunning && !schPollTimer){
+      schPollTimer = setInterval(loadScheduleJobs, 3000);
+    } else if(!hasRunning && schPollTimer){
+      clearInterval(schPollTimer);
+      schPollTimer = null;
+    }
+  }catch(e){
+    container.innerHTML = '<div style="color:var(--danger);font-size:13px">Kunde inte ladda scheman: ' + escSch(e.message) + '</div>';
+  }
+}
+
+async function addScheduleJob(){
+  const sel = document.getElementById('schProjectSelect');
+  const project = (sel ? sel.value : '').trim();
+  if(!project){
+    toast('Välj ett GitLab-projekt först', true);
+    return;
+  }
+  const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
+  const runSecurity = document.getElementById('schRunSecurity').checked;
+  const runPonytail = document.getElementById('schRunPonytail').checked;
+
+  if(!runSecurity && !runPonytail){
+    toast('Du måste välja minst en granskning (säkerhet eller ponytail)', true);
+    return;
+  }
+
+  try{
+    const r = await api('/api/schedule/jobs', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({
+        project: project,
+        interval_hours: interval,
+        run_security: runSecurity,
+        run_ponytail: runPonytail,
+        enabled: true
+      })
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte spara schema');
+    toast('Schema sparat för ' + project);
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte spara schema: ' + e.message, true);
+  }
+}
+
+async function runScheduleJobNow(id){
+  try{
+    const r = await api('/api/schedule/run', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({id})
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte starta jobb');
+    toast('Granskning startad i bakgrunden');
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte starta granskning: ' + e.message, true);
+  }
+}
+
+async function toggleScheduleJob(id, enabled){
+  try{
+    const r = await api('/api/schedule/jobs', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({id, enabled})
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte uppdatera');
+    toast(enabled ? 'Schema aktiverat' : 'Schema pausat');
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte uppdatera: ' + e.message, true);
+  }
+}
+
+async function deleteScheduleJob(id){
+  if(!confirm('Vill du ta bort detta schema?')) return;
+  try{
+    const r = await api('/api/schedule/delete', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({id})
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte ta bort');
+    toast('Schema borttaget');
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte ta bort schema: ' + e.message, true);
+  }
 }
 
 loadConfig();

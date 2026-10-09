@@ -61,6 +61,9 @@ from studio.selfupdate import _restart_process, self_update
 from studio.sysinfo import gather_system
 from studio.training import TRAIN, train_job_current, train_status
 from studio.websearch import now_context
+from studio.scheduler import (
+    schedule_delete, schedule_get, schedule_list, schedule_run_job_async,
+    schedule_save, start_scheduler)
 
 
 class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
@@ -237,6 +240,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     return self._send_json(self._running_union())
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 502)
+            if path == "/api/schedule/jobs":
+                return self._send_json({"jobs": schedule_list()})
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:
@@ -306,6 +311,27 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"ok": True})
             except Exception as e:
                 return self._send_json({"ok": False, "error": str(e)}, 500)
+
+        if path == "/api/schedule/jobs":
+            saved = schedule_save(data if isinstance(data, dict) else {})
+            return self._send_json({"ok": True, "job": saved})
+
+        if path == "/api/schedule/delete":
+            jid = (data.get("id") or "").strip()
+            if not jid:
+                return self._send_json({"error": "id saknas"}, 400)
+            schedule_delete(jid)
+            return self._send_json({"ok": True})
+
+        if path == "/api/schedule/run":
+            jid = (data.get("id") or "").strip()
+            if not jid:
+                return self._send_json({"error": "id saknas"}, 400)
+            job = schedule_get(jid)
+            if not job:
+                return self._send_json({"error": "jobbet hittades inte"}, 404)
+            schedule_run_job_async(jid)
+            return self._send_json({"ok": True, "message": "Granskning startad i bakgrunden"})
 
         if path == "/api/self-update":
             # Hämta senaste kod (git pull) och starta om servern om något nytt hämtades.
@@ -634,6 +660,7 @@ def main():
         print(" TIPS: sätt OLLAMA_STUDIO_TOKEN=<hemligt> om du vill kräva lösenord.")
     print(" Avsluta med Ctrl+C.")
     print("=" * 60)
+    start_scheduler()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -239,17 +239,19 @@ def gitlab_create_mr(title, body, target_branch=None, source_branch=None):
         return False, str(e)
 
 
-def gitlab_create_issue(title, description="", labels=None):
+def gitlab_create_issue(title, description="", labels=None, project_slug=None):
     """Skapa ett Work Item / Issue via GitLab REST API v4. Returnerar (ok, url_eller_fel)."""
     token = setting_str("gitlab_token")
     if not token:
         return False, "Ingen GitLab-token angiven (⚙ Inställningar)"
 
-    info = git_remote_info()
-    if not info or not info.get("slug"):
-        return False, "Hittar inte GitLab-repo (origin måste peka på ett git-repo)"
+    slug = (project_slug or "").strip()
+    if not slug:
+        info = git_remote_info()
+        if not info or not info.get("slug"):
+            return False, "Hittar inte GitLab-repo (origin måste peka på ett git-repo)"
+        slug = info["slug"]
 
-    slug = info["slug"]
     encoded_project = urllib.parse.quote(slug, safe="")
 
     payload_dict = {
