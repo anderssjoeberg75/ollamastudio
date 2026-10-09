@@ -1,0 +1,6 @@
+<!--
+name: "Data: Turn handoff available event schema"
+description: "Schema description for the turn_handoff_available system event a cloud worker emits right after registering, carrying the tools and turn-handoff options its registration declared, and the rule that readers keep only the entry from the newest worker life"
+ccVersion: "2.1.288"
+-->
+@internal Emitted once by a cloud worker that accepts the turn_handoff control request, right after it registers, carrying what its registration wrote to external_metadata.turn_handoff: the version, the tools whose calls it would accept, the worker life (worker_epoch) announcing it, whether handed-off calls wait for files still being staged (staged_files), whether user messages that make no model call are appended before a handed-off turn (no_query_first), and relay_marker, home_files, file_names and carried_writes when set. Lets a session client learn the capability from the event stream instead of reading worker state. Durable in the stream: a reader keeps the entry with the newest worker_epoch it has seen and ignores older ones; a worker life that does not accept turn_handoff emits nothing (its registration writes turn_handoff: null).

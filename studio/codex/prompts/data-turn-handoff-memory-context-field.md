@@ -1,0 +1,6 @@
+<!--
+name: "Data: Turn handoff memory_context field"
+description: "Schema description for the turn_handoff memory_context member carrying the claude.ai memory snapshot the client showed its model, how the worker writes it as a cowork_memory_context attachment line ahead of the handed-over messages, and when a malformed or uuid-colliding member is ignored"
+ccVersion: "2.1.292"
+-->
+@internal The snapshot of the user's claude.ai memory that the client showed its model with the turn's user message. Used on a request that names calls to run, or on a history request (no calls named, not stopped) if the session holds none of its messages yet: the worker writes it ahead of the first of messages, with uuid as the line's uuid, as a cowork_memory_context attachment line like those it writes for snapshots it fetches itself, and then adds no copy of that version. version and content are both strings for a snapshot, both null to withdraw an earlier one. The member is never a reason to refuse the request: one that is malformed, that has a version without content or the reverse, or whose uuid is also that of one of messages, of relay_marker or of a line the session's transcript holds, is ignored, and the turn goes on without the line.

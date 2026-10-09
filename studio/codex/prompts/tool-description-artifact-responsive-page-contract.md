@@ -1,0 +1,6 @@
+<!--
+name: "Tool Description: Artifact responsive page contract"
+description: "Requires Artifact pages to fit phone widths with preserved side gutters, wrapping layouts, bounded media, and horizontal scrolling confined to oversized tables, diagrams, and code blocks"
+ccVersion: "2.1.284"
+-->
+**Responsive**: The page must also work at phone width (about 400px), and the page body must never scroll horizontally. Keep a side gutter of at least 16px at every width: set it once as side padding on `body` or one outer wrapper, and give that element its vertical padding with `padding-block`, never a `padding` shorthand that zeroes the sides. Use relative units. Let flex and grid rows wrap or stack to one column when narrow, and give any flex or grid child that holds running text, code or a table `min-width: 0`, so long content wraps or scrolls inside it instead of pushing the page wider. Put `max-width: 100%` on images and on any `aspect-ratio` box, and give nothing a `min-width` wider than the screen. Only tables, diagrams and code blocks may be wider, each inside its own `overflow-x: auto` container.

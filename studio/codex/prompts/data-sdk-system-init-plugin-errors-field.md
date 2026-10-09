@@ -1,0 +1,6 @@
+<!--
+name: "Data: SDK system init plugin_errors field"
+description: "Schema description for the plugin_errors array on the SDK system/init message, covering failed versus partially loaded plugins, name@marketplace and positional inline/synced tags, open-set error types, omission when clean, and Remote Control workers always omitting it"
+ccVersion: "2.1.283"
+-->
+Plugin load-time errors. A plugin that did not load (an unmet dependency, a --plugin-dir entry that failed) is absent from `plugins[]`; a plugin that loaded without one of its components keeps its row and gets an entry here too. `plugin` is `name@marketplace`, or the positional `inline[N]` / `synced[N]` tag for a directory entry that failed before it had a name; `type` is a category from an open set (path-not-found, generic-error, manifest-validation-error, dependency-unsatisfied, hook-load-failed, …) — treat a value you do not recognize as a generic failure; `message` is display text. The key is omitted when there are no errors; CI can fail on `(plugin_errors?.length ?? 0) > 0`. A session whose frames are persisted server-side (a Remote Control worker) always omits this key — plugin diagnostics stay in the local log there, so an omitted key does not assert a clean load.

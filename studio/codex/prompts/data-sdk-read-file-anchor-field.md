@@ -1,0 +1,6 @@
+<!--
+name: "Data: SDK read_file anchor field"
+description: "Schema description for the read_file request's anchor field, which resolves a relative path against workspace_root, diff_root or a declared repo checkout instead of the live cwd, with the refusal rules"
+ccVersion: "2.1.292"
+-->
+@internal Resolve `path` against a directory the session looks up on each request, instead of the live cwd, which a `cd` in the shell moves. workspace_root is the root list_directory lists from. diff_root is the repository get_workspace_diff diffs, so a path taken from that diff opens the file the diff shows. It is refused in a session whose diff follows the shell's cwd between several repositories; a client that knows the repository should send `repo`. repo is the checkout the session declares for that repository or, failing that, diff_root when its origin remote ends in that owner/name. `path` must stay inside that directory as written (the check follows no symlink), and the read is gated as any other read_file is. A path that is `~`, starts with `~/` or leaves that directory, or an anchor the session cannot resolve, is refused with the error `read denied: <path>`. Leave the field out when there is no anchor: null is refused. A CLI that predates this field ignores it and reads against the live cwd; the response's `anchor` tells the two apart.
