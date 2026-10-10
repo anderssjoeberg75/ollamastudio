@@ -438,24 +438,39 @@
     display:inline-flex;
     align-items:center;
     justify-content:center;
+    gap:4px;
     font-size:11px;
     font-family:inherit;
-    line-height:22px;
-    border-radius:5px;
-    padding:0 8px;
+    line-height:1;
+    border-radius:6px;
+    padding:0 7px;
+    white-space:nowrap;
     vertical-align:middle;
   }
   .sch-badge-btn{
     outline:none;
     cursor:pointer;
-    transition:transform .15s,filter .15s,opacity .15s;
+    user-select:none;
+    transition:background-color .15s,border-color .15s,filter .15s,opacity .15s;
   }
-  .sch-badge-btn:hover{transform:scale(1.05);filter:brightness(1.2)}
-  .sch-badge-btn:active{transform:scale(0.97)}
+  .sch-badge-btn:hover{filter:brightness(1.2)}
+  .sch-badge-btn:active{filter:brightness(0.9)}
   .sch-mode-select{
     cursor:pointer;
-    padding-left:8px;
+    padding-left:7px;
     padding-right:18px;
-    transition:transform .15s,filter .15s;
+    transition:border-color .15s,filter .15s;
   }
-  .sch-mode-select:hover{transform:scale(1.03);filter:brightness(1.2)}
+  .sch-mode-select:hover{filter:brightness(1.2)}
+  .sch-prod-badge{
+    max-width:140px;
+    cursor:pointer;
+    user-select:none;
+    transition:border-color .15s,color .15s,filter .15s;
+  }
+  .sch-prod-badge:hover{border-color:var(--accent);color:var(--text);filter:brightness(1.15)}
+  .sch-prod-badge .sch-prod-text{
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
