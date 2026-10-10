@@ -3514,22 +3514,22 @@ async function loadScheduleJobs(){
       // Säkerhet toggle-knapp
       const secOn = !!job.run_security;
       const secStyle = secOn
-        ? 'background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600'
-        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;text-decoration:line-through;opacity:0.45';
+        ? 'background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
       const secBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_security', ${!secOn})" title="${secOn ? 'Säkerhetsgranskning är aktiv – klicka för att inaktivera' : 'Säkerhetsgranskning är inaktiv – klicka för att aktivera'}" style="${secStyle}">🛡 Säkerhet</button>`;
 
       // Pentest toggle-knapp
       const penOn = job.run_pentest !== undefined ? !!job.run_pentest : true;
       const penStyle = penOn
-        ? 'background:var(--card);border:1px solid var(--amber);color:var(--amber);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600'
-        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;text-decoration:line-through;opacity:0.45';
+        ? 'background:var(--card);border:1px solid var(--amber);color:var(--amber);font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
       const penBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_pentest', ${!penOn})" title="${penOn ? 'Penetrationstest är aktivt – klicka för att inaktivera' : 'Penetrationstest är inaktivt – klicka för att aktivera'}" style="${penStyle}">🎯 Pentest</button>`;
 
       // Ponytail toggle-knapp
       const pnyOn = !!job.run_ponytail;
       const pnyStyle = pnyOn
-        ? 'background:var(--card);border:1px solid var(--green);color:var(--green);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600'
-        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;text-decoration:line-through;opacity:0.45';
+        ? 'background:var(--card);border:1px solid var(--green);color:var(--green);font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
       const pnyBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_ponytail', ${!pnyOn})" title="${pnyOn ? 'Ponytail-granskning är aktiv – klicka för att inaktivera' : 'Ponytail-granskning är inaktiv – klicka för att aktivera'}" style="${pnyStyle}">✂ Ponytail</button>`;
 
       // Säkerhetsläge / Testläge väljare
@@ -3546,16 +3546,16 @@ async function loadScheduleJobs(){
         <span style="position:relative;display:inline-flex;align-items:center">
           <select class="sch-mode-select" onchange="updateScheduleSecMode('${escSch(job.id)}', this.value)"
                   title="Testläge: klicka för att välja säkerhetsnivå"
-                  style="background:var(--card);border:1px solid ${modeBorder};color:${modeColor};padding:2px 18px 2px 7px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;line-height:1.2">
+                  style="background:var(--card);border:1px solid ${modeBorder};color:${modeColor};font-weight:600;outline:none;appearance:none;-webkit-appearance:none">
             <option value="safe" ${job.sec_mode !== 'full' && job.sec_mode !== 'passive' ? 'selected' : ''}>🛡️ Safe-läge</option>
             <option value="full" ${job.sec_mode === 'full' ? 'selected' : ''}>⚠️ Full pentest</option>
             <option value="passive" ${job.sec_mode === 'passive' ? 'selected' : ''}>🔍 Passiv analys</option>
           </select>
-          <span style="position:absolute;right:5px;pointer-events:none;font-size:9px;color:${modeColor}">▾</span>
+          <span style="position:absolute;right:6px;pointer-events:none;font-size:9px;color:${modeColor}">▾</span>
         </span>
       `;
 
-      const prodBadge = job.prod_server ? `<span style="background:var(--card);border:1px solid var(--border);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Produktionsserver för projektet">🌐 ${escSch(job.prod_server)}</span>` : '';
+      const prodBadge = job.prod_server ? `<span class="sch-prod-badge" style="background:var(--card);border:1px solid var(--border);color:var(--subtle)" title="Produktionsserver för projektet">🌐 ${escSch(job.prod_server)}</span>` : '';
       const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
       const statusIcon = job.running ? '⏳ ' : '';
       

@@ -431,9 +431,31 @@
   .modal .row{display:flex;justify-content:flex-end;gap:10px}
   @media(max-width:640px){ .sidebar{width:64px;min-width:64px} .nav a span.label{display:none} .logo .txt{display:none} }
 
-  /* Interaktiva knappar och lägesväljare i schemalistan */
-  .sch-badge-btn{font-family:inherit;outline:none;line-height:1.2;transition:transform .15s,filter .15s,opacity .15s}
+  /* Interaktiva knappar och lägesväljare i schemalistan – enhetlig höjd och anpassning */
+  .sch-badge-btn, .sch-mode-select, .sch-prod-badge{
+    height:24px;
+    box-sizing:border-box;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    font-size:11px;
+    font-family:inherit;
+    line-height:22px;
+    border-radius:5px;
+    padding:0 8px;
+    vertical-align:middle;
+  }
+  .sch-badge-btn{
+    outline:none;
+    cursor:pointer;
+    transition:transform .15s,filter .15s,opacity .15s;
+  }
   .sch-badge-btn:hover{transform:scale(1.05);filter:brightness(1.2)}
   .sch-badge-btn:active{transform:scale(0.97)}
-  .sch-mode-select{font-family:inherit;transition:transform .15s,filter .15s}
+  .sch-mode-select{
+    cursor:pointer;
+    padding-left:8px;
+    padding-right:18px;
+    transition:transform .15s,filter .15s;
+  }
   .sch-mode-select:hover{transform:scale(1.03);filter:brightness(1.2)}
