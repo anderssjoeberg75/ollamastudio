@@ -3493,6 +3493,9 @@ async function loadScheduleJobs(){
   if(document.querySelector('[id^="schEditDt_"]')){
     return; // Användaren redigerar en tid just nu – undvik att skriva över inputfältet
   }
+  if(document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('sch-mode-select')){
+    return; // Användaren har lägesmenyn öppen
+  }
   try{
     const r = await api('/api/schedule/jobs');
     const d = await r.json();
@@ -3508,17 +3511,50 @@ async function loadScheduleJobs(){
       if(job.running || (job.last_status && job.last_status.includes('Körs nu'))) {
         hasRunning = true;
       }
-      const secBadge = job.run_security ? '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px">🛡 Säkerhet</span>' : '';
-      const penBadge = job.run_pentest ? '<span style="background:var(--card);border:1px solid var(--amber);color:var(--amber);padding:2px 6px;border-radius:4px;font-size:11px">🎯 Pentest</span>' : '';
-      const pnyBadge = job.run_ponytail ? '<span style="background:var(--card);border:1px solid var(--green);color:var(--green);padding:2px 6px;border-radius:4px;font-size:11px">✂ Ponytail</span>' : '';
-      let secModeBadge = '';
+      // Säkerhet toggle-knapp
+      const secOn = !!job.run_security;
+      const secStyle = secOn
+        ? 'background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;text-decoration:line-through;opacity:0.45';
+      const secBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_security', ${!secOn})" title="${secOn ? 'Säkerhetsgranskning är aktiv – klicka för att inaktivera' : 'Säkerhetsgranskning är inaktiv – klicka för att aktivera'}" style="${secStyle}">🛡 Säkerhet</button>`;
+
+      // Pentest toggle-knapp
+      const penOn = job.run_pentest !== undefined ? !!job.run_pentest : true;
+      const penStyle = penOn
+        ? 'background:var(--card);border:1px solid var(--amber);color:var(--amber);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;text-decoration:line-through;opacity:0.45';
+      const penBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_pentest', ${!penOn})" title="${penOn ? 'Penetrationstest är aktivt – klicka för att inaktivera' : 'Penetrationstest är inaktivt – klicka för att aktivera'}" style="${penStyle}">🎯 Pentest</button>`;
+
+      // Ponytail toggle-knapp
+      const pnyOn = !!job.run_ponytail;
+      const pnyStyle = pnyOn
+        ? 'background:var(--card);border:1px solid var(--green);color:var(--green);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:500;text-decoration:line-through;opacity:0.45';
+      const pnyBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_ponytail', ${!pnyOn})" title="${pnyOn ? 'Ponytail-granskning är aktiv – klicka för att inaktivera' : 'Ponytail-granskning är inaktiv – klicka för att aktivera'}" style="${pnyStyle}">✂ Ponytail</button>`;
+
+      // Säkerhetsläge / Testläge väljare
+      let modeBorder = 'var(--accent)';
+      let modeColor = 'var(--accent-hov)';
       if(job.sec_mode === 'full'){
-        secModeBadge = '<span style="background:var(--card);border:1px solid var(--danger);color:var(--danger);padding:2px 6px;border-radius:4px;font-size:11px" title="Full penetrationstestning">⚠️ Full pentest</span>';
+        modeBorder = 'var(--danger)';
+        modeColor = 'var(--danger)';
       } else if(job.sec_mode === 'passive'){
-        secModeBadge = '<span style="background:var(--card);border:1px solid var(--subtle);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Passiv analys (icke-intrusiv)">🔍 Passiv</span>';
-      } else {
-        secModeBadge = '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px" title="Safe-läge (icke-destruktivt)">🛡️ Safe-läge</span>';
+        modeBorder = 'var(--subtle)';
+        modeColor = 'var(--subtle)';
       }
+      const secModeBadge = `
+        <span style="position:relative;display:inline-flex;align-items:center">
+          <select class="sch-mode-select" onchange="updateScheduleSecMode('${escSch(job.id)}', this.value)"
+                  title="Testläge: klicka för att välja säkerhetsnivå"
+                  style="background:var(--card);border:1px solid ${modeBorder};color:${modeColor};padding:2px 18px 2px 7px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;outline:none;appearance:none;-webkit-appearance:none;line-height:1.2">
+            <option value="safe" ${job.sec_mode !== 'full' && job.sec_mode !== 'passive' ? 'selected' : ''}>🛡️ Safe-läge</option>
+            <option value="full" ${job.sec_mode === 'full' ? 'selected' : ''}>⚠️ Full pentest</option>
+            <option value="passive" ${job.sec_mode === 'passive' ? 'selected' : ''}>🔍 Passiv analys</option>
+          </select>
+          <span style="position:absolute;right:5px;pointer-events:none;font-size:9px;color:${modeColor}">▾</span>
+        </span>
+      `;
+
       const prodBadge = job.prod_server ? `<span style="background:var(--card);border:1px solid var(--border);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Produktionsserver för projektet">🌐 ${escSch(job.prod_server)}</span>` : '';
       const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
       const statusIcon = job.running ? '⏳ ' : '';
@@ -3728,6 +3764,64 @@ async function toggleScheduleJob(id, enabled){
     loadScheduleJobs();
   }catch(e){
     toast('Kunde inte uppdatera: ' + e.message, true);
+  }
+}
+
+async function toggleScheduleFeature(id, featureKey, newVal){
+  const jobs = window._lastScheduleJobs || [];
+  const job = jobs.find(j => j.id === id);
+  if(job && !newVal){
+    const willSec = featureKey === 'run_security' ? false : !!job.run_security;
+    const willPen = featureKey === 'run_pentest' ? false : (job.run_pentest !== undefined ? !!job.run_pentest : true);
+    const willPny = featureKey === 'run_ponytail' ? false : !!job.run_ponytail;
+    if(!willSec && !willPen && !willPny){
+      toast('Minst en granskning (säkerhet, pentest eller ponytail) måste vara aktiv', true);
+      return;
+    }
+  }
+
+  const payload = { id: id };
+  payload[featureKey] = !!newVal;
+
+  try{
+    const r = await api('/api/schedule/jobs', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte uppdatera');
+    const labelMap = {
+      run_security: 'Säkerhetsgranskning',
+      run_pentest: 'Penetrationstest',
+      run_ponytail: 'Ponytail-granskning'
+    };
+    const name = labelMap[featureKey] || featureKey;
+    toast(name + (newVal ? ' aktiverad' : ' inaktiverad'));
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte uppdatera: ' + e.message, true);
+  }
+}
+
+async function updateScheduleSecMode(id, newMode){
+  try{
+    const r = await api('/api/schedule/jobs', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({ id: id, sec_mode: newMode })
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte uppdatera');
+    const modeNames = {
+      safe: 'Safe-läge (icke-destruktivt)',
+      full: 'Full pentest (aktiv)',
+      passive: 'Passiv analys'
+    };
+    toast('Testläge ändrat till ' + (modeNames[newMode] || newMode));
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte ändra testläge: ' + e.message, true);
   }
 }
 

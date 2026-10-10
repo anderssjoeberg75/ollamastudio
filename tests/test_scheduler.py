@@ -109,6 +109,37 @@ class TestScheduler(unittest.TestCase):
         })
         self.assertEqual(saved2["sec_mode"], "full")
 
+    def test_partial_toggle_features_and_mode(self):
+        saved = schedule_save({
+            "project": "org/toggle-app",
+            "run_security": True,
+            "run_pentest": True,
+            "run_ponytail": True,
+            "sec_mode": "safe",
+        })
+        jid = saved["id"]
+
+        # Toggla enbart run_security till False
+        up1 = schedule_save({"id": jid, "run_security": False})
+        self.assertFalse(up1["run_security"])
+        self.assertTrue(up1["run_pentest"])
+        self.assertTrue(up1["run_ponytail"])
+        self.assertEqual(up1["sec_mode"], "safe")
+
+        # Toggla enbart sec_mode till full
+        up2 = schedule_save({"id": jid, "sec_mode": "full"})
+        self.assertFalse(up2["run_security"])
+        self.assertTrue(up2["run_pentest"])
+        self.assertTrue(up2["run_ponytail"])
+        self.assertEqual(up2["sec_mode"], "full")
+
+        # Toggla enbart run_security tillbaka till True och run_pentest till False
+        up3 = schedule_save({"id": jid, "run_security": True, "run_pentest": False})
+        self.assertTrue(up3["run_security"])
+        self.assertFalse(up3["run_pentest"])
+        self.assertTrue(up3["run_ponytail"])
+        self.assertEqual(up3["sec_mode"], "full")
+
     def test_delete_schedule(self):
         saved = schedule_save({
             "project": "org/repo-to-delete",
