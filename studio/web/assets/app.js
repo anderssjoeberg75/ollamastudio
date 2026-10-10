@@ -1680,6 +1680,7 @@ let mem0KeyIsSet = false;      // om en nyckel redan finns sparad
 let mem0KeyClear = false;      // användaren har valt att ta bort nyckeln
 let ghTokenIsSet = false, ghTokenClear = false;
 let hfTokenIsSet = false, hfTokenClear = false;
+let secTokenIsSet = false, secTokenClear = false;
 async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
@@ -1808,6 +1809,13 @@ async function loadSettingsForm(){
   const glState = document.getElementById('stGlTokenState');
   if(glState) glState.textContent = glTokenIsSet
     ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+  set('stSecTarget', s.sec_target_url || '');
+  set('stSecMode', s.sec_test_mode || 'safe');
+  secTokenIsSet = !!s.sec_target_token_set; secTokenClear = false;
+  const secEl = document.getElementById('stSecToken'); if(secEl) secEl.value='';
+  const secState = document.getElementById('stSecTokenState');
+  if(secState) secState.textContent = secTokenIsSet
+    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
   document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
 }
 function clearMem0Key(){
@@ -1829,6 +1837,11 @@ function clearGlToken(){
   glTokenClear = true; glTokenIsSet = false;
   const el = document.getElementById('stGlToken'); if(el) el.value='';
   document.getElementById('stGlTokenState').textContent = '✕ Token tas bort när du sparar';
+}
+function clearSecToken(){
+  secTokenClear = true; secTokenIsSet = false;
+  const el = document.getElementById('stSecToken'); if(el) el.value='';
+  document.getElementById('stSecTokenState').textContent = '✕ Token tas bort när du sparar';
 }
 function collectSettings(){
   const val = id => (document.getElementById(id).value||'').trim();
@@ -1861,7 +1874,9 @@ function collectSettings(){
     code_permission: val('stCodePerm'),
     code_max_steps: val('stCodeSteps'),
     code_ctx: val('stCodeCtx'),
-    code_temp: val('stCodeTemp')
+    code_temp: val('stCodeTemp'),
+    sec_target_url: val('stSecTarget'),
+    sec_test_mode: val('stSecMode')
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
@@ -1875,6 +1890,9 @@ function collectSettings(){
   const hft = val('stHfToken');
   if(hfTokenClear && !hft) body.hf_token = null;       // rensa
   else if(hft) body.hf_token = hft;                    // ny token (annars orörd)
+  const sec = val('stSecToken');
+  if(secTokenClear && !sec) body.sec_target_token = null; // rensa
+  else if(sec) body.sec_target_token = sec;               // ny token (annars orörd)
   return body;
 }
 async function saveSettings(){

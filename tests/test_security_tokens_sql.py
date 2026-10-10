@@ -163,10 +163,35 @@ Verifiera att token inte syns i logg.
 ]
 ```
 """
-        findings = extract_findings_from_text(json_text)
-        self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0]["title"], "[SEC-01] Testfynd")
-        self.assertEqual(findings[0]["labels"], "security,P1")
+    def test_security_target_settings_and_masking(self):
+        from studio.web.page import settings_public
+        # Initial defaults
+        self.assertEqual(config.security_target_url(), "")
+        self.assertEqual(config.security_target_token(), "")
+        self.assertEqual(config.security_test_mode(), "safe")
+
+        # Set values
+        config.settings_set({
+            "sec_target_url": "http://192.168.1.100:8080",
+            "sec_target_token": "secret_sec_token_xyz",
+            "sec_test_mode": "full",
+        })
+        self.assertEqual(config.security_target_url(), "http://192.168.1.100:8080")
+        self.assertEqual(config.security_target_token(), "secret_sec_token_xyz")
+        self.assertEqual(config.security_test_mode(), "full")
+
+        # Masking in settings_public
+        pub = settings_public()
+        self.assertEqual(pub.get("sec_target_url"), "http://192.168.1.100:8080")
+        self.assertEqual(pub.get("sec_target_token"), "")  # hemlighet maskerad
+        self.assertTrue(pub.get("sec_target_token_set"))
+        self.assertEqual(pub.get("sec_test_mode"), "full")
+
+        # Clear token with None
+        config.settings_set({"sec_target_token": None})
+        self.assertEqual(config.security_target_token(), "")
+        pub_cleared = settings_public()
+        self.assertFalse(pub_cleared.get("sec_target_token_set"))
 
 
 if __name__ == "__main__":

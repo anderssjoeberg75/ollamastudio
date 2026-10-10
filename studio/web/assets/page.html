@@ -700,6 +700,32 @@ dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected
           <div id="stCodeGit" class="hint" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"></div>
         </div>
 
+        <div class="set-card">
+          <h2>🛡️ Säkerhetstester &amp; Red Team <span class="hint">(målserver &amp; testmiljö)</span></h2>
+          <p class="hint">Konfigurera målserver (produktionsserver eller testinstans) för säkerhets- och penetrationstester.
+            Testerna körs kontrollerat mot både källkoden och den angivna servern enligt OpenClaw red-team-riktlinjerna.</p>
+          <div class="set-row">
+            <label>Målserver IP eller DNS-namn <span class="hint">(t.ex. <code>http://192.168.1.50:8080</code> eller <code>https://ollama.andrix.se</code>)</span></label>
+            <input id="stSecTarget" placeholder="http://192.168.1.50:8080 eller https://ollama.andrix.se">
+          </div>
+          <div class="set-row">
+            <label>Målserver-token <span class="hint">(valfri <code>X-Auth-Token</code> för behörighetskontroller)</span></label>
+            <input id="stSecToken" type="password" autocomplete="off" placeholder="klistra in token">
+            <div class="set-keyrow">
+              <span id="stSecTokenState" class="hint"></span>
+              <button class="btn ghost small" type="button" onclick="clearSecToken()">Ta bort sparad token</button>
+            </div>
+          </div>
+          <div class="set-row" style="max-width:320px">
+            <label>Säkerhetsnivå / Testläge</label>
+            <select id="stSecMode" style="background:var(--bg);border:1px solid var(--border);
+                    border-radius:8px;color:var(--text);padding:8px 10px;font-size:13px;width:100%">
+              <option value="safe">🛡️ Icke-destruktivt (safe / benign – rekommenderat för prod)</option>
+              <option value="full">⚠️ Full penetrationstestning</option>
+            </select>
+          </div>
+        </div>
+
         <div class="set-bar">
           <span id="stDbPath" class="hint"></span>
           <button class="btn accent" onclick="saveSettings()">Spara inställningar</button>

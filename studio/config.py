@@ -93,6 +93,10 @@ SETTINGS_SPEC = {
     "code_temp":        ("OLLAMA_STUDIO_CODE_TEMP", "0.2", "str", False),
     # AI-träningen ligger dold i menyn som standard – fokus är Codex.
     "train_menu":       ("OLLAMA_STUDIO_TRAIN_MENU", "0", "bool", False),
+    # Målserver (IP/DNS) och konfiguration för säkerhetstester (Red Team)
+    "sec_target_url":   ("OLLAMA_STUDIO_SEC_TARGET", "", "str", False),
+    "sec_target_token": ("OLLAMA_STUDIO_SEC_TOKEN", "", "str", True),
+    "sec_test_mode":    ("OLLAMA_STUDIO_SEC_MODE", "safe", "str", False),
 }
 
 _settings_lock = threading.Lock()
@@ -415,3 +419,20 @@ def code_options():
 def train_menu_on():
     """Ska AI-träningen synas i menyn? Dold som standard – appen fokuserar på Codex."""
     return setting_bool("train_menu")
+
+
+def security_target_url():
+    """Målserver (IP-adress eller DNS-namn) för säkerhets- och penetrationstester."""
+    return setting_str("sec_target_url")
+
+
+def security_target_token():
+    """Valfri token till målservern (t.ex. X-Auth-Token för behörighetstester)."""
+    return setting_str("sec_target_token")
+
+
+def security_test_mode():
+    """Testläge för säkerhetsgranskning: 'safe' (icke-destruktivt) eller 'full'."""
+    m = (setting_str("sec_test_mode") or "safe").lower()
+    return m if m in ("safe", "full") else "safe"
+
