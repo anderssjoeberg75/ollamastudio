@@ -49,9 +49,9 @@ from studio.config import (
     LISTEN_HOST, LISTEN_PORT, OLLAMA_URL, TOKEN, chat_time_enabled,
     code_enabled, code_max_steps, code_mode, code_toggle_on,
     code_workspace_root, db_init, hf_auto_enabled, hf_enabled, hf_token,
-    keep_alive_value, mem0_enabled, prefs_all, prefs_set, setting_bool,
-    setting_str, settings_set, train_menu_on, train_resolve, train_toggle_on,
-    websearch_enabled)
+    keep_alive_value, mem0_enabled, prefs_all, prefs_set, project_target_set,
+    project_targets_list, setting_bool, setting_str, settings_set, train_menu_on,
+    train_resolve, train_toggle_on, websearch_enabled)
 from studio.huggingface_bridge import HF, HF_SEARCH_LIMIT
 from studio.memory import (
     _mem0_call, _mem0_items, _mem0_scope, mem0_add, mem0_clear, mem0_context,
@@ -242,6 +242,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     return self._send_json({"error": str(e)}, 502)
             if path == "/api/schedule/jobs":
                 return self._send_json({"jobs": schedule_list()})
+            if path == "/api/gitlab/targets":
+                return self._send_json({"ok": True, "targets": project_targets_list()})
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:
@@ -317,6 +319,15 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         if path == "/api/schedule/jobs":
             saved = schedule_save(data if isinstance(data, dict) else {})
             return self._send_json({"ok": True, "job": saved})
+
+        if path == "/api/gitlab/targets":
+            proj = (data.get("project") or "").strip()
+            srv = (data.get("prod_server") or "").strip()
+            tok = data.get("prod_token")
+            if not proj:
+                return self._send_json({"error": "project saknas"}, 400)
+            project_target_set(proj, srv, tok)
+            return self._send_json({"ok": True, "targets": project_targets_list()})
 
         if path == "/api/schedule/delete":
             jid = (data.get("id") or "").strip()

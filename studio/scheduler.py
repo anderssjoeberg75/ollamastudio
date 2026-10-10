@@ -38,7 +38,7 @@ _scheduler_lock = threading.Lock()
 
 
 def scheduler_db_init():
-    """Initierar tabellen för schemalagda jobb om den saknas."""
+    """Initierar tabellen för schemalagda jobb om den saknas samt migrerar kolumner."""
     with _settings_lock:
         conn = sqlite3.connect(config.DB_PATH)
         try:
@@ -53,8 +53,17 @@ def scheduler_db_init():
                 "next_run REAL DEFAULT 0, "
                 "last_run REAL DEFAULT 0, "
                 "last_status TEXT DEFAULT '', "
-                "enabled INTEGER DEFAULT 1)"
+                "enabled INTEGER DEFAULT 1, "
+                "prod_server TEXT DEFAULT '', "
+                "prod_token TEXT DEFAULT '')"
             )
+            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token
+            cur = conn.execute("PRAGMA table_info(schedules)")
+            existing_cols = {row[1] for row in cur.fetchall()}
+            if "prod_server" not in existing_cols:
+                conn.execute("ALTER TABLE schedules ADD COLUMN prod_server TEXT DEFAULT ''")
+            if "prod_token" not in existing_cols:
+                conn.execute("ALTER TABLE schedules ADD COLUMN prod_token TEXT DEFAULT ''")
             conn.commit()
         finally:
             conn.close()
@@ -70,7 +79,7 @@ def schedule_list():
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token "
                 "FROM schedules ORDER BY project ASC"
             )
             for row in cur.fetchall():
@@ -88,6 +97,8 @@ def schedule_list():
                     "last_run": row[7] or 0.0,
                     "last_status": row[8] or "",
                     "enabled": bool(row[9]),
+                    "prod_server": row[10] or "",
+                    "has_prod_token": bool(row[11]),
                     "running": is_running,
                 })
         finally:
@@ -103,7 +114,7 @@ def schedule_get(job_id):
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token "
                 "FROM schedules WHERE id = ?", (job_id,)
             )
             row = cur.fetchone()
@@ -122,6 +133,8 @@ def schedule_get(job_id):
                 "last_run": row[7] or 0.0,
                 "last_status": row[8] or "",
                 "enabled": bool(row[9]),
+                "prod_server": row[10] or "",
+                "has_prod_token": bool(row[11]),
                 "running": is_running,
             }
         finally:
@@ -129,7 +142,7 @@ def schedule_get(job_id):
 
 
 def schedule_save(job_data):
-    """Skapar eller uppdaterar ett schemalagt jobb."""
+    """Skapar eller uppdaterar ett schemalagt jobb och synkar produktionsserver."""
     scheduler_db_init()
     job_id = (job_data.get("id") or "").strip() or uuid.uuid4().hex[:10]
     project = (job_data.get("project") or "").strip()
@@ -139,31 +152,58 @@ def schedule_save(job_data):
     interval_hours = max(1, int(job_data.get("interval_hours") or 24))
     enabled = 1 if job_data.get("enabled", True) else 0
 
+    prod_server = (job_data.get("prod_server") or "").strip()
+    prod_token_input = job_data.get("prod_token")
+
+    # Om ingen prod_server angavs i jobbet, kolla om det finns sparat för projektet i project_targets
+    if not prod_server:
+        pt = config.project_target_get(project)
+        if pt.get("prod_server"):
+            prod_server = pt["prod_server"]
+            if prod_token_input is None:
+                prod_token_input = pt.get("prod_token", "")
+
     now = time.time()
     existing = schedule_get(job_id)
     if existing:
         next_run = float(job_data.get("next_run") or existing.get("next_run") or (now + interval_hours * 3600))
         last_run = float(existing.get("last_run") or 0.0)
         last_status = job_data.get("last_status") if "last_status" in job_data else existing.get("last_status", "")
+        if prod_token_input is None:
+            with _settings_lock:
+                c = sqlite3.connect(config.DB_PATH)
+                try:
+                    r = c.execute("SELECT prod_token FROM schedules WHERE id = ?", (job_id,)).fetchone()
+                    prod_token = r[0] if r else ""
+                finally:
+                    c.close()
+        else:
+            prod_token = prod_token_input.strip()
     else:
         next_run = float(job_data.get("next_run") or (now + interval_hours * 3600))
         last_run = 0.0
         last_status = ""
+        prod_token = (prod_token_input or "").strip()
+
+    # Spara även till centrala project_targets
+    if prod_server or prod_token:
+        config.project_target_set(project, prod_server, prod_token)
 
     with _settings_lock:
         conn = sqlite3.connect(config.DB_PATH)
         try:
             conn.execute(
                 "INSERT INTO schedules(id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "project=excluded.project, branch=excluded.branch, "
                 "run_security=excluded.run_security, run_ponytail=excluded.run_ponytail, "
                 "interval_hours=excluded.interval_hours, next_run=excluded.next_run, "
-                "enabled=excluded.enabled, last_status=excluded.last_status",
+                "enabled=excluded.enabled, last_status=excluded.last_status, "
+                "prod_server=excluded.prod_server, prod_token=excluded.prod_token",
                 (job_id, project, branch, run_security, run_ponytail,
-                 interval_hours, next_run, last_run, last_status, enabled)
+                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token)
             )
             conn.commit()
         finally:
@@ -360,7 +400,8 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
     return getattr(ctx, "issues_created", 0), getattr(ctx, "last_error", None)
 
 
-def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, status_cb=None):
+def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, status_cb=None,
+                       prod_server="", prod_token=""):
     """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
 
     Väljer automatiskt den mest optimala hårdvaran (snabbaste GPU-instansen) och
@@ -392,9 +433,20 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     try:
         if run_security:
+            sec_prompt = SECURITY_AUDIT_PROMPT
+            if prod_server:
+                token_desc = " (med access-token)" if prod_token else " (utan token)"
+                sec_prompt += (
+                    "\n\nPRODUKTIONSSERVER & MÅLMILJÖ FÖR DETTA PROJEKT:\n"
+                    "- Målserver: %s%s\n"
+                    "- Enligt .agents/skills/openclaw-redteam/SKILL.md och .agents/rules/redteam.md ska nätverkstester, "
+                    "endpoints och autentisering granskas och testas mot denna målserver med strikt icke-destruktiva (benign) payloads.\n"
+                    % (prod_server, token_desc)
+                )
             if status_cb:
-                status_cb("Kör säkerhetsgranskning mot %s (%s på %s)..." % (project, model, base_url))
-            sec_count, sec_err = _run_single_headless_pass(SECURITY_AUDIT_PROMPT, model, project, base_url=base_url)
+                srv_msg = (" mot %s" % prod_server) if prod_server else ""
+                status_cb("Kör säkerhetsgranskning mot %s%s (%s på %s)..." % (project, srv_msg, model, base_url))
+            sec_count, sec_err = _run_single_headless_pass(sec_prompt, model, project, base_url=base_url)
             if sec_err:
                 errors.append("Säkerhetsgranskning: " + sec_err)
 
@@ -440,12 +492,28 @@ def _execute_job(job_id):
         _update_job_status(job_id, status=msg)
 
     try:
+        eff = config.effective_project_target(job["project"])
+        target_server = (job.get("prod_server") or "").strip() or eff.get("prod_server", "")
+        target_token = ""
+        if (job.get("prod_server") or "").strip():
+            with _settings_lock:
+                c = sqlite3.connect(config.DB_PATH)
+                try:
+                    r = c.execute("SELECT prod_token FROM schedules WHERE id = ?", (job_id,)).fetchone()
+                    target_token = r[0] if r else ""
+                finally:
+                    c.close()
+        if not target_token:
+            target_token = eff.get("prod_token", "")
+
         ok, summary, sec, pny = run_headless_audit(
             project=job["project"],
             branch=job.get("branch", ""),
             run_security=job.get("run_security", True),
             run_ponytail=job.get("run_ponytail", True),
-            status_cb=on_status
+            status_cb=on_status,
+            prod_server=target_server,
+            prod_token=target_token
         )
         finish_str = time.strftime("%Y-%m-%d %H:%M")
         status_text = ("%s (%s)" % (summary, finish_str)) if ok else ("Fel: %s (%s)" % (summary, finish_str))

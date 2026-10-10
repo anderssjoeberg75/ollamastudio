@@ -436,3 +436,86 @@ def security_test_mode():
     m = (setting_str("sec_test_mode") or "safe").lower()
     return m if m in ("safe", "full") else "safe"
 
+
+# --- Produktionsserver per projekt (GitLab) ---
+def project_targets_list():
+    """Hämtar alla konfigurerade produktionsservrar per projekt (maskerade tokens)."""
+    with _settings_lock:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS project_targets "
+                         "(project TEXT PRIMARY KEY, prod_server TEXT DEFAULT '', prod_token TEXT DEFAULT '')")
+            conn.commit()
+            cur = conn.execute("SELECT project, prod_server, prod_token FROM project_targets ORDER BY project ASC")
+            res = {}
+            for proj, srv, tok in cur.fetchall():
+                res[proj] = {
+                    "project": proj,
+                    "prod_server": srv or "",
+                    "has_token": bool(tok),
+                }
+            return res
+        finally:
+            conn.close()
+
+
+def project_target_get(project):
+    """Hämtar produktionsserver och token för ett specifikt projekt."""
+    if not project:
+        return {"prod_server": "", "prod_token": ""}
+    with _settings_lock:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS project_targets "
+                         "(project TEXT PRIMARY KEY, prod_server TEXT DEFAULT '', prod_token TEXT DEFAULT '')")
+            cur = conn.execute("SELECT prod_server, prod_token FROM project_targets WHERE project = ?", (project,))
+            row = cur.fetchone()
+            if row:
+                return {"prod_server": row[0] or "", "prod_token": row[1] or ""}
+            return {"prod_server": "", "prod_token": ""}
+        finally:
+            conn.close()
+
+
+def project_target_set(project, prod_server="", prod_token=None):
+    """Sparar eller tar bort produktionsserver för ett projekt."""
+    proj = (project or "").strip()
+    if not proj:
+        return False
+    with _settings_lock:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS project_targets "
+                         "(project TEXT PRIMARY KEY, prod_server TEXT DEFAULT '', prod_token TEXT DEFAULT '')")
+            cur = conn.execute("SELECT prod_token FROM project_targets WHERE project = ?", (proj,))
+            row = cur.fetchone()
+            existing_token = row[0] if row else ""
+
+            server = (prod_server or "").strip()
+            # None = behåll befintlig token, "" = rensa, sträng = ny token
+            if prod_token is None:
+                token_to_save = existing_token
+            else:
+                token_to_save = prod_token.strip()
+
+            if not server and not token_to_save:
+                conn.execute("DELETE FROM project_targets WHERE project = ?", (proj,))
+            else:
+                conn.execute("INSERT INTO project_targets(project, prod_server, prod_token) "
+                             "VALUES(?, ?, ?) ON CONFLICT(project) DO UPDATE SET "
+                             "prod_server=excluded.prod_server, prod_token=excluded.prod_token",
+                             (proj, server, token_to_save))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+
+def effective_project_target(project):
+    """Returnerar målserver för ett projekt, eller faller tillbaka på global målserver."""
+    pt = project_target_get(project)
+    server = pt.get("prod_server") or security_target_url()
+    token = pt.get("prod_token") if pt.get("prod_server") else security_target_token()
+    return {"prod_server": server, "prod_token": token}
+
+

@@ -193,6 +193,58 @@ Verifiera att token inte syns i logg.
         pub_cleared = settings_public()
         self.assertFalse(pub_cleared.get("sec_target_token_set"))
 
+    def test_project_prod_servers_and_schedules(self):
+        from studio.web.page import settings_public
+
+        # 1. Project target set & get
+        ok = config.project_target_set("team/web-app", "https://prod.webapp.se", "tok-12345")
+        self.assertTrue(ok)
+        target = config.project_target_get("team/web-app")
+        self.assertEqual(target["prod_server"], "https://prod.webapp.se")
+        self.assertEqual(target["prod_token"], "tok-12345")
+
+        # 2. List & masking
+        targets_list = config.project_targets_list()
+        self.assertIn("team/web-app", targets_list)
+        self.assertEqual(targets_list["team/web-app"]["prod_server"], "https://prod.webapp.se")
+        self.assertTrue(targets_list["team/web-app"]["has_token"])
+        self.assertNotIn("prod_token", targets_list["team/web-app"])  # ingen rå token läcker i listan
+
+        # 3. Settings public contains project_targets
+        pub = settings_public()
+        self.assertIn("project_targets", pub)
+        self.assertIn("team/web-app", pub["project_targets"])
+
+        # 4. Effective project target
+        eff_project = config.effective_project_target("team/web-app")
+        self.assertEqual(eff_project["prod_server"], "https://prod.webapp.se")
+        self.assertEqual(eff_project["prod_token"], "tok-12345")
+
+        config.settings_set({"sec_target_url": "http://global-fallback:8080", "sec_target_token": "global-tok"})
+        eff_other = config.effective_project_target("other/project")
+        self.assertEqual(eff_other["prod_server"], "http://global-fallback:8080")
+        self.assertEqual(eff_other["prod_token"], "global-tok")
+
+        # 5. Schedule save with prod_server and prod_token
+        saved = schedule_save({
+            "project": "team/web-app",
+            "prod_server": "https://custom-prod.webapp.se",
+            "prod_token": "custom-tok-999",
+            "interval_hours": 12,
+        })
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved["prod_server"], "https://custom-prod.webapp.se")
+        self.assertTrue(saved["has_prod_token"])
+
+        got = schedule_get(saved["id"])
+        self.assertEqual(got["prod_server"], "https://custom-prod.webapp.se")
+        self.assertTrue(got["has_prod_token"])
+
+        # 6. Delete project target
+        config.project_target_set("team/web-app", prod_server="", prod_token="")
+        cleared_targets = config.project_targets_list()
+        self.assertNotIn("team/web-app", cleared_targets)
+
 
 if __name__ == "__main__":
     unittest.main()

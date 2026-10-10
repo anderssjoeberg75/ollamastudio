@@ -1816,7 +1816,100 @@ async function loadSettingsForm(){
   const secState = document.getElementById('stSecTokenState');
   if(secState) secState.textContent = secTokenIsSet
     ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+  renderProjectTargets(s.project_targets || {});
+  populateSecProjectSelect();
   document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
+}
+let currentProjectTargets = {};
+function renderProjectTargets(targets){
+  currentProjectTargets = targets || {};
+  const listEl = document.getElementById('stSecProjList');
+  if(!listEl) return;
+  const keys = Object.keys(currentProjectTargets);
+  if(!keys.length){
+    listEl.innerHTML = '<span style="color:var(--faint);font-style:italic">Inga projektspecifika servrar sparade än (använder global målserver ovan).</span>';
+    return;
+  }
+  let html = '';
+  for(const k of keys){
+    const item = currentProjectTargets[k];
+    const tokBadge = item.has_token ? '<span style="background:var(--card);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:10px">🔑 token satt</span>' : '';
+    html += `
+      <div style="display:flex;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <b>🦊 ${esc(k)}:</b>
+          <code style="color:var(--accent-hov)">${esc(item.prod_server || '–')}</code>
+          ${tokBadge}
+        </div>
+        <button class="btn ghost small" type="button" onclick="deleteProjectTarget('${esc(k)}')" style="color:var(--danger);padding:2px 6px;font-size:11px" title="Ta bort koppling">✕</button>
+      </div>
+    `;
+  }
+  listEl.innerHTML = html;
+}
+async function populateSecProjectSelect(){
+  const sel = document.getElementById('stSecProjSelect');
+  if(!sel || sel._loaded) return;
+  sel._loaded = true;
+  try{
+    const r = await api('/api/gitlab/repos');
+    const d = await r.json();
+    const repos = d.repos || [];
+    let html = '<option value="">-- Välj GitLab-projekt --</option>';
+    for(const repo of repos){
+      const slug = repo.slug || repo.name;
+      html += `<option value="${esc(slug)}">${esc(slug)}</option>`;
+    }
+    sel.innerHTML = html;
+    sel.onchange = ()=>{
+      const p = sel.value;
+      const pt = currentProjectTargets[p] || {};
+      const srvEl = document.getElementById('stSecProjServer');
+      const tokEl = document.getElementById('stSecProjToken');
+      if(srvEl) srvEl.value = pt.prod_server || '';
+      if(tokEl) tokEl.value = '';
+    };
+  }catch(e){
+    sel.innerHTML = '<option value="">Kunde inte ladda projekt</option>';
+  }
+}
+async function saveProjectTarget(){
+  const sel = document.getElementById('stSecProjSelect');
+  const project = (sel ? sel.value : '').trim();
+  if(!project){
+    toast('Välj ett GitLab-projekt först', true);
+    return;
+  }
+  const server = (document.getElementById('stSecProjServer').value || '').trim();
+  const token = document.getElementById('stSecProjToken').value;
+  try{
+    const r = await api('/api/gitlab/targets', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({project: project, prod_server: server, prod_token: token})
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte spara målserver');
+    toast('Produktionsserver sparad för ' + project);
+    renderProjectTargets(d.targets);
+  }catch(e){
+    toast('Kunde inte spara: ' + e.message, true);
+  }
+}
+async function deleteProjectTarget(project){
+  try{
+    const r = await api('/api/gitlab/targets', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({project: project, prod_server: '', prod_token: ''})
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte ta bort');
+    toast('Produktionsserver borttagen för ' + project);
+    renderProjectTargets(d.targets);
+  }catch(e){
+    toast('Kunde inte ta bort: ' + e.message, true);
+  }
 }
 function clearMem0Key(){
   mem0KeyClear = true; mem0KeyIsSet = false;
@@ -3363,6 +3456,14 @@ async function populateScheduleProjects(){
       html += `<option value="${escSch(slug)}">${escSch(slug)}</option>`;
     }
     sel.innerHTML = html;
+    sel.onchange = ()=>{
+      const p = sel.value;
+      const pt = currentProjectTargets[p] || {};
+      const srvEl = document.getElementById('schProdServer');
+      const tokEl = document.getElementById('schProdToken');
+      if(srvEl) srvEl.value = pt.prod_server || '';
+      if(tokEl) tokEl.value = '';
+    };
   }catch(e){
     sel.innerHTML = '<option value="">Kunde inte hämta GitLab-projekt: ' + escSch(e.message) + '</option>';
   }
@@ -3387,6 +3488,7 @@ async function loadScheduleJobs(){
       }
       const secBadge = job.run_security ? '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px">🛡 Säkerhet</span>' : '';
       const pnyBadge = job.run_ponytail ? '<span style="background:var(--card);border:1px solid var(--green);color:var(--green);padding:2px 6px;border-radius:4px;font-size:11px">✂ Ponytail</span>' : '';
+      const prodBadge = job.prod_server ? `<span style="background:var(--card);border:1px solid var(--border);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Produktionsserver för projektet">🌐 ${escSch(job.prod_server)}</span>` : '';
       const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
       const statusIcon = job.running ? '⏳ ' : '';
       
@@ -3398,7 +3500,7 @@ async function loadScheduleJobs(){
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:8px">
               <span style="font-weight:600;font-size:14px;color:var(--text)">🦊 ${escSch(job.project)}</span>
-              ${secBadge} ${pnyBadge}
+              ${secBadge} ${pnyBadge} ${prodBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Kör granskningen direkt">
@@ -3449,6 +3551,8 @@ async function addScheduleJob(){
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
   const runSecurity = document.getElementById('schRunSecurity').checked;
   const runPonytail = document.getElementById('schRunPonytail').checked;
+  const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
+  const prodToken = (document.getElementById('schProdToken') ? document.getElementById('schProdToken').value : '').trim();
 
   if(!runSecurity && !runPonytail){
     toast('Du måste välja minst en granskning (säkerhet eller ponytail)', true);
@@ -3464,12 +3568,18 @@ async function addScheduleJob(){
         interval_hours: interval,
         run_security: runSecurity,
         run_ponytail: runPonytail,
+        prod_server: prodServer,
+        prod_token: prodToken,
         enabled: true
       })
     });
     const d = await r.json();
     if(!d.ok) throw new Error(d.error || 'kunde inte spara schema');
     toast('Schema sparat för ' + project);
+    if(prodServer){
+      currentProjectTargets[project] = {project, prod_server: prodServer, has_token: !!prodToken};
+      renderProjectTargets(currentProjectTargets);
+    }
     loadScheduleJobs();
   }catch(e){
     toast('Kunde inte spara schema: ' + e.message, true);

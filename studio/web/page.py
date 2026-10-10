@@ -14,7 +14,8 @@ from studio.config import (
     APP_DIR, CODE_MODE_LABELS, DB_PATH, SETTINGS_SPEC, TOKEN, code_ctx,
     code_enabled, code_max_steps, code_mode, code_toggle_on,
     code_workspace_root, hf_auto_enabled, hf_enabled, mem0_enabled,
-    setting_bool, setting_str, train_toggle_on, train_workspace_root)
+    project_targets_list, setting_bool, setting_str, train_toggle_on,
+    train_workspace_root)
 from studio.huggingface_bridge import HF
 from studio.models import CATALOG
 from studio.training import TRAIN
@@ -62,6 +63,7 @@ def settings_public():
             out["git_slug"] = ("%s/%s" % (_o, _r)) if (_o and _r) else ""
             _info = git_remote_info()
             out["git_provider"] = _info.get("provider", "git") if _info else "git"
+    out["project_targets"] = project_targets_list()
     out["db_path"] = DB_PATH
     return out
 
