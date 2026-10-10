@@ -71,9 +71,9 @@ function gpuMismatch(e){
   return (e.gpu_actual !== null && e.gpu_actual !== undefined
           && e.gpu !== null && e.gpu !== undefined && e.gpu !== ''
           && String(e.gpu_actual) !== String(e.gpu))
-    ? ('Ligger på GPU ' + e.gpu_actual + ', men instansen heter "' + (e.backend||'')
-       + '". Instansen är inte låst till sitt kort – sätt CUDA_VISIBLE_DEVICES '
-       + 'om du vill styra vilken GPU som används.')
+    ? ('Located on GPU ' + e.gpu_actual + ', but instance is named "' + (e.backend||'')
+       + '". The instance is not locked to its card – set CUDA_VISIBLE_DEVICES '
+       + 'if you want to control which GPU is used.')
     : '';
 }
 
@@ -84,14 +84,14 @@ function headers(json){
 }
 function ensureToken(){
   if(AUTH && !token){
-    token = (prompt('Ange åtkomst-token för Ollama Studio:') || '').trim();
+    token = (prompt('Enter access token for Ollama Studio:') || '').trim();
     if(token) localStorage.setItem('os_token', token);
   }
 }
 async function api(path, opts){
   ensureToken();
   const r = await fetch(path, opts);
-  if(r.status === 401){ localStorage.removeItem('os_token'); token=''; throw new Error('Fel token'); }
+  if(r.status === 401){ localStorage.removeItem('os_token'); token=''; throw new Error('Invalid token'); }
   return r;
 }
 
@@ -101,14 +101,13 @@ function humanSize(b){
   return (i<2? b.toFixed(0): b.toFixed(1)) + ' ' + u[i];
 }
 function humanDate(s){
-  // Visa datum i lokal tidszon (som skrivbordsappens human_date), inte råsträngen.
   if(!s) return '';
   const d = new Date(s);
-  return isNaN(d) ? (''+s).slice(0,10) : d.toLocaleDateString('sv-SE');
+  return isNaN(d) ? (''+s).slice(0,10) : d.toLocaleDateString('en-US');
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'Mina modeller', discover:'Upptäck / Installera', chat:'Chatta', system:'System / GPU', settings:'Inställningar', code:'Codex', train:'AI-träning'};
+const TITLES = {models:'My Models', discover:'Discover / Install', chat:'Chat', system:'System / GPU', settings:'Settings', code:'Codex', train:'AI Training'};
 function showView(v){
   for(const k of ['models','discover','chat','system','settings','code','train']){
     document.getElementById('nav-'+k).classList.toggle('active', v===k);
@@ -129,7 +128,7 @@ function showView(v){
     }
   }
   if(v==='train'){ loadTrain(); }
-  // System-vyn pollas bara medan den visas
+  // System view only polled while shown
   if(systemTimer){ clearInterval(systemTimer); systemTimer = null; }
   if(v==='system'){ fetchSystem(); systemTimer = setInterval(fetchSystem, 2500); }
 }
@@ -147,59 +146,55 @@ function toast(msg, err){
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
 async function waitForServer(){
-  // Vänta tills servern svarar igen efter omstarten (upp till ~30 s).
-  await sleep(1500);                       // ge processen tid att gå ner först
+  await sleep(1500);
   for(let i=0;i<40;i++){
     try{
       const r = await fetch('/api/version', {headers: headers(false)});
-      if(r.ok || r.status===401) return true;   // svar = servern är uppe igen
-    }catch(e){ /* nere ännu – fortsätt polla */ }
+      if(r.ok || r.status===401) return true;
+    }catch(e){ /* still down – keep polling */ }
     await sleep(750);
   }
   return false;
 }
 
-// "Uppdatera"-knappen: hämta senaste kod från GitHub, starta om servern och
-// kör sedan den vanliga uppdateringen (refresh) / ladda om sidan med nya UI:t.
 async function updateApp(){
-  if(!confirm('Hämta senaste kod från GitHub och starta om Ollama Studio?\n\n'
-            + 'Finns ny kod startas servern om och sidan laddas om – pågående chatt '
-            + 'eller Codex-körning avbryts då. Är allt redan uppdaterat sker ingen omstart.')){
+  if(!confirm('Fetch the latest code from GitHub and restart Ollama Studio?\n\n'
+            + 'If there is new code, the server will restart and the page will reload – ongoing chat '
+            + 'or Codex runs will be interrupted. If everything is already up to date, no restart occurs.')){
     return;
   }
-  setStatus('Hämtar senaste kod från GitHub…', 'var(--amber)');
+  setStatus('Fetching latest code from GitHub…', 'var(--amber)');
   let res;
   try{
     const r = await api('/api/self-update', {method:'POST', headers: headers(true)});
     res = await r.json();
   }catch(e){
-    setStatus('Uppdatering misslyckades', 'var(--danger)');
-    toast('Kunde inte uppdatera: ' + (e && e.message || e), true);
+    setStatus('Update failed', 'var(--danger)');
+    toast('Could not update: ' + (e && e.message || e), true);
     refresh();
     return;
   }
   if(!res.ok){
-    setStatus('Uppdatering misslyckades', 'var(--danger)');
-    toast(res.output || 'Uppdatering misslyckades', true);
-    refresh();                              // ändå köra vanlig uppdatering
+    setStatus('Update failed', 'var(--danger)');
+    toast(res.output || 'Update failed', true);
+    refresh();
     return;
   }
   if(res.restart){
-    setStatus('Ny kod hämtad — startar om servern…', 'var(--amber)');
-    toast('Uppdaterad – startar om servern');
+    setStatus('New code fetched — restarting server…', 'var(--amber)');
+    toast('Updated – restarting server');
     const back = await waitForServer();
-    if(back){ location.reload(); return; }  // ladda om → nya UI:t + refresh() vid init
-    setStatus('Servern svarar inte efter omstarten', 'var(--danger)');
-    toast('Servern kom inte tillbaka i tid – ladda om sidan manuellt', true);
+    if(back){ location.reload(); return; }
+    setStatus('Server not responding after restart', 'var(--danger)');
+    toast('Server did not come back in time – please reload the page manually', true);
     return;
   }
-  // Redan senaste versionen → bara den vanliga uppdateringen.
-  toast('Redan senaste versionen');
+  toast('Already up to date');
   refresh();
 }
 
 async function refresh(){
-  setStatus('Kontrollerar Ollama…', 'var(--amber)');
+  setStatus('Checking Ollama…', 'var(--amber)');
   try{
     const vr = await api('/api/version'); const v = await vr.json();
     const mr = await api('/api/models'); const data = await mr.json();
@@ -212,59 +207,56 @@ async function refresh(){
     try{ const sr = await api('/api/system'); if(sr.ok) lastSystem = await sr.json(); }catch(e){}
     lastModels = models;
     populateChatModels();
-    setStatus('Ansluten · v'+(v.version||'?'), 'var(--green)');
+    setStatus('Connected · v'+(v.version||'?'), 'var(--green)');
     renderModels(models);
   }catch(e){
-    setStatus('Ollama körs inte', 'var(--danger)');
+    setStatus('Ollama is not running', 'var(--danger)');
     renderOffline();
   }
   renderCatalog();
 }
 
 function runMeta(r){
-  // Beskriv var (GPU) en inläst modell körs, hur den använder minne + när den frigörs
   const parts = [];
-  const warn = gpuMismatch(r);      // etikett och verklighet säger olika
+  const warn = gpuMismatch(r);
   const gl = gpuLabel(r);
   if(gl) parts.push(gl + (gpuMismatch(r) ? ' ⚠' : ''));
   const vram = Number(r.size_vram)||0, size = Number(r.size)||0;
-  if(vram <= 0) parts.push('körs på CPU/RAM');
-  else if(vram >= size) parts.push('helt på GPU · '+humanSize(vram)+' VRAM');
-  else parts.push('GPU+CPU · '+humanSize(vram)+' i VRAM');
+  if(vram <= 0) parts.push('running on CPU/RAM');
+  else if(vram >= size) parts.push('entirely on GPU · '+humanSize(vram)+' VRAM');
+  else parts.push('GPU+CPU · '+humanSize(vram)+' in VRAM');
   if(r.expires_at){
     const d = new Date(r.expires_at);
-    if(!isNaN(d)) parts.push('frigörs '+d.toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'}));
+    if(!isNaN(d)) parts.push('unloads at '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
   }
   const text = parts.join(' · ');
-  // Varningen som en tooltip: den behöver inte skrika, men den ska gå att läsa.
   return warn ? '<span title="'+esc(warn)+'">'+esc(text)+'</span>' : esc(text);
 }
 function renderModels(models){
   const box = document.getElementById('modelsList');
   if(!models.length){
-    document.getElementById('summary').textContent = '0 modeller';
-    box.innerHTML = '<div class="empty"><h2>Inga modeller installerade än</h2>'
-      + '<p>Gå till "Upptäck / Installera" för att ladda ner din första modell.</p>'
-      + '<button class="btn accent" onclick="showView(\'discover\')">Öppna Upptäck / Installera</button></div>';
+    document.getElementById('summary').textContent = '0 models';
+    box.innerHTML = '<div class="empty"><h2>No models installed yet</h2>'
+      + '<p>Go to "Discover / Install" to download your first model.</p>'
+      + '<button class="btn accent" onclick="showView(\'discover\')">Open Discover / Install</button></div>';
     return;
   }
   const total = models.reduce((s,m)=>s+(m.size||0),0);
   const activeNames = models.filter(m=>running.has(m.name)).map(m=>m.name);
-  let summary = models.length+' modeller · '+humanSize(total)+' totalt';
-  if(activeNames.length) summary += ' · '+activeNames.length+' körs nu';
+  let summary = models.length+(models.length===1 ? ' model · ' : ' models · ')+humanSize(total)+' total';
+  if(activeNames.length) summary += ' · '+activeNames.length+' running now';
   document.getElementById('summary').textContent = summary;
 
-  // Banner högst upp: vilken modell är aktiv (och på vilken GPU) just nu?
   let banner;
   if(activeNames.length){
     const items = activeNames.map(n=>{
       const gpus = running.get(n).map(gpuLabel).filter(Boolean);
       return esc(n) + (gpus.length ? ' ('+gpus.join(', ')+')' : '');
     });
-    banner = '<div class="banner">● Aktiv i minnet just nu: '+items.join(',&nbsp; ')+'</div>';
+    banner = '<div class="banner">● Active in memory right now: '+items.join(',&nbsp; ')+'</div>';
   }else{
-    banner = '<div class="meta" style="margin:6px 2px 8px">Ingen modell är inläst i minnet just nu '
-           + '(en modell blir aktiv när den används, t.ex. via <code>ollama run</code> eller ett chattanrop).</div>';
+    banner = '<div class="meta" style="margin:6px 2px 8px">No model is currently loaded in memory '
+           + '(a model becomes active when used, e.g. via <code>ollama run</code> or a chat request).</div>';
   }
 
   const cards = models.map(m=>{
@@ -275,18 +267,16 @@ function renderModels(models){
     let liveChip = '', liveMeta = '';
     if(r){
       const gpus = r.map(gpuLabel).filter(Boolean);
-      liveChip = '<span class="chip live">● Körs nu'+(gpus.length ? ' · '+esc(gpus.join(', ')) : '')+'</span>';
+      liveChip = '<span class="chip live">● Running now'+(gpus.length ? ' · '+esc(gpus.join(', ')) : '')+'</span>';
       liveMeta = r.map(e=>'<div class="meta live">'+runMeta(e)+'</div>').join('');
     }
     return '<div class="card hoverable"><div class="top"><div>'
       + '<h3>'+esc(m.name)+liveChip+'</h3><div class="meta">'+bits+'</div>'+liveMeta+'</div>'
-      // data-name (HTML-escapat) i stället för handbyggd JS-sträng: modellnamn med
-      // ' eller " bryter inte längre onclick-anropet (board #14).
-      + '<button class="btn danger small" data-del="'+esc(m.name)+'">✕ Avinstallera</button>'
+      + '<button class="btn danger small" data-del="'+esc(m.name)+'">✕ Uninstall</button>'
       + '</div></div>';
   }).join('');
   box.innerHTML = banner + cards;
-  box.onclick = onModelsClick;   // delegerad klickhantering (tål specialtecken i namn)
+  box.onclick = onModelsClick;
 }
 function onModelsClick(ev){
   const btn = ev.target.closest('button[data-del]');
@@ -295,10 +285,10 @@ function onModelsClick(ev){
 function renderOffline(){
   document.getElementById('summary').textContent = '';
   document.getElementById('modelsList').innerHTML =
-    '<div class="empty"><h2>Kan inte nå Ollama</h2>'
-    + '<p>Kontrollera att Ollama är installerat och startat på servern.<br>'
-    + 'Kör:  <code>ollama serve</code>  (eller  <code>systemctl start ollama</code>).</p>'
-    + '<button class="btn accent" onclick="refresh()">↻ Försök igen</button></div>';
+    '<div class="empty"><h2>Cannot reach Ollama</h2>'
+    + '<p>Make sure Ollama is installed and running on the server.<br>'
+    + 'Run:  <code>ollama serve</code>  (or  <code>systemctl start ollama</code>).</p>'
+    + '<button class="btn accent" onclick="refresh()">↻ Try again</button></div>';
 }
 function estBytesFromSizeStr(s){
   const m = (''+s).match(/([\d.]+)\s*(TB|GB|MB)/i);
@@ -314,25 +304,19 @@ function maxGpuVramBytes(){
   for(const g of gpus){ if(g.mem_total_mb) max = Math.max(max, g.mem_total_mb*1024*1024); }
   return max;
 }
-/* ---- Hur stor är modellen, och ryms den i den här datorn? ----
-   Ollama laddar det som får plats på GPU:n och kör resten på CPU/RAM, så
-   "kan köras" = ryms i VRAM + RAM. Allt är uppskattningar: katalogen har
-   storlek i text, Ollamas bibliotek har parametertaggar (t.ex. "8b") och
-   Hugging Face-namn innehåller oftast storleken. Vet vi inget gissar vi
-   inte – då visas modellen alltid. */
-const BYTES_PER_B_PARAM = 0.62 * 1024*1024*1024;   // ≈ Q4_K_M, Ollamas standard
+const BYTES_PER_B_PARAM = 0.62 * 1024*1024*1024;
 function paramsFromText(text){
   const m = String(text||'').match(/(\d+(?:[.,]\d+)?)\s*b\b/i);
   return m ? parseFloat(m[1].replace(',', '.')) : 0;
 }
 function estModelBytes(it){
-  if(it.size){                                   // "~4.9 GB" ur katalogen
+  if(it.size){
     const b = estBytesFromSizeStr(it.size);
     if(b) return b;
   }
-  if(it.sizes && it.sizes.length){               // "0.6b, 1.7b, 8b" ur biblioteket
+  if(it.sizes && it.sizes.length){
     const params = it.sizes.map(paramsFromText).filter(Boolean);
-    if(params.length) return Math.min(...params) * BYTES_PER_B_PARAM;   // minsta varianten
+    if(params.length) return Math.min(...params) * BYTES_PER_B_PARAM;
   }
   const fromName = paramsFromText((it.pull||'') + ' ' + (it.name||''));
   return fromName ? fromName * BYTES_PER_B_PARAM : 0;
@@ -342,12 +326,11 @@ function systemRamBytes(){
 }
 function hardwareCapacityBytes(){
   const ram = systemRamBytes();
-  // Lämna lite RAM åt operativsystemet – annars swappar den ihjäl sig.
   return maxGpuVramBytes() + Math.floor(ram * 0.85);
 }
 function fitsHardware(it){
   const cap = hardwareCapacityBytes(), need = estModelBytes(it) * 1.15;
-  if(!(cap > 0 && need > 0)) return true;        // vet vi inget → göm aldrig
+  if(!(cap > 0 && need > 0)) return true;
   return need <= cap;
 }
 function fitLabel(it){
@@ -356,12 +339,12 @@ function fitLabel(it){
   const vram = maxGpuVramBytes(), cap = hardwareCapacityBytes();
   if(!cap) return '';
   if(vram > 0 && need <= vram)
-    return '  ·  <span style="color:var(--green)">≈ passar din GPU</span>';
+    return '  ·  <span style="color:var(--green)">≈ fits your GPU</span>';
   if(need <= cap)
     return vram
-      ? '  ·  <span style="color:var(--amber)">≈ körs delvis på CPU (långsammare)</span>'
-      : '  ·  <span style="color:var(--amber)">≈ körs på CPU (långsammare)</span>';
-  return '  ·  <span style="color:var(--danger)">⚠ för stor för din hårdvara</span>';
+      ? '  ·  <span style="color:var(--amber)">≈ runs partially on CPU (slower)</span>'
+      : '  ·  <span style="color:var(--amber)">≈ runs on CPU (slower)</span>';
+  return '  ·  <span style="color:var(--danger)">⚠ too large for your hardware</span>';
 }
 function hardwareSummary(){
   const vram = maxGpuVramBytes(), ram = systemRamBytes();
@@ -379,21 +362,20 @@ function sourceChip(source){
     : '<span class="chip">Ollama</span>';
 }
 
-/* Ett kort per träff – samma utseende oavsett källa (katalog, bibliotek, HF). */
 function modelCard(it, index){
   const done = isInstalled(it.pull);
   const buttons = [];
   if(it.source === 'hf')
-    buttons.push('<button class="btn ghost small" onclick="hfToggleQuants('+index+')">Varianter</button>');
+    buttons.push('<button class="btn ghost small" onclick="hfToggleQuants('+index+')">Variants</button>');
   buttons.push(done
-    ? '<span class="installed">✓ Installerad</span>'
-    : '<button class="btn accent" onclick="startPull(\''+esc(it.pull)+'\')">↓ Installera</button>');
+    ? '<span class="installed">✓ Installed</span>'
+    : '<button class="btn accent" onclick="startPull(\''+esc(it.pull)+'\')">↓ Install</button>');
 
   const bits = [];
-  if(it.size) bits.push('Storlek: '+esc(it.size)+fitLabel(it));
-  else if(estModelBytes(it)) bits.push('Uppskattad storlek: ~'+humanSize(estModelBytes(it))+fitLabel(it));
-  if(it.sizes && it.sizes.length) bits.push('Varianter: '+esc(it.sizes.join(', ')));
-  if(it.downloads) bits.push(it.downloads.toLocaleString('sv-SE')+' nedladdningar');
+  if(it.size) bits.push('Size: '+esc(it.size)+fitLabel(it));
+  else if(estModelBytes(it)) bits.push('Estimated size: ~'+humanSize(estModelBytes(it))+fitLabel(it));
+  if(it.sizes && it.sizes.length) bits.push('Variants: '+esc(it.sizes.join(', ')));
+  if(it.downloads) bits.push(it.downloads.toLocaleString('en-US')+' downloads');
   if(it.likes) bits.push('♥ '+it.likes);
 
   const title = it.url
@@ -402,30 +384,28 @@ function modelCard(it, index){
     : esc(it.name || it.pull);
 
   return '<div class="card"><div class="top"><div>'
-    // Källchippet behövs bara när listan blandar källor, dvs. vid sökning
     + '<h3>'+title+(searchResults ? sourceChip(it.source) : '')
     + (it.tag ? '<span class="chip">'+esc(it.tag)+'</span>' : '')
     + '<span class="pull-name">'+esc(it.pull)+'</span></h3>'
     + (it.desc ? '<div class="desc">'+esc(it.desc)+'</div>' : '')
-    + (it.gated ? '<div class="hf-gated">⚠ Kräver godkännande på Hugging Face (gated) – '
-        + 'Ollama kan inte hämta den utan det.</div>' : '')
+    + (it.gated ? '<div class="hf-gated">⚠ Requires approval on Hugging Face (gated) – '
+        + 'Ollama cannot download it without access.</div>' : '')
     + (bits.length ? '<div class="meta">'+bits.join('  ·  ')+'</div>' : '')
     + '</div><div style="display:flex;gap:8px;align-items:center">'+buttons.join('')+'</div></div>'
     + (it.source === 'hf' ? '<div class="hf-quants" id="hfq'+index+'" style="display:none"></div>' : '')
     + '</div>';
 }
 
-/* Utan sökord visas den kurerade listan; med sökord visas träffarna. */
-let searchResults = null;      // {library:[], hf:[]} – null = visa katalogen
-let hfModels = [];             // HF-träffarna i listan just nu (för "Varianter")
-let hideTooBig = false;        // kryssrutan "dölj det som inte får plats"
+let searchResults = null;
+let hfModels = [];
+let hideTooBig = false;
 
 function toggleFitFilter(){
   hideTooBig = document.getElementById('fitOnly').checked;
   savePref('hide_too_big', hideTooBig ? '1' : '0');
   renderCatalog();
 }
-function showTooBig(){        // "visa ändå"-länken under listan
+function showTooBig(){
   const box = document.getElementById('fitOnly');
   if(box){ box.checked = false; }
   hideTooBig = false;
@@ -441,13 +421,13 @@ function updateFitHint(){
   if(!hardwareCapacityBytes()){
     box.disabled = true;
     box.checked = false;
-    hint.textContent = 'Hårdvaran kunde inte läsas av – filtret är avstängt.';
+    hint.textContent = 'Hardware could not be detected – filter is disabled.';
     return;
   }
   box.disabled = false;
-  hint.textContent = 'Din hårdvara: ' + hw + (maxGpuVramBytes()
-    ? ' – Ollama lägger det som får plats på GPU:n och kör resten på CPU.'
-    : ' – ingen GPU hittad, så allt körs på CPU (långsammare).');
+  hint.textContent = 'Your hardware: ' + hw + (maxGpuVramBytes()
+    ? ' – Ollama loads what fits into GPU and runs the rest on CPU.'
+    : ' – no GPU found, so everything runs on CPU (slower).');
 }
 
 function renderCatalog(){
@@ -457,7 +437,6 @@ function renderCatalog(){
   const lib = searching ? (searchResults.library || [])
                         : CATALOG.map(it=>Object.assign({source:'ollama'}, it));
   const hf = searching ? (searchResults.hf || []) : [];
-  // Filtrera bort det som inte kan köras – men bara när vi vet storleken.
   const keptLib = hideTooBig ? lib.filter(fitsHardware) : lib;
   const keptHf  = hideTooBig ? hf.filter(fitsHardware)  : hf;
   hfModels = keptHf;
@@ -467,16 +446,16 @@ function renderCatalog(){
            + keptHf.map((it,i)=>modelCard(it, i)).join('');
   if(!keptLib.length && !keptHf.length){
     html = hidden
-      ? '<div class="empty">Alla träffar är för stora för den här datorn. '
-        + '<a onclick="showTooBig()" style="color:var(--accent-hov);cursor:pointer">Visa dem ändå</a></div>'
+      ? '<div class="empty">All results are too large for this machine. '
+        + '<a onclick="showTooBig()" style="color:var(--accent-hov);cursor:pointer">Show them anyway</a></div>'
       : (searching
-          ? '<div class="empty">Inga modeller matchade sökningen. Prova ett kortare ord, '
-            + 'eller skriv ett exakt namn och klicka "↓ Ladda ner".</div>'
-          : '<div class="empty">Inga modeller att visa.</div>');
+          ? '<div class="empty">No models matched the search. Try a shorter keyword, '
+            + 'or enter an exact model name and click "↓ Download".</div>'
+          : '<div class="empty">No models to display.</div>');
   }else if(hidden){
-    html += '<div class="hidden-note">' + hidden + (hidden === 1 ? ' modell dold' : ' modeller dolda')
-          + ' som inte får plats på din hårdvara · '
-          + '<a onclick="showTooBig()">visa ändå</a></div>';
+    html += '<div class="hidden-note">' + hidden + (hidden === 1 ? ' model hidden' : ' models hidden')
+          + ' that do not fit your hardware · '
+          + '<a onclick="showTooBig()">show anyway</a></div>';
   }
   list.innerHTML = html;
 }
@@ -503,31 +482,31 @@ async function runSearch(q){
       (it.pull+' '+it.name+' '+it.tag+' '+it.desc).toLowerCase().includes(needle))
       .map(it=>Object.assign({source:'ollama'}, it)), hf: []};
   renderCatalog();
-  hint.textContent = 'Söker i Ollamas bibliotek och på Hugging Face…';
+  hint.textContent = 'Searching Ollama library and Hugging Face…';
   try{
     const r = await api('/api/search?q='+encodeURIComponent(q), {headers: headers(false)});
     const d = await r.json();
-    if(seq !== searchSeq) return;                     // ett nyare sök hann före
+    if(seq !== searchSeq) return;
     if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
     searchResults = d;
     const lib = (d.library||[]).length, hf = (d.hf||[]).length;
     hint.textContent = (lib+hf)
-      ? ((lib+hf)+' träffar · '+lib+' i Ollamas bibliotek, '+hf+' på Hugging Face')
-      : 'Inga träffar.';
+      ? ((lib+hf)+' results · '+lib+' in Ollama library, '+hf+' on Hugging Face')
+      : 'No results.';
     renderCatalog();
   }catch(e){
     if(seq !== searchSeq) return;
-    hint.textContent = 'Kunde inte söka på nätet ('+e.message
-      + ') – visar träffar ur den inbyggda listan.';
+    hint.textContent = 'Could not search online ('+e.message
+      + ') – showing results from built-in list.';
   }
 }
 
-/* ======================= AI-träning (Soup) ======================= */
-const TRAIN_META = __TRAIN_JSON__;      // basmodeller, uppgifter, hårdvaruprofiler
-let trainStatus = null;                 // senaste /api/train/status
+/* ======================= AI Training (Soup) ======================= */
+const TRAIN_META = __TRAIN_JSON__;
+let trainStatus = null;
 let trainForm = {task:'sft', profile:'4gb', epochs:3, max_length:1024, lr:'2e-5', lora_r:16};
-let trainRows = [];                     // tabellen i steg 1
-let trainTimer = null;                  // pollning under körning
+let trainRows = [];
+let trainTimer = null;
 let trainLogNext = 0;
 let trainYamlTimer = null;
 
@@ -535,21 +514,21 @@ function toggleTrainHelp(){
   const box = document.getElementById('trainHelp');
   const open = box.style.display === 'none';
   box.style.display = open ? 'block' : 'none';
-  document.getElementById('trHelpBtn').textContent = open ? '✕ Dölj instruktioner' : '📖 Instruktioner';
+  document.getElementById('trHelpBtn').textContent = open ? '✕ Hide instructions' : '📖 Instructions';
 }
 function toggleYaml(){
   const box = document.getElementById('trYamlBox');
   const open = box.style.display === 'none';
   box.style.display = open ? 'block' : 'none';
   document.getElementById('trYamlBtn').textContent = open
-    ? '⚙ Dölj konfigurationen' : '⚙ Visa konfigurationen (soup.yaml)';
+    ? '⚙ Hide configuration' : '⚙ Show configuration (soup.yaml)';
   if(open) refreshYaml();
 }
 function toggleTrainLog(){
   const box = document.getElementById('trLog');
   const open = box.style.display === 'none';
   box.style.display = open ? 'block' : 'none';
-  document.getElementById('trLogBtn').textContent = open ? '📜 Dölj logg' : '📜 Visa logg';
+  document.getElementById('trLogBtn').textContent = open ? '📜 Hide log' : '📜 Show log';
   if(open) box.scrollTop = box.scrollHeight;
 }
 
@@ -586,10 +565,10 @@ function renderTrainTop(){
   const pill = document.getElementById('trPillSoup');
   if(soup.found){
     pill.className = 'tr-pill ok';
-    pill.innerHTML = '✓ Soup <b>' + esc(soup.version || 'installerat') + '</b>';
+    pill.innerHTML = '✓ Soup <b>' + esc(soup.version || 'installed') + '</b>';
   }else{
     pill.className = 'tr-pill warn';
-    pill.innerHTML = '⚠ Soup är inte installerat';
+    pill.innerHTML = '⚠ Soup is not installed';
   }
   const gpu = document.getElementById('trPillGpu');
   if(s.gpu && s.gpu.vram_mb){
@@ -598,11 +577,11 @@ function renderTrainTop(){
       + (s.gpu.vram_mb/1024).toFixed(0) + ' GB VRAM';
   }else{
     gpu.className = 'tr-pill warn';
-    gpu.innerHTML = '🖥 Ingen GPU hittad – träning på CPU är långsam';
+    gpu.innerHTML = '🖥 No GPU found – training on CPU is slow';
   }
   const dir = document.getElementById('trPillDir');
   dir.innerHTML = '📁 <b>' + esc(s.workspace || '') + '</b>';
-  dir.title = 'Konfig, dataset och tränade modeller hamnar här';
+  dir.title = 'Config, dataset, and trained models are stored here';
 }
 
 function renderTrainSetup(){
@@ -611,24 +590,24 @@ function renderTrainSetup(){
   const job = s.job && s.job.kind === 'install' ? s.job : null;
   box.innerHTML =
     '<div class="tr-step"><div class="tr-num">0</div><div class="tr-body">'
-    + '<h2>Installera träningsmotorn</h2>'
-    + '<p class="sub">Själva träningen görs av <a href="' + esc(soup.url||'#') + '" target="_blank" '
-    + 'rel="noopener" style="color:var(--accent-hov)">Soup</a> – ett fristående open source-verktyg '
-    + 'som inte följer med Ollama Studio. Installera det en gång, sedan är det klart.</p>'
-    + '<div class="tr-note">Kommandot som körs: <code style="color:var(--accent-hov)">pip install "'
-    + esc(soup.package||'soup-cli[train]') + '"</code><br>Det laddar ner PyTorch och kringpaket '
-    + '(flera GB) och tar några minuter. Serverns Python är <b>' + esc(s.python||'?') + '</b>'
-    + (s.python_ok ? '' : ' – Soup kräver ' + esc(soup.python_needed||'3.10–3.12')
-        + ', så installationen kan misslyckas här') + '.</div>'
+    + '<h2>Install Training Engine</h2>'
+    + '<p class="sub">Training is performed by <a href="' + esc(soup.url||'#') + '" target="_blank" '
+    + 'rel="noopener" style="color:var(--accent-hov)">Soup</a> – an open source tool '
+    + 'not bundled with Ollama Studio. Install once and it is ready to use.</p>'
+    + '<div class="tr-note">Command executed: <code style="color:var(--accent-hov)">pip install "'
+    + esc(soup.package||'soup-cli[train]') + '"</code><br>Downloads PyTorch and related packages '
+    + '(several GB) and takes a few minutes. Server Python is <b>' + esc(s.python||'?') + '</b>'
+    + (s.python_ok ? '' : ' – Soup requires ' + esc(soup.python_needed||'3.10–3.12')
+        + ', so installation may fail here') + '.</div>'
     + '<div class="tr-actions">'
     + '<button class="btn accent" onclick="trainInstall()"' + (job && job.state==='kör' ? ' disabled' : '')
-    + '>⬇ Installera Soup</button>'
-    + '<span class="sub" style="margin:0">…eller kör kommandot själv på servern och klicka '
-    + '<a href="#" onclick="refreshTrainStatus();return false" style="color:var(--accent-hov)">uppdatera</a>.</span>'
+    + '>⬇ Install Soup</button>'
+    + '<span class="sub" style="margin:0">…or run the command yourself on the server and click '
+    + '<a href="#" onclick="refreshTrainStatus();return false" style="color:var(--accent-hov)">refresh</a>.</span>'
     + '</div></div></div>';
 }
 
-/* ---- Steg 1: data ---- */
+/* ---- Step 1: data ---- */
 function trainDataTab(which){
   for(const [tab, box] of [['trTabTable','trDataTable'],['trTabFile','trDataFile'],['trTabPaste','trDataPaste']]){
     const on = tab.toLowerCase().includes(which);
@@ -639,10 +618,10 @@ function trainDataTab(which){
 function renderTrainRows(){
   document.getElementById('trRows').innerHTML = trainRows.map((r,i)=>
     '<tr>'
-    + '<td><textarea placeholder="T.ex. Vad är vår returpolicy?" oninput="trainRowEdit('+i+',\'instruction\',this.value)">'+esc(r.instruction||'')+'</textarea></td>'
-    + '<td><textarea placeholder="(lämna tomt oftast)" oninput="trainRowEdit('+i+',\'input\',this.value)">'+esc(r.input||'')+'</textarea></td>'
-    + '<td><textarea placeholder="Svaret du vill få" oninput="trainRowEdit('+i+',\'output\',this.value)">'+esc(r.output||'')+'</textarea></td>'
-    + '<td><button class="del" title="Ta bort raden" onclick="trainDelRow('+i+')">✕</button></td></tr>').join('');
+    + '<td><textarea placeholder="E.g. What is our return policy?" oninput="trainRowEdit('+i+',\'instruction\',this.value)">'+esc(r.instruction||'')+'</textarea></td>'
+    + '<td><textarea placeholder="(leave empty usually)" oninput="trainRowEdit('+i+',\'input\',this.value)">'+esc(r.input||'')+'</textarea></td>'
+    + '<td><textarea placeholder="The desired answer" oninput="trainRowEdit('+i+',\'output\',this.value)">'+esc(r.output||'')+'</textarea></td>'
+    + '<td><button class="del" title="Delete row" onclick="trainDelRow('+i+')">✕</button></td></tr>').join('');
 }
 function trainRowEdit(i, field, value){ if(trainRows[i]) trainRows[i][field] = value; }
 function trainAddRow(){ trainRows.push({instruction:'',input:'',output:''}); renderTrainRows(); }
@@ -657,29 +636,29 @@ async function trainDataPost(body){
 }
 async function trainSaveRows(){
   const filled = trainRows.filter(r=>(r.instruction||'').trim() && (r.output||'').trim());
-  if(!filled.length){ toast('Fyll i minst en rad med fråga och svar', true); return; }
+  if(!filled.length){ toast('Please fill in at least one row with question and answer', true); return; }
   try{
-    const name = (document.getElementById('trDataName').value||'').trim() || 'mitt-dataset.jsonl';
+    const name = (document.getElementById('trDataName').value||'').trim() || 'my-dataset.jsonl';
     const d = await trainDataPost({action:'save', name, rows: filled});
     afterDatasetSaved(d);
-  }catch(e){ toast('Kunde inte spara: '+e.message, true); }
+  }catch(e){ toast('Could not save: '+e.message, true); }
 }
 async function trainSavePaste(){
   try{
-    const name = (document.getElementById('trPasteName').value||'').trim() || 'mitt-dataset.jsonl';
+    const name = (document.getElementById('trPasteName').value||'').trim() || 'my-dataset.jsonl';
     const d = await trainDataPost({action:'paste', name,
                                    content: document.getElementById('trPaste').value});
     afterDatasetSaved(d);
-  }catch(e){ toast('Kunde inte spara: '+e.message, true); }
+  }catch(e){ toast('Could not save: '+e.message, true); }
 }
 async function trainDemoData(){
   try{
-    const d = await trainDataPost({action:'demo', name:'exempeldata.jsonl'});
+    const d = await trainDataPost({action:'demo', name:'example-data.jsonl'});
     trainRows = TRAIN_META.demo_rows.map(r=>Object.assign({}, r));
     renderTrainRows();
     afterDatasetSaved(d);
-    toast('Exempeldata skapad – nu kan du köra hela flödet');
-  }catch(e){ toast('Kunde inte skapa exempeldata: '+e.message, true); }
+    toast('Demo data created – you can now run the entire flow');
+  }catch(e){ toast('Could not create demo data: '+e.message, true); }
 }
 function afterDatasetSaved(info){
   trainForm.data = info.path;
@@ -697,7 +676,7 @@ async function trainPickFile(){
     if(d.error) throw new Error(d.error);
     renderDataInfo(d);
   }catch(e){ document.getElementById('trDataInfo').innerHTML =
-    '<div class="tr-note bad">Kunde inte läsa filen: '+esc(e.message)+'</div>'; }
+    '<div class="tr-note bad">Could not read file: '+esc(e.message)+'</div>'; }
   refreshYaml(); updateTrainSteps();
 }
 function renderTrainFiles(){
@@ -705,24 +684,24 @@ function renderTrainFiles(){
   const files = (trainStatus.datasets||[]);
   sel.innerHTML = files.length
     ? files.map(f=>'<option value="'+esc(f.path)+'">'+esc(f.name)+'  ('+humanSize(f.size)+')</option>').join('')
-    : '<option value="">Inga filer i mappen data/ ännu</option>';
+    : '<option value="">No files in data/ directory yet</option>';
   if(trainForm.data && files.some(f=>f.path===trainForm.data)) sel.value = trainForm.data;
-  document.getElementById('trFileHint').innerHTML = 'Lägg egna filer i <code>'
-    + esc((trainStatus.workspace||'')+'/data') + '</code> på servern så dyker de upp här.';
+  document.getElementById('trFileHint').innerHTML = 'Place custom files in <code>'
+    + esc((trainStatus.workspace||'')+'/data') + '</code> on the server to show them here.';
 }
 function renderDataInfo(info){
   if(!info){ document.getElementById('trDataInfo').innerHTML=''; return; }
   const rows = (info.examples||[]).map(x=>
-    '<div class="row"><div class="q">▸ '+esc(x.in || '(ingen fråga)')+'</div>'
+    '<div class="row"><div class="q">▸ '+esc(x.in || '(no question)')+'</div>'
     + '<div class="a">→ '+esc(x.ut||'')+'</div></div>').join('');
   const probs = (info.problems||[]).map(p=>'<div class="tr-note warn">'+esc(p)+'</div>').join('');
   document.getElementById('trDataInfo').innerHTML =
-    '<div class="tr-note good">✓ <b>'+esc(info.path||'')+'</b> – '+info.rows+' rader · format <b>'
-    + esc(info.format)+'</b> · ca '+(info.est_tokens||0).toLocaleString('sv-SE')+' tokens</div>'
+    '<div class="tr-note good">✓ <b>'+esc(info.path||'')+'</b> – '+info.rows+' rows · format <b>'
+    + esc(info.format)+'</b> · approx '+(info.est_tokens||0).toLocaleString('en-US')+' tokens</div>'
     + probs + (rows ? '<div class="tr-prev">'+rows+'</div>' : '');
 }
 
-/* ---- Steg 2: modell och metod ---- */
+/* ---- Step 2: model and method ---- */
 function renderTrainPickers(){
   document.getElementById('trBases').innerHTML = TRAIN_META.bases.map(b=>
     '<div class="tr-pick" data-base="'+esc(b.id)+'" onclick="trainPickBase(\''+esc(b.id)+'\')">'
@@ -736,7 +715,7 @@ function renderTrainPickers(){
   document.getElementById('trProfiles').innerHTML = TRAIN_META.profiles.map(p=>
     '<div class="tr-pick" data-profile="'+esc(p.id)+'" onclick="trainPickProfile(\''+esc(p.id)+'\')">'
     + '<div class="t">'+esc(p.name)+'</div><div class="d">'+esc(p.desc)+'</div>'
-    + '<div class="s">'+esc(p.quantization)+(p.stream_layers?' · lagerströmning':'')
+    + '<div class="s">'+esc(p.quantization)+(p.stream_layers?' · layer streaming':'')
     + ' · LoRA r='+p.lora_r+' · '+p.max_length+' tokens</div></div>').join('');
 }
 function markPick(attr, value){
@@ -756,7 +735,7 @@ function trainPickTask(id){ trainForm.task = id; markPick('task', id); trainForm
 function trainPickProfile(id){
   trainForm.profile = id;
   const p = TRAIN_META.profiles.find(x=>x.id===id);
-  if(p){                                    // profilen sätter de tekniska fälten
+  if(p){
     trainForm.quantization = p.quantization; trainForm.stream_layers = p.stream_layers;
     trainForm.lora_r = p.lora_r; trainForm.lora_alpha = p.lora_alpha;
     trainForm.max_length = p.max_length; trainForm.batch_size = p.batch_size;
@@ -793,7 +772,7 @@ function trainFormChanged(){
   document.getElementById('trLoraRVal').textContent = trainForm.lora_r;
   updateTrainSteps();
   clearTimeout(trainYamlTimer);
-  trainYamlTimer = setTimeout(refreshYaml, 350);      // vänta ut skrivandet
+  trainYamlTimer = setTimeout(refreshYaml, 350);
 }
 async function refreshYaml(){
   try{
@@ -804,7 +783,7 @@ async function refreshYaml(){
   }catch(e){}
 }
 
-/* ---- Steg 3: körningen ---- */
+/* ---- Step 3: execution ---- */
 function updateTrainSteps(){
   const hasData = !!trainForm.data, hasModel = !!trainForm.base;
   document.getElementById('trNum1').classList.toggle('done', hasData);
@@ -819,11 +798,11 @@ function updateTrainSteps(){
   const busy = job && job.state === 'kör';
   btn.disabled = !hasData || !hasModel || !soupOk || busy;
   let hint = '';
-  if(!soupOk) hint = 'Installera Soup först (steg 0 ovan).';
-  else if(!hasData) hint = 'Välj eller spara ett dataset i steg 1.';
-  else if(!hasModel) hint = 'Välj en basmodell i steg 2.';
-  else if(busy) hint = 'En körning pågår.';
-  else hint = 'Tränar ' + (trainForm.base||'') + ' på ' + (trainForm.data||'') + '.';
+  if(!soupOk) hint = 'Install Soup first (step 0 above).';
+  else if(!hasData) hint = 'Select or save a dataset in step 1.';
+  else if(!hasModel) hint = 'Select a base model in step 2.';
+  else if(busy) hint = 'A training run is in progress.';
+  else hint = 'Training ' + (trainForm.base||'') + ' on ' + (trainForm.data||'') + '.';
   document.getElementById('trStartHint').textContent = hint;
 }
 async function trainStart(){
@@ -834,14 +813,14 @@ async function trainStart(){
     if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
     trainLogNext = 0;
     renderTrainJob(d.job); startTrainPolling(); updateTrainSteps();
-    toast('Träningen har startat');
-  }catch(e){ toast('Kunde inte starta: '+e.message, true); }
+    toast('Training has started');
+  }catch(e){ toast('Could not start: '+e.message, true); }
 }
 async function trainStop(){
   try{
     await api('/api/train/stop', {method:'POST', headers:headers(true), body:'{}'});
-    toast('Avbryter körningen…');
-  }catch(e){ toast('Kunde inte avbryta: '+e.message, true); }
+    toast('Cancelling run…');
+  }catch(e){ toast('Could not cancel: '+e.message, true); }
 }
 async function trainInstall(){
   try{
@@ -851,8 +830,8 @@ async function trainInstall(){
     trainLogNext = 0;
     renderTrainJob(d.job); startTrainPolling();
     document.getElementById('trLog').style.display = 'block';
-    toast('Installerar Soup – det tar några minuter');
-  }catch(e){ toast('Kunde inte installera: '+e.message, true); }
+    toast('Installing Soup – this will take a few minutes');
+  }catch(e){ toast('Could not install: '+e.message, true); }
 }
 async function trainExport(run){
   try{
@@ -862,8 +841,8 @@ async function trainExport(run){
     if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
     trainLogNext = 0;
     renderTrainJob(d.job); startTrainPolling();
-    toast('Exporterar till Ollama som "'+d.ollama_name+'"');
-  }catch(e){ toast('Kunde inte exportera: '+e.message, true); }
+    toast('Exporting to Ollama as "'+d.ollama_name+'"');
+  }catch(e){ toast('Could not export: '+e.message, true); }
 }
 function startTrainPolling(){
   if(trainTimer) return;
@@ -879,9 +858,9 @@ async function pollTrainJob(){
     if(d.job.state !== 'kör'){
       stopTrainPolling();
       refreshTrainStatus();
-      refresh();                                  // ev. ny modell i Ollama
-      if(d.job.state === 'klar') toast(d.job.label + ' – klart!');
-      else if(d.job.state === 'fel') toast(d.job.label + ' misslyckades', true);
+      refresh();
+      if(d.job.state === 'klar') toast(d.job.label + ' – done!');
+      else if(d.job.state === 'fel') toast(d.job.label + ' failed', true);
     }
   }catch(e){ stopTrainPolling(); }
 }
@@ -904,13 +883,12 @@ function renderTrainJob(job){
   document.getElementById('trEpoch').textContent = m.epoch != null ? m.epoch.toFixed(2) : '–';
   document.getElementById('trElapsed').textContent = fmtDuration(job.elapsed);
   document.getElementById('trEta').textContent = m.eta || '–';
-  const state = {'kör':'⏳ Kör…','klar':'✓ Klart','fel':'✕ Misslyckades','stoppad':'■ Avbruten'}[job.state] || job.state;
+  const state = {'kör':'⏳ Running…','klar':'✓ Done','fel':'✕ Failed','stoppad':'■ Stopped'}[job.state] || job.state;
   document.getElementById('trJobState').innerHTML = esc(state)
     + (job.error ? ' – <span style="color:var(--danger)">'+esc(job.error)+'</span>' : '');
   const chart = document.getElementById('trChart');
   chart.style.display = job.kind === 'train' ? '' : 'none';
   if(job.kind === 'train') drawLossChart(job.history || []);
-  // Steg/loss/epok är bara meningsfullt under träning
   document.getElementById('trStatsRow').style.display = job.kind === 'train' ? 'flex' : 'none';
   if(job.lines && job.lines.length){
     const box = document.getElementById('trLog');
@@ -929,7 +907,7 @@ function fmtDuration(sec){
 function drawLossChart(history){
   const svg = document.getElementById('trChart');
   if(!history.length){ svg.innerHTML = '<text x="300" y="60" fill="#4b5563" font-size="12" '
-    + 'text-anchor="middle">Loss-kurvan ritas när träningen kommit igång</text>'; return; }
+    + 'text-anchor="middle">Loss curve will be plotted once training starts</text>'; return; }
   const losses = history.map(p=>p.loss);
   const min = Math.min(...losses), max = Math.max(...losses), span = (max-min) || 1;
   const pts = history.map((p,i)=>{
@@ -941,31 +919,31 @@ function drawLossChart(history){
     '<polyline points="'+pts+'" fill="none" stroke="#7c5cff" stroke-width="2"/>'
     + '<text x="8" y="14" fill="#6b7280" font-size="10">loss '+max.toFixed(3)+'</text>'
     + '<text x="8" y="106" fill="#6b7280" font-size="10">'+min.toFixed(3)+'</text>'
-    + '<text x="592" y="106" fill="#6b7280" font-size="10" text-anchor="end">steg '
+    + '<text x="592" y="106" fill="#6b7280" font-size="10" text-anchor="end">step '
     + (history[history.length-1].step||history.length)+'</text>';
 }
 
-/* ---- Steg 4: färdiga modeller ---- */
+/* ---- Step 4: finished models ---- */
 function renderTrainRuns(){
   const runs = (trainStatus.runs||[]);
   const box = document.getElementById('trRuns');
   if(!runs.length){
-    box.innerHTML = '<div class="tr-note">Här dyker dina tränade modeller upp. Kör steg 1–3 först.</div>';
+    box.innerHTML = '<div class="tr-note">Your trained models will appear here. Run steps 1–3 first.</div>';
     return;
   }
   const busy = trainStatus.job && trainStatus.job.state === 'kör';
   box.innerHTML = runs.map(r=>{
     const inOllama = installed.has(r.ollama_name+':latest') || installed.has(r.ollama_name);
     const right = inOllama
-      ? '<span class="installed">✓ I Ollama</span>'
-        + '<button class="btn ghost small" onclick="chatWithModel(\''+esc(r.ollama_name)+'\')">💬 Chatta</button>'
+      ? '<span class="installed">✓ In Ollama</span>'
+        + '<button class="btn ghost small" onclick="chatWithModel(\''+esc(r.ollama_name)+'\')">💬 Chat</button>'
       : (r.has_model
           ? '<button class="btn accent small" onclick="trainExport(\''+esc(r.name)+'\')"'
-            + (busy?' disabled':'') + '>📦 Lägg in i Ollama</button>'
-          : '<span class="meta">Ingen färdig modell i mappen</span>');
+            + (busy?' disabled':'') + '>📦 Add to Ollama</button>'
+          : '<span class="meta">No model ready in folder</span>');
     return '<div class="tr-runitem"><div><div class="name">'+esc(r.name)+'</div>'
-      + '<div class="meta">'+esc(r.path)+' · '+(r.gguf?'GGUF klar · ':'')
-      + 'som <code>'+esc(r.ollama_name)+'</code></div></div>'
+      + '<div class="meta">'+esc(r.path)+' · '+(r.gguf?'GGUF ready · ':'')
+      + 'as <code>'+esc(r.ollama_name)+'</code></div></div>'
       + '<div class="right">'+right+'</div></div>';
   }).join('');
 }
@@ -976,55 +954,55 @@ function chatWithModel(name){
   if(match){ sel.value = match.value; saveChatModel(); }
 }
 
-/* ---- Hugging Face: kvantiseringar för ett repo (fälls ut i träfflistan) ---- */
-let hfQuants = {};             // repo -> kvantiseringar (hämtas vid utfällning)
+/* ---- Hugging Face: quantizations for a repo ---- */
+let hfQuants = {};
 async function hfToggleQuants(i){
   const m = hfModels[i]; if(!m) return;
   const box = document.getElementById('hfq'+i);
   if(box.style.display !== 'none'){ box.style.display='none'; return; }
   box.style.display='block';
   if(!hfQuants[m.id]){
-    box.innerHTML = '<div class="hf-meta">Hämtar filer…</div>';
+    box.innerHTML = '<div class="hf-meta">Fetching files…</div>';
     try{
       const r = await api('/api/hf/files?repo='+encodeURIComponent(m.id), {headers: headers(false)});
       const d = await r.json();
       if(!r.ok || d.error) throw new Error(d.error || ('HTTP '+r.status));
       hfQuants[m.id] = d;
     }catch(e){
-      box.innerHTML = '<div class="hf-meta">Kunde inte läsa filerna: '+esc(e.message)+'</div>';
+      box.innerHTML = '<div class="hf-meta">Could not read files: '+esc(e.message)+'</div>';
       return;
     }
   }
   const d = hfQuants[m.id];
   const rows = (d.quants||[]).map(q=>{
-    const size = q.size ? humanSize(q.size) : 'okänd storlek';
-    const parts = q.parts > 1 ? ('  ·  '+q.parts+' delar') : '';
-    const dflt = (q.quant === d.default) ? ' <span class="chip">standard</span>' : '';
+    const size = q.size ? humanSize(q.size) : 'unknown size';
+    const parts = q.parts > 1 ? ('  ·  '+q.parts+' parts') : '';
+    const dflt = (q.quant === d.default) ? ' <span class="chip">default</span>' : '';
     return '<div class="hf-quant"><span class="q">'+esc(q.quant)+'</span>'
       + '<span class="sz">'+esc(size)+esc(parts)+'</span>'+dflt
-      + '<button class="btn ghost small" onclick="startPull(\''+esc(q.pull)+'\')">↓ Installera</button></div>';
+      + '<button class="btn ghost small" onclick="startPull(\''+esc(q.pull)+'\')">↓ Install</button></div>';
   }).join('');
-  box.innerHTML = rows || '<div class="hf-meta">Inga GGUF-filer i det här repot.</div>';
+  box.innerHTML = rows || '<div class="hf-meta">No GGUF files in this repository.</div>';
 }
 
-/* ---- Installera / ladda ner (strömmar status från servern) ---- */
+/* ---- Install / download ---- */
 function pullCustom(){
   const n = document.getElementById('customName').value.trim();
-  if(!n){ toast('Skriv ett modellnamn först', true); return; }
+  if(!n){ toast('Enter a model name first', true); return; }
   startPull(n);
 }
 async function startPull(name){
-  if(pullController){ toast('En nedladdning pågår redan', true); return; }
+  if(pullController){ toast('A download is already in progress', true); return; }
   showView('discover');
   const panel = document.getElementById('dlPanel');
   panel.classList.add('show');
-  document.getElementById('dlTitle').textContent = 'Laddar ner  '+name;
+  document.getElementById('dlTitle').textContent = 'Downloading  '+name;
   document.getElementById('dlPct').textContent = '';
-  document.getElementById('dlStatus').textContent = 'Förbereder…';
+  document.getElementById('dlStatus').textContent = 'Preparing…';
   document.getElementById('dlExtra').innerHTML = '';
   pullHf = null; pullError = null;
   const bar = document.getElementById('dlBar'); bar.style.width='0'; bar.style.background='var(--accent)';
-  document.getElementById('dlCancel').textContent = 'Avbryt';
+  document.getElementById('dlCancel').textContent = 'Cancel';
 
   pullController = new AbortController();
   try{
@@ -1051,7 +1029,7 @@ async function startPull(name){
   }
 }
 function onProgress(m){
-  if(m.hf){ showHfSwitch(m.hf); return; }        // servern bytte källa till Hugging Face
+  if(m.hf){ showHfSwitch(m.hf); return; }
   const status = m.status || '';
   if(m.total && m.completed != null){
     const f = m.completed/m.total;
@@ -1063,27 +1041,27 @@ function onProgress(m){
     if(status.includes('success')) document.getElementById('dlBar').style.width='100%';
   }
   if(m.error){
-    pullError = m.error;                       // avgör utfallet när strömmen tar slut
-    document.getElementById('dlStatus').textContent = 'Fel: '+m.error;
+    pullError = m.error;
+    document.getElementById('dlStatus').textContent = 'Error: '+m.error;
   }
 }
-let pullHf = null;      // Hugging Face-träffen servern valde (om den bytte källa)
-let pullError = null;   // sista felraden i strömmen (en ström kan sluta med fel)
+let pullHf = null;
+let pullError = null;
 function showHfSwitch(hf){
   pullHf = hf;
   const size = hf.size ? ('  ·  ' + humanSize(hf.size)) : '';
   const quant = hf.quant ? ('  ·  ' + hf.quant) : '';
   let html = '🤗 Hugging Face: <a href="'+esc(hf.url||'')+'" target="_blank" rel="noopener" '
     + 'style="color:var(--accent-hov)">'+esc(hf.repo)+'</a>'+esc(quant)+esc(size);
-  if(hf.gated) html += '<br><span style="color:var(--amber)">⚠ Repot är gated – du måste '
-    + 'godkänna villkoren på Hugging Face först.</span>';
+  if(hf.gated) html += '<br><span style="color:var(--amber)">⚠ Repository is gated – you must '
+    + 'accept terms on Hugging Face first.</span>';
   const alts = hf.alternatives || [];
   if(alts.length){
-    html += '<br>Andra träffar: ' + alts.map(a =>
+    html += '<br>Other results: ' + alts.map(a =>
       '<a href="#" onclick="startPull(\''+esc(a.pull)+'\');return false" '
       + 'style="color:var(--subtle)">'+esc(a.id)+'</a>').join('  ·  ');
   }
-  if(hf.auto) document.getElementById('dlTitle').textContent = 'Laddar ner  ' + (hf.pull || hf.repo);
+  if(hf.auto) document.getElementById('dlTitle').textContent = 'Downloading  ' + (hf.pull || hf.repo);
   document.getElementById('dlExtra').innerHTML = html;
 }
 function pullDone(name, outcome, detail){
@@ -1093,21 +1071,21 @@ function pullDone(name, outcome, detail){
   if(outcome==='success'){
     bar.style.width='100%'; bar.style.background='var(--green)';
     document.getElementById('dlPct').textContent='100%';
-    document.getElementById('dlTitle').textContent='✓  '+shown+' installerad';
-    document.getElementById('dlStatus').textContent='Klar! Modellen finns nu under "Mina modeller".';
+    document.getElementById('dlTitle').textContent='✓  '+shown+' installed';
+    document.getElementById('dlStatus').textContent='Done! The model is now available under "My Models".';
     document.getElementById('customName').value='';
-    toast('"'+shown+'" installerad');
+    toast('"'+shown+'" installed');
   }else if(outcome==='cancelled'){
-    document.getElementById('dlTitle').textContent='Avbruten';
-    document.getElementById('dlStatus').textContent='Nedladdningen avbröts.';
+    document.getElementById('dlTitle').textContent='Cancelled';
+    document.getElementById('dlStatus').textContent='Download was cancelled.';
     bar.style.background='var(--faint)';
   }else{
-    document.getElementById('dlTitle').textContent='Nedladdning misslyckades';
-    document.getElementById('dlStatus').textContent = detail || 'Ett fel uppstod.';
+    document.getElementById('dlTitle').textContent='Download failed';
+    document.getElementById('dlStatus').textContent = detail || 'An error occurred.';
     bar.style.background='var(--danger)';
-    toast('Misslyckades', true);
+    toast('Failed', true);
   }
-  cancel.textContent='Stäng';
+  cancel.textContent='Close';
   refresh();
 }
 function cancelPull(){
@@ -1115,25 +1093,25 @@ function cancelPull(){
   else { document.getElementById('dlPanel').classList.remove('show'); }
 }
 
-/* ---- Avinstallera ---- */
+/* ---- Uninstall ---- */
 let deleteTarget = null;
 function confirmDelete(name){
   deleteTarget = name;
-  document.getElementById('mTitle').textContent = 'Avinstallera modell?';
+  document.getElementById('mTitle').textContent = 'Uninstall model?';
   document.getElementById('mBody').textContent =
-    'Vill du ta bort "'+name+'"?\n\nModellfilerna raderas permanent från disken.\nDu kan alltid ladda ner den igen senare.';
+    'Do you want to delete "'+name+'"?\n\nModel files will be permanently removed from disk.\nYou can always download it again later.';
   document.getElementById('overlay').classList.add('show');
 }
 function closeModal(){ document.getElementById('overlay').classList.remove('show'); deleteTarget=null; }
 document.getElementById('mConfirm').onclick = async ()=>{
   const name = deleteTarget; closeModal();
   if(!name) return;
-  setStatus('Tar bort '+name+'…', 'var(--amber)');
+  setStatus('Removing '+name+'…', 'var(--amber)');
   try{
     const r = await api('/api/delete', {method:'POST', headers:headers(true), body: JSON.stringify({name})});
     if(!r.ok) throw new Error('HTTP '+r.status);
-    toast('"'+name+'" avinstallerad');
-  }catch(e){ toast('Kunde inte ta bort: '+e.message, true); }
+    toast('"'+name+'" uninstalled');
+  }catch(e){ toast('Could not delete: '+e.message, true); }
   refresh();
 };
 
@@ -1143,21 +1121,21 @@ function populateChatModels(){
   if(!sel) return;
   const names = lastModels.map(m=>m.name);
   const cur = sel.value;
-  if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
+  if(!names.length){ sel.innerHTML = '<option value="">No models installed</option>'; return; }
   sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
   const saved = uiPrefs.chat_model || '';
-  if(cur && names.includes(cur)) sel.value = cur;                 // behåll aktivt val
-  else if(saved && names.includes(saved)) sel.value = saved;      // ihågkommet val (databas)
+  if(cur && names.includes(cur)) sel.value = cur;
+  else if(saved && names.includes(saved)) sel.value = saved;
   else{
-    const active = [...running.keys()][0];   // annars den som redan är i minnet
+    const active = [...running.keys()][0];
     sel.value = (active && names.includes(active)) ? active : names[0];
   }
 }
 function saveChatModel(){ savePref('chat_model', document.getElementById('chatModel').value); }
 function autoGrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
 
-/* ---- Bildbilagor (vision-modeller, t.ex. llava) ---- */
-let pendingImages = [];   // dataUrls som väntar på att skickas
+/* ---- Image attachments (vision models, e.g. llava) ---- */
+let pendingImages = [];
 function onChatFiles(ev){
   const files = Array.from(ev.target.files || []);
   files.forEach(f=>{
@@ -1166,7 +1144,7 @@ function onChatFiles(ev){
     reader.onload = ()=>{ pendingImages.push(reader.result); renderAttachments(); };
     reader.readAsDataURL(f);
   });
-  ev.target.value = '';   // tillåt att välja samma fil igen
+  ev.target.value = '';
 }
 function removeAttachment(i){ pendingImages.splice(i, 1); renderAttachments(); }
 function renderAttachments(){
@@ -1175,14 +1153,14 @@ function renderAttachments(){
   if(!pendingImages.length){ el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = 'flex';
   el.innerHTML = pendingImages.map((d, i)=>
-    '<div class="thumb"><img src="'+d+'"><button title="Ta bort" onclick="removeAttachment('+i+')">✕</button></div>').join('');
+    '<div class="thumb"><img src="'+d+'"><button title="Remove" onclick="removeAttachment('+i+')">✕</button></div>').join('');
 }
 function stripDataUrl(d){ return (''+d).replace(/^data:[^;]+;base64,/, ''); }
 
 function renderChat(){
   const box = document.getElementById('chatMessages');
   if(!chatMessages.length){
-    box.innerHTML = '<div class="chat-empty">Välj en modell och skriv ett meddelande för att börja chatta.</div>';
+    box.innerHTML = '<div class="chat-empty">Select a model and type a message to start chatting.</div>';
     return;
   }
   box.innerHTML = chatMessages.map(m=>{
@@ -1198,7 +1176,7 @@ function renderChat(){
   box.scrollTop = box.scrollHeight;
 }
 
-/* ---- Enkel, säker Markdown-rendering (kod, rubriker, listor, fetstil m.m.) ---- */
+/* ---- Markdown rendering ---- */
 function fmtStats(s){
   const p = [];
   if(s.tps) p.push(s.tps.toFixed(1)+' tok/s');
@@ -1208,7 +1186,6 @@ function fmtStats(s){
   return p.join('  ·  ');
 }
 function mdInline(s){
-  // Dela på inline-kod (`...`) och formatera bara texten mellan – inga platshållare behövs
   const parts = s.split(/(`[^`]+`)/g);
   return parts.map(seg=>{
     if(seg.length > 1 && seg[0] === '`' && seg[seg.length-1] === '`'){
@@ -1231,7 +1208,7 @@ function mdToHtml(src){
     if(fence){
       if(!inCode){ inCode = true; codeBuf = []; }
       else { inCode = false; closeList();
-        html += '<pre class="code"><button class="copy" onclick="copyCode(this)">Kopiera</button><code>'
+        html += '<pre class="code"><button class="copy" onclick="copyCode(this)">Copy</button><code>'
               + codeBuf.join('\n') + '</code></pre>'; }
       i++; continue;
     }
@@ -1243,7 +1220,7 @@ function mdToHtml(src){
     if(line.trim()===''){ closeList(); i++; continue; }
     closeList(); html += '<p>'+mdInline(line)+'</p>'; i++;
   }
-  if(inCode){ html += '<pre class="code"><code>'+codeBuf.join('\n')+'</code></pre>'; }  // ofullständigt block
+  if(inCode){ html += '<pre class="code"><code>'+codeBuf.join('\n')+'</code></pre>'; }
   closeList();
   return html;
 }
@@ -1252,7 +1229,7 @@ function copyCode(btn){
   const text = code ? code.textContent : '';
   if(navigator.clipboard){
     navigator.clipboard.writeText(text).then(()=>{
-      btn.textContent = 'Kopierat!'; setTimeout(()=>{ btn.textContent = 'Kopiera'; }, 1500);
+      btn.textContent = 'Copied!'; setTimeout(()=>{ btn.textContent = 'Copy'; }, 1500);
     }).catch(()=>{});
   }
 }
@@ -1265,7 +1242,7 @@ async function sendChat(){
   const model = document.getElementById('chatModel').value;
   const input = document.getElementById('chatInput');
   const text = input.value.trim();
-  if(!model){ toast('Ingen modell vald', true); return; }
+  if(!model){ toast('No model selected', true); return; }
   if(chatController) return;
   if(!text && !pendingImages.length) return;
 
@@ -1279,8 +1256,7 @@ async function sendChat(){
   renderChat();
   const box = document.getElementById('chatMessages');
   const send = document.getElementById('chatSend');
-  send.textContent = 'Stoppa';
-  // Under strömning visas råtext – behåll radbrytningar tills markdown renderas vid klar
+  send.textContent = 'Stop';
   if(box.lastChild) box.lastChild.style.whiteSpace = 'pre-wrap';
 
   const backend = document.getElementById('chatBackend').value || undefined;
@@ -1289,7 +1265,7 @@ async function sendChat(){
     const sys = chatSystemPrompt();
     const convo = chatMessages.slice(0, idx).map(m=>{
       const mm = {role:m.role, content:m.content};
-      if(m.images && m.images.length) mm.images = m.images.map(stripDataUrl);  // Ollama vill ha rå base64
+      if(m.images && m.images.length) mm.images = m.images.map(stripDataUrl);
       return mm;
     });
     const msgs = sys ? [{role:'system', content:sys}].concat(convo) : convo;
@@ -1313,14 +1289,14 @@ async function sendChat(){
         try{
           const msg = JSON.parse(line);
           if(msg.status === 'searching'){
-            if(box.lastChild) box.lastChild.textContent = '🔎 Söker på nätet'
-              + (msg.query ? ': ”'+msg.query+'”' : '') + '…';
+            if(box.lastChild) box.lastChild.textContent = '🔎 Searching the web'
+              + (msg.query ? ': “'+msg.query+'”' : '') + '…';
             box.scrollTop = box.scrollHeight;
             continue;
           }
           if(msg.status === 'reading'){
-            if(box.lastChild) box.lastChild.textContent = '📄 Läser '
-              + (msg.count || '') + ' sidor…';
+            if(box.lastChild) box.lastChild.textContent = '📄 Reading '
+              + (msg.count || '') + ' pages…';
             box.scrollTop = box.scrollHeight;
             continue;
           }
@@ -1337,20 +1313,20 @@ async function sendChat(){
               gpu: (document.getElementById('chatBackend').value || '')
             };
           }
-          if(msg.error){ chatMessages[idx].content += '\n[Fel: '+msg.error+']'; }
+          if(msg.error){ chatMessages[idx].content += '\n[Error: '+msg.error+']'; }
         }catch(e){}
       }
     }
-    if(!chatMessages[idx].content) chatMessages[idx].content = '(inget svar)';
+    if(!chatMessages[idx].content) chatMessages[idx].content = '(no response)';
     renderChat();
-    if(memory) memWrite(text, chatMessages[idx].content);   // spara utbytet i delat minne
+    if(memory) memWrite(text, chatMessages[idx].content);
   }catch(e){
-    if(e.name === 'AbortError') chatMessages[idx].content += '  [avbruten]';
-    else { chatMessages[idx].content = '[Fel: '+e.message+']'; toast('Chatt misslyckades', true); }
+    if(e.name === 'AbortError') chatMessages[idx].content += '  [cancelled]';
+    else { chatMessages[idx].content = '[Error: '+e.message+']'; toast('Chat failed', true); }
     renderChat();
   }finally{
     chatController = null;
-    document.getElementById('chatSend').textContent = 'Skicka';
+    document.getElementById('chatSend').textContent = 'Send';
     saveCurrentConvo();
   }
 }
@@ -1360,7 +1336,7 @@ document.getElementById('chatInput').addEventListener('keydown', e=>{
   if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); sendChat(); }
 });
 
-/* ---- Chattinställningar: systemprompt, temperatur, kontextlängd ---- */
+/* ---- Chat settings: system prompt, temperature, context length ---- */
 function toggleChatSettings(){
   const el = document.getElementById('chatSettings');
   el.style.display = (el.style.display === 'none' || !el.style.display) ? 'block' : 'none';
@@ -1375,11 +1351,9 @@ function chatOptions(){
   return o;
 }
 (function csInit(){
-  // Standard tills prefs laddats från databasen (applyPrefs kan sedan skriva över).
-  document.getElementById('csWebsearch').checked = true;   // på om servern stödjer det
+  document.getElementById('csWebsearch').checked = true;
   document.getElementById('csMemory').checked = true;
   document.getElementById('csTempVal').textContent = document.getElementById('csTemp').value;
-  // Ändringar sparas i serverns databas (prefs).
   document.getElementById('csSystem').addEventListener('input', e=>savePrefDebounced('chat_system', e.target.value));
   document.getElementById('csTemp').addEventListener('input', e=>{
     document.getElementById('csTempVal').textContent = e.target.value; savePrefDebounced('chat_temp', e.target.value);
@@ -1391,7 +1365,7 @@ function chatOptions(){
     e=>savePref('chat_memory', e.target.checked ? '1' : '0'));
 })();
 
-/* ---- Sparade konversationer (localStorage) ---- */
+/* ---- Saved conversations (localStorage) ---- */
 let conversations = [];
 let currentConvoId = null;
 function loadConvos(){
@@ -1400,22 +1374,22 @@ function loadConvos(){
 }
 function persistConvos(){
   try{
-    conversations = conversations.slice(0, 50);   // behåll de 50 senaste
+    conversations = conversations.slice(0, 50);
     localStorage.setItem('os_convos', JSON.stringify(conversations));
   }catch(e){}
 }
 function renderConvoSelect(){
   const sel = document.getElementById('convoSelect');
   if(!sel) return;
-  if(!conversations.length){ sel.innerHTML = '<option value="">(inga sparade)</option>'; sel.value = ''; return; }
-  const opts = conversations.map(c=>'<option value="'+c.id+'">'+esc(c.title||'Namnlös')+'</option>').join('');
-  sel.innerHTML = (currentConvoId ? '' : '<option value="">Ny konversation</option>') + opts;
+  if(!conversations.length){ sel.innerHTML = '<option value="">(none saved)</option>'; sel.value = ''; return; }
+  const opts = conversations.map(c=>'<option value="'+c.id+'">'+esc(c.title||'Untitled')+'</option>').join('');
+  sel.innerHTML = (currentConvoId ? '' : '<option value="">New conversation</option>') + opts;
   sel.value = currentConvoId || '';
 }
 function convoTitleFrom(msgs){
   const u = msgs.find(m=>m.role==='user');
-  let t = u ? u.content.trim().replace(/\s+/g,' ') : 'Ny konversation';
-  return t.length > 40 ? t.slice(0,40)+'…' : (t || 'Ny konversation');
+  let t = u ? u.content.trim().replace(/\s+/g,' ') : 'New conversation';
+  return t.length > 40 ? t.slice(0,40)+'…' : (t || 'New conversation');
 }
 function saveCurrentConvo(){
   if(!chatMessages.length) return;
@@ -1425,16 +1399,15 @@ function saveCurrentConvo(){
     c = { id: currentConvoId || (''+now), title: convoTitleFrom(chatMessages) };
     currentConvoId = c.id;
   } else {
-    conversations = conversations.filter(x=>x.id !== c.id);   // flytta överst
+    conversations = conversations.filter(x=>x.id !== c.id);
   }
   conversations.unshift(c);
-  // Spara text/statistik men inte bilddata (skulle snabbt fylla localStorage)
   c.messages = JSON.parse(JSON.stringify(chatMessages)).map(m=>{ delete m.images; return m; });
   c.model = document.getElementById('chatModel').value;
   c.backend = document.getElementById('chatBackend').value;
   c.updatedAt = now;
   persistConvos();
-  setActiveConvo(currentConvoId);   // kom ihåg vilken chatt som var öppen (för omladdning)
+  setActiveConvo(currentConvoId);
   renderConvoSelect();
 }
 function setActiveConvo(id){
@@ -1442,19 +1415,18 @@ function setActiveConvo(id){
        else localStorage.removeItem('os_active_convo'); }catch(e){}
 }
 function restoreActiveConvo(){
-  // Återställ den senast öppna chatten vid omladdning så den inte försvinner.
   let id = '';
   try{ id = localStorage.getItem('os_active_convo') || ''; }catch(e){}
   const c = id && conversations.find(x=>x.id === id);
   if(c){ chatMessages = JSON.parse(JSON.stringify(c.messages || [])); currentConvoId = id; }
 }
 function clearChatConfirm(){
-  if(!chatMessages.length){ toast('Chatten är redan tom'); return; }
-  if(!confirm('Töm den här chatten? Meddelandena tas bort.')) return;
+  if(!chatMessages.length){ toast('Chat is already empty'); return; }
+  if(!confirm('Clear this chat? Messages will be deleted.')) return;
   if(chatController) chatController.abort();
   chatMessages = [];
   if(currentConvoId){
-    conversations = conversations.filter(x=>x.id !== currentConvoId);   // ta bort sparad kopia
+    conversations = conversations.filter(x=>x.id !== currentConvoId);
     persistConvos();
     currentConvoId = null;
   }
@@ -1500,16 +1472,16 @@ function deleteConversation(){
   newConversation();
 }
 function renameConversation(){
-  if(!currentConvoId){ toast('Ingen sparad konversation vald', true); return; }
+  if(!currentConvoId){ toast('No saved conversation selected', true); return; }
   const c = conversations.find(x=>x.id === currentConvoId);
   if(!c) return;
-  const t = prompt('Namn på konversationen:', c.title || '');
+  const t = prompt('Conversation name:', c.title || '');
   if(t !== null){ c.title = t.trim() || c.title; persistConvos(); renderConvoSelect(); }
 }
 loadConvos();
-restoreActiveConvo();   // återställ den senast öppna chatten vid omladdning
+restoreActiveConvo();
 
-/* ---- Varning: får modellen plats på vald GPU? ---- */
+/* ---- Warning: does the model fit on the selected GPU? ---- */
 function modelSizeBytes(name){
   const m = lastModels.find(x=>x.name===name);
   return m ? (Number(m.size)||0) : 0;
@@ -1534,7 +1506,7 @@ async function updateChatWarning(){
     if(r.ok) lastSystem = await r.json();
   }catch(e){}
   const gpus = (lastSystem && lastSystem.gpus) || [];
-  if(!gpus.length) return;                       // ingen GPU-info -> ingen varning
+  if(!gpus.length) return;
 
   let g = null;
   const idx = selectedBackendGpu();
@@ -1545,24 +1517,24 @@ async function updateChatWarning(){
   const totalB = g.mem_total_mb * 1024*1024;
   const usedB  = (g.mem_used_mb || 0) * 1024*1024;
   const freeB  = Math.max(0, totalB - usedB);
-  const needB  = size * 1.15;                     // uppskattat: vikter + lite overhead
+  const needB  = size * 1.15;
   const label  = (document.getElementById('chatBackend').value) || (g.name || ('GPU '+g.index));
 
   let cls, msg;
   if(needB > totalB){
     cls = 'err';
-    msg = '⚠ Modellen får inte plats på ' + esc(label) + ' (' + humanSize(totalB) + '). '
-        + 'Den behöver ~' + humanSize(needB) + ' och skulle då köras delvis på CPU (långsamt). '
-        + 'Välj en mindre modell eller ett kort med mer VRAM.';
+    msg = '⚠ Model does not fit on ' + esc(label) + ' (' + humanSize(totalB) + '). '
+        + 'It requires ~' + humanSize(needB) + ' and would run partially on CPU (slow). '
+        + 'Select a smaller model or a card with more VRAM.';
   } else if(needB > freeB){
     cls = 'warn';
-    msg = '⚠ Kan bli trångt på ' + esc(label) + ': ~' + humanSize(needB) + ' behövs men bara '
-        + humanSize(freeB) + ' ledigt just nu (' + humanSize(totalB) + ' totalt). '
-        + 'Frigör en modell eller välj en annan GPU.';
+    msg = '⚠ May be tight on ' + esc(label) + ': ~' + humanSize(needB) + ' needed but only '
+        + humanSize(freeB) + ' free right now (' + humanSize(totalB) + ' total). '
+        + 'Unload a model or select another GPU.';
   } else {
     cls = 'ok';
-    msg = '✓ Får plats på ' + esc(label) + ': ~' + humanSize(needB) + ' behövs, '
-        + humanSize(freeB) + ' ledigt av ' + humanSize(totalB) + '.';
+    msg = '✓ Fits on ' + esc(label) + ': ~' + humanSize(needB) + ' needed, '
+        + humanSize(freeB) + ' free of ' + humanSize(totalB) + '.';
   }
   el.className = 'chatwarn ' + cls;
   el.innerHTML = msg;
@@ -1574,9 +1546,8 @@ document.getElementById('chatBackend').addEventListener('change', updateChatWarn
 document.getElementById('chatBackend').addEventListener('change',
   ()=>savePref('chat_backend', document.getElementById('chatBackend').value));
 
-// Uppdatera "aktiv modell" automatiskt var 5:e sekund (den kan laddas/frigöras när som helst)
 async function refreshRunning(){
-  if(AUTH && !token) return;         // undvik upprepade token-frågor
+  if(AUTH && !token) return;
   if(!lastModels.length) return;
   try{
     const pr = await fetch('/api/running', {headers: headers(false)});
@@ -1585,65 +1556,58 @@ async function refreshRunning(){
     const next = buildRunning(pd.models);
     if(runSig(next) !== runSig(running)){ running = next; renderModels(lastModels); }
     else running = next;
-  }catch(e){ /* tyst – nästa intervall försöker igen */ }
+  }catch(e){}
 }
 setInterval(refreshRunning, 5000);
 
-/* ---- Backends (GPU-instanser) ---- */
+/* ---- Backends (GPU instances) ---- */
 async function loadConfig(){
   try{
     const r = await fetch('/api/config', {headers: headers(false)});
     if(r.ok) cfg = await r.json();
   }catch(e){}
   populateBackends();
-  // Visa webbsök-inställningen bara om servern stödjer det
   const wsRow = document.getElementById('csWebsearchRow');
   if(wsRow) wsRow.style.display = cfg.websearch ? 'flex' : 'none';
-  // Visa minnes-inställningen bara om servern har Mem0 konfigurerat
   const memRow = document.getElementById('csMemoryRow');
   if(memRow) memRow.style.display = cfg.memory ? 'flex' : 'none';
   const memTools = document.getElementById('csMemoryTools');
   if(memTools) memTools.style.display = cfg.memory ? 'block' : 'none';
-  updateCodeView();   // Codex-fliken syns alltid; visa av-läge om den inte är påslagen
-  updateHfView();     // Hugging Face-sök syns bara om stödet är påslaget
-  updateTrainNav();   // AI-träningsfliken kräver soup_train.py
+  updateCodeView();
+  updateHfView();
+  updateTrainNav();
 }
 function updateTrainNav(){
-  // AI-träningen är DOLD som standard – appen fokuserar på Codex. Slå på den under
-  // ⚙ Inställningar → AI-träning ("Visa AI-träning i menyn"). Fliken kräver dessutom
-  // att soup_train.py ligger bredvid appen.
   const nav = document.getElementById('nav-train');
   const show = !!(cfg.train_module && cfg.train_menu);
   if(nav) nav.style.display = show ? '' : 'none';
-  // Står man i den dolda vyn när den göms: gå tillbaka till Codex.
   if(!show && document.getElementById('nav-train')
      && document.getElementById('nav-train').classList.contains('active')) showView('code');
 }
 function updateHfView(){
-  // Ett sökfält för allt – texten säger bara vilka källor som är påslagna.
   const hint = document.getElementById('customHint');
   if(!hint) return;
   hint.textContent = cfg.hf
-    ? 'Sök bland modeller i Ollamas bibliotek och på Hugging Face – träffarna visas nedan. '
-      + 'Skriver du ett exakt namn (även "hf.co/ägare/repo:Q4_K_M" eller en Hugging Face-länk) '
-      + 'laddar knappen ner det direkt.'
-    : 'Sök bland modeller i Ollamas bibliotek – träffarna visas nedan. Skriver du ett exakt '
-      + 'namn laddar knappen ner det direkt.';
+    ? 'Search models in Ollama library and Hugging Face – results appear below. '
+      + 'Entering an exact name (e.g. "hf.co/owner/repo:Q4_K_M" or Hugging Face URL) '
+      + 'downloads it directly.'
+    : 'Search models in Ollama library – results appear below. Entering an exact '
+      + 'name downloads it directly.';
 }
 function updateCodeView(){
   const off = document.getElementById('codeOff');
   const wrap = document.getElementById('codeWrap');
-  const on = !!cfg.code;                        // växeln på → vyn funkar
-  const ws = !!cfg.code_ws || !!localDir;       // server-arbetsyta ELLER lokal mapp → fil-träd/spara
+  const on = !!cfg.code;
+  const ws = !!cfg.code_ws || !!localDir;
   if(wrap) wrap.style.display = on ? 'flex' : 'none';
   if(off){
     off.style.display = on ? 'none' : 'block';
     if(!on){
-      off.innerHTML = '<h2>💻 Codex är avstängd</h2>'
-        + '<p>Codex hjälper dig skriva kod. Slå på den under Inställningar.<br>'
-        + 'Utan en arbetsyta funkar den som en kod-chatt; med en arbetsyta (på servern eller '
-        + 'en lokal mapp i webbläsaren) kan den läsa projektet och spara ändringar.</p>'
-        + '<button class="btn accent" onclick="showView(\'settings\')">Öppna Inställningar</button>';
+      off.innerHTML = '<h2>💻 Codex is disabled</h2>'
+        + '<p>Codex helps you write code. Enable it under Settings.<br>'
+        + 'Without a workspace it functions as a code chat; with a workspace (on server or '
+        + 'a local folder in browser) it can read the project and save edits.</p>'
+        + '<button class="btn accent" onclick="showView(\'settings\')">Open Settings</button>';
     }
   }
   const tree = document.querySelector('#view-code .code-tree');
@@ -1653,17 +1617,15 @@ function updateCodeView(){
   const noWs = document.getElementById('codeNoWs');
   if(noWs){
     noWs.style.display = (on && !ws) ? 'block' : 'none';
-    // Skilj "ingen arbetsyta vald" från "vald men hittades inte" – annars letar
-    // man efter fel sak (t.ex. bland tokens) när sökvägen bara är felstavad.
-    const settingsLink = '<a href="#" onclick="showView(\'settings\');return false">Inställningar</a>';
+    const settingsLink = '<a href="#" onclick="showView(\'settings\');return false">Settings</a>';
     noWs.innerHTML = (cfg.code_ws_set && !cfg.code_ws)
-      ? '⚠ Arbetsytan <code>' + esc(cfg.code_ws_path || '') + '</code> hittades inte på servern ('
-        + esc(cfg.server_os || '?') + '). Codex kan därför bara skissa kod. Kontrollera att '
-        + 'sökvägen finns <b>på servern</b> där appen körs, och att den går att läsa – rätta '
-        + 'den i ' + settingsLink + '.'
-      : '💡 Skisslage – ingen arbetsyta vald. Codex skriver kod åt dig men kan inte läsa '
-        + 'projektet eller spara till disk. Kopiera koden, eller välj en arbetsyta i '
-        + settingsLink + ' för att läsa/spara/köra.';
+      ? '⚠ Workspace <code>' + esc(cfg.code_ws_path || '') + '</code> was not found on the server ('
+        + esc(cfg.server_os || '?') + '). Codex can therefore only draft code. Verify that the '
+        + 'path exists <b>on the server</b> where the app is running and is readable – fix '
+        + 'it in ' + settingsLink + '.'
+      : '💡 Draft mode – no workspace selected. Codex writes code for you but cannot read '
+        + 'the project or save to disk. Copy the code, or select a workspace in '
+        + settingsLink + ' to read/save/run.';
   }
   // Knapp för lokal mapp: visa när växeln är på (och webbläsaren stödjer det)
   const lb = document.getElementById('codeLocalBar');
@@ -1684,7 +1646,7 @@ let secTokenIsSet = false, secTokenClear = false;
 async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
-  catch(e){ toast('Kunde inte hämta inställningar', true); return; }
+  catch(e){ toast('Could not fetch settings', true); return; }
   const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.value = (v==null?'':v); };
   const chk = (id, v)=>{ const el=document.getElementById(id); if(el) el.checked = !!v; };
   chk('stWebsearch', s.websearch);
@@ -1693,8 +1655,8 @@ async function loadSettingsForm(){
   set('stKeepAlive', s.keep_alive);
   const timeState = document.getElementById('stTimeState');
   if(timeState) timeState.textContent = s.server_time
-    ? ('Serverns klocka: ' + s.server_time + ' – ligger den fel, sätt rätt tidszon på servern '
-       + '(t.ex. Environment=TZ=Europe/Stockholm i systemd-tjänsten).')
+    ? ('Server clock: ' + s.server_time + ' – if incorrect, set correct timezone on server '
+       + '(e.g. Environment=TZ=Europe/Stockholm in systemd service).')
     : '';
   chk('stMem0Enabled', s.mem0_enabled);
   set('stMem0User', s.mem0_user_id);
@@ -1706,7 +1668,7 @@ async function loadSettingsForm(){
   mem0KeyIsSet = !!s.mem0_api_key_set; mem0KeyClear = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
   document.getElementById('stMem0KeyState').textContent =
-    mem0KeyIsSet ? '● En nyckel är sparad (lämna tomt för att behålla den)' : 'Ingen nyckel sparad';
+    mem0KeyIsSet ? '● An API key is saved (leave empty to keep)' : 'No API key saved';
   document.getElementById('stMem0Test').textContent = '';
   chk('stHfEnabled', s.hf_enabled);
   chk('stHfAuto', s.hf_auto);
@@ -1714,15 +1676,15 @@ async function loadSettingsForm(){
   const hfEl = document.getElementById('stHfToken'); if(hfEl) hfEl.value='';
   const hfState = document.getElementById('stHfTokenState');
   if(hfState) hfState.textContent = hfTokenIsSet
-    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+    ? '● A token is saved (leave empty to keep)' : 'No token saved';
   const hfInfo = document.getElementById('stHfState');
   if(hfInfo){
-    if(!s.hf_module) hfInfo.textContent = 'Status: modulen huggingface.py saknas bredvid appen – '
-      + 'stödet är inaktivt. Hämta senaste versionen med ↻ Uppdatera.';
-    else if(!s.hf_active) hfInfo.textContent = 'Status: avstängt.';
-    else hfInfo.textContent = 'Status: ✓ på · ' + (s.hf_auto_active
-      ? 'okända modellnamn hämtas automatiskt från Hugging Face'
-      : 'okända modellnamn visar träffar från Hugging Face att välja bland');
+    if(!s.hf_module) hfInfo.textContent = 'Status: module huggingface.py missing beside app – '
+      + 'support is inactive. Fetch latest version via ↻ Update.';
+    else if(!s.hf_active) hfInfo.textContent = 'Status: disabled.';
+    else hfInfo.textContent = 'Status: ✓ on · ' + (s.hf_auto_active
+      ? 'unknown model names fetched automatically from Hugging Face'
+      : 'unknown model names show Hugging Face results to choose from');
   }
   chk('stTrainEnabled', s.train_enabled);
   chk('stTrainMenu', s.train_menu);
@@ -1730,14 +1692,14 @@ async function loadSettingsForm(){
   set('stTrainBin', s.train_soup_bin);
   const twState = document.getElementById('stTrainWsState');
   if(twState) twState.innerHTML = s.train_workspace_path
-    ? ('Används: <code>' + esc(s.train_workspace_path) + '</code> (skapas när du sparar ett dataset)')
+    ? ('Used: <code>' + esc(s.train_workspace_path) + '</code> (created when saving a dataset)')
     : '';
   const tState = document.getElementById('stTrainState');
   if(tState){
-    if(!s.train_module) tState.textContent = 'Status: modulen soup_train.py saknas bredvid appen '
-      + '– fliken är dold. Hämta senaste versionen med ↻ Uppdatera.';
-    else if(!s.train_active) tState.textContent = 'Status: avstängd.';
-    else tState.textContent = 'Status: ✓ på – öppna fliken 🎓 AI-träning i menyn.';
+    if(!s.train_module) tState.textContent = 'Status: module soup_train.py missing beside app '
+      + '– tab is hidden. Fetch latest version via ↻ Update.';
+    else if(!s.train_active) tState.textContent = 'Status: disabled.';
+    else tState.textContent = 'Status: ✓ on – open the 🎓 AI Training tab in the menu.';
   }
   chk('stCodeEnabled', s.code_enabled);
   set('stCodeWs', s.code_workspace);
@@ -1757,15 +1719,15 @@ async function loadSettingsForm(){
   const cws = document.getElementById('stCodeWsState');
   if(cws){
     if(!s.code_workspace){
-      cws.innerHTML = 'Servern kör på <b>'+esc(s.server_os||'?')+'</b> – ange en sökväg som finns '
-        + 'på <b>serverns</b> filsystem (aktuell mapp: <code>'+esc(s.server_cwd||'')+'</code>).';
+      cws.innerHTML = 'Server runs on <b>'+esc(s.server_os||'?')+'</b> – specify a path existing '
+        + 'on the <b>server</b> filesystem (current folder: <code>'+esc(s.server_cwd||'')+'</code>).';
     } else if(s.code_workspace_ok){
-      cws.textContent = '✓ Mappen hittades';
+      cws.textContent = '✓ Directory found';
     } else {
-      cws.innerHTML = '✕ Mappen finns inte på servern. Servern kör på <b>'+esc(s.server_os||'?')+'</b> – '
-        + 'sökvägen måste finnas där appen körs (inte på din egen dator). '
-        + (s.server_os==='Windows' ? '' : 'En Windows-sökväg som <code>D:\\…</code> funkar inte på en Linux-server. ')
-        + 'Serverns aktuella mapp: <code>'+esc(s.server_cwd||'')+'</code>.';
+      cws.innerHTML = '✕ Directory does not exist on server. Server runs on <b>'+esc(s.server_os||'?')+'</b> – '
+        + 'path must exist where the app runs (not on your local machine). '
+        + (s.server_os==='Windows' ? '' : 'A Windows path like <code>D:\\…</code> does not work on a Linux server. ')
+        + 'Server current folder: <code>'+esc(s.server_cwd||'')+'</code>.';
     }
   }
   set('stGhBase', s.github_base);
@@ -1776,26 +1738,26 @@ async function loadSettingsForm(){
   set('stRunTimeout', s.code_run_timeout);
   const cg = document.getElementById('stCodeGit');
   if(cg){
-    if(!s.code_toggle){ cg.textContent = 'Status: avstängd – slå på Codex för att använda den.'; }
+    if(!s.code_toggle){ cg.textContent = 'Status: disabled – enable Codex to use it.'; }
     else if(!s.code_active){
-      cg.innerHTML = 'Status: <b>skisslage</b> – ingen arbetsyta vald. Codex skriver kod men '
-        + 'kan inte läsa projektet eller spara. Välj en arbetsyta för att läsa/spara/git/köra.';
+      cg.innerHTML = 'Status: <b>draft mode</b> – no workspace selected. Codex writes code but '
+        + 'cannot read project or save. Select a workspace to read/save/git/run.';
     }
     else{
-      const parts = ['✓ Aktiv'];
-      parts.push(s.git_available ? 'git finns' : '⚠ git saknas på servern');
+      const parts = ['✓ Active'];
+      parts.push(s.git_available ? 'git available' : '⚠ git missing on server');
       if(s.git_repo){
         const prov = (s.git_provider === 'gitlab') ? 'GitLab' : ((s.git_provider === 'github') ? 'GitHub' : 'Git');
-        parts.push(s.git_slug ? (prov + ': ' + s.git_slug) : 'git-repo aktivt');
+        parts.push(s.git_slug ? (prov + ': ' + s.git_slug) : 'git repo active');
         const tokSet = (s.git_provider === 'gitlab') ? s.gitlab_token_set : s.github_token_set;
-        parts.push(tokSet ? 'token satt' : '⚠ ingen token för ' + prov + ' (push/MR/PR kräver token)');
+        parts.push(tokSet ? 'token set' : '⚠ no token for ' + prov + ' (push/MR/PR requires token)');
       }else{
-        parts.push('⚠ arbetsytan är inte ett git-repo (git/PR-knapparna döljs)');
+        parts.push('⚠ workspace is not a git repo (git/PR buttons hidden)');
       }
-      parts.push(s.code_run_active ? 'kommandokörning PÅ' : 'kommandokörning av');
-      parts.push('behörighet: ' + (s.code_mode_label || s.code_mode || 'ask'));
-      parts.push(s.code_steps ? ('max ' + s.code_steps + ' steg') : 'obegränsat antal steg');
-      parts.push('kontext ' + (s.code_ctx ? s.code_ctx + ' token' : 'Ollamas standard'));
+      parts.push(s.code_run_active ? 'command execution ON' : 'command execution off');
+      parts.push('permission: ' + (s.code_mode_label || s.code_mode || 'ask'));
+      parts.push(s.code_steps ? ('max ' + s.code_steps + ' steps') : 'unlimited steps');
+      parts.push('context ' + (s.code_ctx ? s.code_ctx + ' tokens' : 'Ollama default'));
       cg.textContent = 'Status: ' + parts.join(' · ');
     }
   }
@@ -1803,22 +1765,22 @@ async function loadSettingsForm(){
   const ghEl = document.getElementById('stGhToken'); if(ghEl) ghEl.value='';
   const ghState = document.getElementById('stGhTokenState');
   if(ghState) ghState.textContent = ghTokenIsSet
-    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+    ? '● A token is saved (leave empty to keep)' : 'No token saved';
   glTokenIsSet = !!s.gitlab_token_set; glTokenClear = false;
   const glEl = document.getElementById('stGlToken'); if(glEl) glEl.value='';
   const glState = document.getElementById('stGlTokenState');
   if(glState) glState.textContent = glTokenIsSet
-    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+    ? '● A token is saved (leave empty to keep)' : 'No token saved';
   set('stSecTarget', s.sec_target_url || '');
   set('stSecMode', s.sec_test_mode || 'safe');
   secTokenIsSet = !!s.sec_target_token_set; secTokenClear = false;
   const secEl = document.getElementById('stSecToken'); if(secEl) secEl.value='';
   const secState = document.getElementById('stSecTokenState');
   if(secState) secState.textContent = secTokenIsSet
-    ? '● En token är sparad (lämna tomt för att behålla den)' : 'Ingen token sparad';
+    ? '● A token is saved (leave empty to keep)' : 'No token saved';
   renderProjectTargets(s.project_targets || {});
   populateSecProjectSelect();
-  document.getElementById('stDbPath').textContent = s.db_path ? ('Sparas i: '+s.db_path) : '';
+  document.getElementById('stDbPath').textContent = s.db_path ? ('Saved in: '+s.db_path) : '';
 }
 let currentProjectTargets = {};
 function renderProjectTargets(targets){
@@ -1827,13 +1789,13 @@ function renderProjectTargets(targets){
   if(!listEl) return;
   const keys = Object.keys(currentProjectTargets);
   if(!keys.length){
-    listEl.innerHTML = '<span style="color:var(--faint);font-style:italic">Inga projektspecifika servrar sparade än (använder global målserver ovan).</span>';
+    listEl.innerHTML = '<span style="color:var(--faint);font-style:italic">No project-specific servers saved yet (uses global target server above).</span>';
     return;
   }
   let html = '';
   for(const k of keys){
     const item = currentProjectTargets[k];
-    const tokBadge = item.has_token ? '<span style="background:var(--card);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:10px">🔑 token satt</span>' : '';
+    const tokBadge = item.has_token ? '<span style="background:var(--card);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:10px">🔑 token set</span>' : '';
     html += `
       <div style="display:flex;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px">
         <div style="display:flex;align-items:center;gap:8px">
@@ -1841,7 +1803,7 @@ function renderProjectTargets(targets){
           <code style="color:var(--accent-hov)">${esc(item.prod_server || '–')}</code>
           ${tokBadge}
         </div>
-        <button class="btn ghost small" type="button" onclick="deleteProjectTarget('${esc(k)}')" style="color:var(--danger);padding:2px 6px;font-size:11px" title="Ta bort koppling">✕</button>
+        <button class="btn ghost small" type="button" onclick="deleteProjectTarget('${esc(k)}')" style="color:var(--danger);padding:2px 6px;font-size:11px" title="Delete mapping">✕</button>
       </div>
     `;
   }
@@ -1855,7 +1817,7 @@ async function populateSecProjectSelect(){
     const r = await api('/api/gitlab/repos');
     const d = await r.json();
     const repos = d.repos || [];
-    let html = '<option value="">-- Välj GitLab-projekt --</option>';
+    let html = '<option value="">-- Select GitLab project --</option>';
     for(const repo of repos){
       const slug = repo.slug || repo.name;
       html += `<option value="${esc(slug)}">${esc(slug)}</option>`;
@@ -1870,14 +1832,14 @@ async function populateSecProjectSelect(){
       if(tokEl) tokEl.value = '';
     };
   }catch(e){
-    sel.innerHTML = '<option value="">Kunde inte ladda projekt</option>';
+    sel.innerHTML = '<option value="">Could not load projects</option>';
   }
 }
 async function saveProjectTarget(){
   const sel = document.getElementById('stSecProjSelect');
   const project = (sel ? sel.value : '').trim();
   if(!project){
-    toast('Välj ett GitLab-projekt först', true);
+    toast('Select a GitLab project first', true);
     return;
   }
   const server = (document.getElementById('stSecProjServer').value || '').trim();
@@ -1889,11 +1851,11 @@ async function saveProjectTarget(){
       body: JSON.stringify({project: project, prod_server: server, prod_token: token})
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte spara målserver');
-    toast('Produktionsserver sparad för ' + project);
+    if(!d.ok) throw new Error(d.error || 'could not save target server');
+    toast('Production server saved for ' + project);
     renderProjectTargets(d.targets);
   }catch(e){
-    toast('Kunde inte spara: ' + e.message, true);
+    toast('Could not save: ' + e.message, true);
   }
 }
 async function deleteProjectTarget(project){
@@ -1904,37 +1866,37 @@ async function deleteProjectTarget(project){
       body: JSON.stringify({project: project, prod_server: '', prod_token: ''})
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte ta bort');
-    toast('Produktionsserver borttagen för ' + project);
+    if(!d.ok) throw new Error(d.error || 'could not delete');
+    toast('Production server removed for ' + project);
     renderProjectTargets(d.targets);
   }catch(e){
-    toast('Kunde inte ta bort: ' + e.message, true);
+    toast('Could not delete: ' + e.message, true);
   }
 }
 function clearMem0Key(){
   mem0KeyClear = true; mem0KeyIsSet = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
-  document.getElementById('stMem0KeyState').textContent = '✕ Nyckeln tas bort när du sparar';
+  document.getElementById('stMem0KeyState').textContent = '✕ Key will be removed upon saving';
 }
 function clearHfToken(){
   hfTokenClear = true; hfTokenIsSet = false;
   const el = document.getElementById('stHfToken'); if(el) el.value='';
-  document.getElementById('stHfTokenState').textContent = '✕ Token tas bort när du sparar';
+  document.getElementById('stHfTokenState').textContent = '✕ Token will be removed upon saving';
 }
 function clearGhToken(){
   ghTokenClear = true; ghTokenIsSet = false;
   const el = document.getElementById('stGhToken'); if(el) el.value='';
-  document.getElementById('stGhTokenState').textContent = '✕ Token tas bort när du sparar';
+  document.getElementById('stGhTokenState').textContent = '✕ Token will be removed upon saving';
 }
 function clearGlToken(){
   glTokenClear = true; glTokenIsSet = false;
   const el = document.getElementById('stGlToken'); if(el) el.value='';
-  document.getElementById('stGlTokenState').textContent = '✕ Token tas bort när du sparar';
+  document.getElementById('stGlTokenState').textContent = '✕ Token will be removed upon saving';
 }
 function clearSecToken(){
   secTokenClear = true; secTokenIsSet = false;
   const el = document.getElementById('stSecToken'); if(el) el.value='';
-  document.getElementById('stSecTokenState').textContent = '✕ Token tas bort när du sparar';
+  document.getElementById('stSecTokenState').textContent = '✕ Token will be removed upon saving';
 }
 function collectSettings(){
   const val = id => (document.getElementById(id).value||'').trim();
@@ -1972,20 +1934,20 @@ function collectSettings(){
     sec_test_mode: val('stSecMode')
   };
   const key = val('stMem0Key');
-  if(mem0KeyClear && !key) body.mem0_api_key = null;   // rensa
-  else if(key) body.mem0_api_key = key;                // ny nyckel (annars orörd)
+  if(mem0KeyClear && !key) body.mem0_api_key = null;
+  else if(key) body.mem0_api_key = key;
   const gh = val('stGhToken');
-  if(ghTokenClear && !gh) body.github_token = null;    // rensa
-  else if(gh) body.github_token = gh;                  // ny token (annars orörd)
+  if(ghTokenClear && !gh) body.github_token = null;
+  else if(gh) body.github_token = gh;
   const gl = val('stGlToken');
-  if(glTokenClear && !gl) body.gitlab_token = null;    // rensa
-  else if(gl) body.gitlab_token = gl;                  // ny token (annars orörd)
+  if(glTokenClear && !gl) body.gitlab_token = null;
+  else if(gl) body.gitlab_token = gl;
   const hft = val('stHfToken');
-  if(hfTokenClear && !hft) body.hf_token = null;       // rensa
-  else if(hft) body.hf_token = hft;                    // ny token (annars orörd)
+  if(hfTokenClear && !hft) body.hf_token = null;
+  else if(hft) body.hf_token = hft;
   const sec = val('stSecToken');
-  if(secTokenClear && !sec) body.sec_target_token = null; // rensa
-  else if(sec) body.sec_target_token = sec;               // ny token (annars orörd)
+  if(secTokenClear && !sec) body.sec_target_token = null;
+  else if(sec) body.sec_target_token = sec;
   return body;
 }
 async function saveSettings(){
@@ -1993,8 +1955,8 @@ async function saveSettings(){
     const r = await api('/api/settings', {method:'POST', headers:headers(true),
       body: JSON.stringify(collectSettings())});
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error||'okänt fel');
-    toast('Inställningar sparade');
+    if(!d.ok) throw new Error(d.error||'unknown error');
+    toast('Settings saved');
     try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
     populateBackends();
     const wsRow=document.getElementById('csWebsearchRow'); if(wsRow) wsRow.style.display = cfg.websearch?'flex':'none';
@@ -2004,28 +1966,27 @@ async function saveSettings(){
     updateHfView();
     updateTrainNav();
     loadSettingsForm();
-  }catch(e){ toast('Kunde inte spara: '+e.message, true); }
+  }catch(e){ toast('Could not save: '+e.message, true); }
 }
 async function testMem0(){
   const el = document.getElementById('stMem0Test');
-  el.textContent = 'Sparar & testar…'; el.style.color='var(--subtle)';
-  await saveSettings();          // testa exakt det som står i formuläret
-  el.textContent = 'Testar…';
+  el.textContent = 'Saving & testing…'; el.style.color='var(--subtle)';
+  await saveSettings();
+  el.textContent = 'Testing…';
   try{
     const r = await api('/api/settings/test-mem0', {method:'POST', headers:headers(true), body:'{}'});
     const d = await r.json();
-    el.textContent = d.ok ? ('✓ Ansluten till Mem0 (hittade '+(d.count||0)+' minne(n) för användar-ID:t)')
-                          : ('✕ '+(d.error||'kunde inte ansluta'));
+    el.textContent = d.ok ? ('✓ Connected to Mem0 (found '+(d.count||0)+' memory item(s) for user ID)')
+                          : ('✕ '+(d.error||'could not connect'));
     el.style.color = d.ok ? 'var(--green)' : 'var(--danger)';
   }catch(e){ el.textContent = '✕ '+e.message; el.style.color='var(--danger)'; }
 }
 
-/* ---- Kodassistent ---- */
-let codeMessages = [];      // {role, content} som skickas till /api/agent
+/* ---- Code assistant ---- */
+let codeMessages = [];
 let codeController = null;
 const CODE_MSGS_KEY = 'os_code_msgs';
 function saveCodeMsgs(){
-  // Spara Codex-konversationen (kontexten) så den överlever omladdning. Behåll de senaste.
   try{ localStorage.setItem(CODE_MSGS_KEY, JSON.stringify(codeMessages.slice(-40))); }catch(e){}
 }
 function loadCodeMsgs(){
@@ -2033,13 +1994,11 @@ function loadCodeMsgs(){
        codeMessages = Array.isArray(a) ? a : []; }catch(e){ codeMessages = []; }
 }
 function codeMsgText(content){
-  // Läsbar prosa ur ett assistentsvar: ta bort redigeringsblock och ev. TOOL-rader.
   let t = stripEditsJs(content || '');
   t = t.replace(/^\s*TOOL\s+\w+\s+\{[\s\S]*?\}\s*$/gm, '').trim();
   return t;
 }
 function restoreCodeLog(){
-  // Rita upp den sparade Codex-konversationen igen (som text) efter omladdning.
   const box = codeLogEl();
   if(!box || !codeMessages.length) return;
   box.innerHTML = '';
@@ -2049,31 +2008,29 @@ function restoreCodeLog(){
     } else {
       const t = codeMsgText(m.content||'');
       if(t) codeAppend('<div class="code-msg">'+mdToHtml(t)+'</div>');
-      else  codeAppend('<div class="code-tool">↩ tidigare kodförslag (återställt vid omladdning)</div>');
+      else  codeAppend('<div class="code-tool">↩ previous code proposal (restored on reload)</div>');
     }
   }
 }
 function clearCode(){
   const box = codeLogEl();
-  if(!codeMessages.length && box && box.querySelector('.chat-empty')){ toast('Codex är redan tom'); return; }
-  // Var tydlig med vad som faktiskt försvinner: loggen och kontexten – aldrig
-  // filerna. Väntande, osparade förslag lever bara i loggen och följer med.
+  if(!codeMessages.length && box && box.querySelector('.chat-empty')){ toast('Codex is already empty'); return; }
   const pending = pendingEdits().length;
   const warn = pending
-    ? ('\n\n⚠ ' + pending + (pending === 1 ? ' föreslagen ändring som du inte sparat'
-        : ' föreslagna ändringar som du inte sparat') + ' försvinner.')
+    ? ('\n\n⚠ ' + pending + (pending === 1 ? ' proposed change not saved'
+        : ' proposed changes not saved') + ' will be lost.')
     : '';
-  if(!confirm('Töm Codex-loggen?\n\nKonversationen och kontexten rensas. Filerna i arbetsytan '
-      + 'rörs inte – ändringar du redan sparat ligger kvar på disken.' + warn)) return;
+  if(!confirm('Clear Codex log?\n\nConversation and context will be cleared. Files in workspace '
+      + 'remain untouched – changes already saved stay on disk.' + warn)) return;
   if(codeController) codeController.abort();
   codeMessages = [];
   codeWrites = [];
   planNode = null;
   updateModeBar();
   try{ localStorage.removeItem(CODE_MSGS_KEY); }catch(e){}
-  if(box) box.innerHTML = '<div class="chat-empty">Be Codex läsa koden, ändra en fil eller köra '
-    + 'testerna. Den arbetar bara i mappen ovan, och <b>Behörighet</b> ovanför styr vad den får '
-    + 'göra utan att fråga.</div>';
+  if(box) box.innerHTML = '<div class="chat-empty">Ask Codex to inspect the code, modify a file, or run '
+    + 'tests. It only works within the directory above, and <b>Permission</b> controls what it may '
+    + 'do without confirmation.</div>';
   const inp = document.getElementById('codeInput'); if(inp) inp.focus();
 }
 function populateCodeModels(){
@@ -2081,7 +2038,7 @@ function populateCodeModels(){
   if(!sel) return;
   const names = lastModels.map(m=>m.name);
   const cur = sel.value;
-  if(!names.length){ sel.innerHTML = '<option value="">Inga modeller installerade</option>'; return; }
+  if(!names.length){ sel.innerHTML = '<option value="">No models installed</option>'; return; }
   sel.innerHTML = names.map(n=>'<option>'+esc(n)+'</option>').join('');
   // Codex har en egen, ihågkommen modell (databas) – oberoende av chattens val.
   const saved = uiPrefs.code_model || '';
@@ -2095,20 +2052,20 @@ async function loadTree(){
   const box = document.getElementById('codeTree');
   const pathEl = document.getElementById('codeWsPath');
   if(!box) return;
-  box.innerHTML = '<div class="hint" style="padding:6px 8px">Hämtar…</div>';
+  box.innerHTML = '<div class="hint" style="padding:6px 8px">Loading…</div>';
   try{
     const r = await api('/api/agent/tree', {headers: headers(false)});
     const d = await r.json();
     if(pathEl) pathEl.textContent = d.root || '';
     const files = d.files || [];
-    if(!files.length){ box.innerHTML = '<div class="hint" style="padding:6px 8px">(tom eller ingen arbetsyta)</div>'; return; }
+    if(!files.length){ box.innerHTML = '<div class="hint" style="padding:6px 8px">(empty or no workspace)</div>'; return; }
     box.innerHTML = files.map(f=>'<div class="f" title="'+esc(f)+'" onclick="askAboutFile(\''
       + esc(f).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">'+esc(f)+'</div>').join('');
-  }catch(e){ box.innerHTML = '<div class="hint" style="padding:6px 8px">Kunde inte hämta trädet.</div>'; }
+  }catch(e){ box.innerHTML = '<div class="hint" style="padding:6px 8px">Could not load tree.</div>'; }
 }
 function askAboutFile(path){
   const inp = document.getElementById('codeInput');
-  inp.value = 'Förklara vad '+path+' gör.';
+  inp.value = 'Explain what '+path+' does.';
   inp.focus();
 }
 /* ---- Analys av arbetsytan ----
@@ -2127,33 +2084,33 @@ async function analyzeWorkspace(force){
   if(!cfg.code_ws) return;                        // inget att analysera
   const path = cfg.code_ws_path || '';
   if(!force && analyzedPath === path) return;     // redan gjord för den här ytan
-  analyzeNote('🔎 <b>Analyserar repot…</b> läser igenom filerna för att se vad '
-    + 'projektet innehåller och var funktionerna finns. Det tar oftast bara någon '
-    + 'sekund – du kan börja skriva under tiden.', 'warn');
+  analyzeNote('🔎 <b>Analyzing repository…</b> scanning files to understand project '
+    + 'structure and locate functions. Usually takes just a second — '
+    + 'you can start typing in the meantime.', 'warn');
   try{
     const r = await api('/api/agent/analyze', {method:'POST', headers:headers(true),
       body: JSON.stringify({force: !!force})});
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte analysera');
+    if(!d.ok) throw new Error(d.error || 'could not analyze');
     analyzedPath = path;
-    analyzeNote('✓ <b>Repot är analyserat.</b> ' + esc(d.summary)
-      + ' — Codex vet nu vad projektet innehåller och kan slå upp var något '
-      + 'definieras i stället för att leta.', 'ok');
+    analyzeNote('✓ <b>Repository analyzed.</b> ' + esc(d.summary)
+      + ' — Codex now knows project structure and can look up '
+      + 'definitions directly instead of searching.', 'ok');
     // Låt beskedet stå en stund och tona sedan bort; det är information, inte en varning.
     setTimeout(()=>{ if(analyzedPath === path) analyzeNote(''); }, 12000);
   }catch(e){
-    analyzeNote('⚠ Kunde inte analysera repot: ' + esc(e.message)
-      + '. Codex fungerar ändå, men får leta sig fram.', 'warn');
+    analyzeNote('⚠ Could not analyze repository: ' + esc(e.message)
+      + '. Codex will still work, but may take longer to locate files.', 'warn');
   }
 }
 
 /* ---- Behörighetsläge: fråga om lov, skriv själv, eller fria händer ---- */
 const CODE_MODE_HINTS = {
-  ask: 'Codex frågar innan den skriver en fil, kör ett kommando eller rör git. Tryggast.',
-  auto_edit: 'Codex ändrar filer direkt (varje skrivning går att ångra), men frågar innan '
-    + 'den kör kommandon eller committar.',
-  full: '⚠ Codex gör allt själv – skriver filer, kör kommandon (även utanför listan) och '
-    + 'committar utan att fråga. Använd bara i ett projekt du kan återställa.'
+  ask: 'Codex asks before writing a file, running a command, or touching git. Safest.',
+  auto_edit: 'Codex modifies files directly (every edit can be undone), but asks before '
+    + 'running commands or committing.',
+  full: '⚠ Codex does everything autonomously — writes files, runs commands, and '
+    + 'commits without asking. Use only in projects you can restore.'
 };
 function updateModeBar(){
   const bar = document.getElementById('codeModeBar');
@@ -2166,7 +2123,7 @@ function updateModeBar(){
   sel.value = mode;
   bar.classList.toggle('full', mode === 'full');
   if(hint) hint.textContent = ws ? CODE_MODE_HINTS[mode]
-    : 'Gäller när en arbetsyta på servern är vald. I skisslage finns inga verktyg att godkänna.';
+    : 'Applies when a server workspace is selected. In scratchpad mode there are no tools to approve.';
   const ub = document.getElementById('codeUndoBtn');
   if(ub) ub.style.display = (ws && codeWrites.length) ? '' : 'none';
 }
@@ -2176,11 +2133,11 @@ async function saveCodeMode(){
     const r = await api('/api/agent/mode', {method:'POST', headers:headers(true),
       body: JSON.stringify({mode})});
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error||'kunde inte spara');
+    if(!d.ok) throw new Error(d.error||'could not save');
     cfg.code_mode = mode;
     updateModeBar();
-    toast('Behörighet: ' + d.label);
-  }catch(e){ toast('Kunde inte byta läge: '+e.message, true); }
+    toast('Permission: ' + d.label);
+  }catch(e){ toast('Could not change mode: '+e.message, true); }
 }
 /* Filer Codex skrivit i den här körningen – ger Ångra-knappen något att peka på. */
 let codeWrites = [];
@@ -2195,16 +2152,16 @@ async function undoFile(path, node){
     const r = await api('/api/agent/undo', {method:'POST', headers:headers(true),
       body: JSON.stringify({path})});
     const d = await r.json();
-    if(!d.ok) throw new Error(d.message||d.error||'kunde inte ångra');
+    if(!d.ok) throw new Error(d.message||d.error||'could not undo');
     codeWrites = codeWrites.filter(p=>p!==path);
-    if(node){ const st = node.querySelector('.state'); if(st) st.textContent = '↩ Ångrad'; }
+    if(node){ const st = node.querySelector('.state'); if(st) st.textContent = '↩ Undone'; }
     toast(d.message); loadTree(); gitStatus(); updateModeBar();
-  }catch(e){ toast('Kunde inte ångra: '+e.message, true); }
+  }catch(e){ toast('Could not undo: '+e.message, true); }
 }
 function undoLast(){
   const path = codeWrites[codeWrites.length-1];
-  if(!path){ toast('Inget att ångra'); return; }
-  if(confirm('Ångra den senaste ändringen av ' + path + '?')) undoFile(path, null);
+  if(!path){ toast('Nothing to undo'); return; }
+  if(confirm('Undo latest change to ' + path + '?')) undoFile(path, null);
 }
 /* ---- Frågerutor: agenten vill göra något och väntar på svar ---- */
 let askSeq = 0;
@@ -2213,12 +2170,12 @@ function renderAsk(ev){
   const detail = ev.detail ? '<pre class="code-diff">'+diffToHtml(ev.detail)+'</pre>' : '';
   const node = codeAppend(
     '<div class="code-ask'+(ev.danger?' danger':'')+'" id="'+id+'">'
-    + '<div class="ah"><span class="what">'+(ev.danger?'⚠ ':'🔐 ')+esc(ev.title||'Får jag?')+'</span>'
+    + '<div class="ah"><span class="what">'+(ev.danger?'⚠ ':'🔐 ')+esc(ev.title||'Permission requested')+'</span>'
     + '<span class="acts">'
-    + '<button class="btn accent small" onclick="answerAsk(\''+id+'\',true,false)">Tillåt</button>'
+    + '<button class="btn accent small" onclick="answerAsk(\''+id+'\',true,false)">Allow</button>'
     + '<button class="btn ghost small" onclick="answerAsk(\''+id+'\',true,true)" '
-    + 'title="Tillåt det här för resten av körningen">Tillåt alltid</button>'
-    + '<button class="btn ghost small" onclick="answerAsk(\''+id+'\',false,false)">Neka</button>'
+    + 'title="Allow for the rest of this run">Allow always</button>'
+    + '<button class="btn ghost small" onclick="answerAsk(\''+id+'\',false,false)">Deny</button>'
     + '</span></div>' + detail + '</div>');
   node._askId = ev.id;
   node.scrollIntoView({block:'nearest'});
@@ -2229,19 +2186,19 @@ async function answerAsk(nodeId, allow, always){
   if(!node || !node._askId) return;
   node.classList.add('done');
   node.querySelector('.ah').insertAdjacentHTML('beforeend',
-    '<span class="state">'+(allow ? (always?'✓ Tillåtet (alltid)':'✓ Tillåtet') : '✕ Nekat')+'</span>');
+    '<span class="state">'+(allow ? (always?'✓ Allowed (always)':'✓ Allowed') : '✕ Denied')+'</span>');
   try{
     await api('/api/agent/permission', {method:'POST', headers:headers(true),
       body: JSON.stringify({id: node._askId, allow, always})});
-  }catch(e){ toast('Kunde inte skicka svaret: '+e.message, true); }
+  }catch(e){ toast('Could not send response: '+e.message, true); }
 }
 let planNode = null;      // planen ritas om i samma panel under en körning
 function renderPlan(items){
   const list = items || [];
   const done = list.filter(i=>i.done).length;
-  const html = '<div class="t">PLAN · '+done+'/'+list.length+' klara</div>'
+  const html = '<div class="t">PLAN · '+done+'/'+list.length+' completed</div>'
     + list.map(i=>'<div class="i'+(i.done?' done':(i.active?' active':''))+'">'
-      + (i.done?'✓ ':(i.active?'▸ ':'○ ')) + esc(i.text) + '</div>').join('');
+    + (i.done?'✓ ':(i.active?'▸ ':'○ ')) + esc(i.text) + '</div>').join('');
   // Uppdatera den befintliga panelen – annars staplas en ny kopia för varje gång
   // agenten bockar av en punkt, och loggen blir omöjlig att följa.
   if(planNode && planNode.isConnected){ planNode.innerHTML = html; return planNode; }
@@ -2255,9 +2212,9 @@ function renderApplied(ev){
   const id = 'appl'+(codeEditSeq++);
   const node = codeAppend(
     '<div class="code-edit done" id="'+id+'">'
-    + '<div class="eh"><span class="path">'+esc(ev.path)+(ev.created?' <span class="hint">(ny fil)</span>':'')+'</span>'
-    + '<span class="acts2"><button class="btn ghost small">↩ Ångra</button></span>'
-    + '<span class="state">✓ Skrivet</span></div>'
+    + '<div class="eh"><span class="path">'+esc(ev.path)+(ev.created?' <span class="hint">(new file)</span>':'')+'</span>'
+    + '<span class="acts2"><button class="btn ghost small">↩ Undo</button></span>'
+    + '<span class="state">✓ Written</span></div>'
     + '<pre class="code-diff">'+diffToHtml(ev.diff||'')+'</pre></div>');
   const local = !!ev.local;
   if(local && ev.before !== undefined) localUndo.set(ev.path, ev.created ? null : ev.before);
@@ -2267,21 +2224,21 @@ function renderApplied(ev){
   return node;
 }
 async function undoLocal(path, node){
-  if(!localUndo.has(path)){ toast('Inget att ångra för '+path, true); return; }
+  if(!localUndo.has(path)){ toast('Nothing to undo for '+path, true); return; }
   const before = localUndo.get(path);
   try{
     if(before === null){
       // Filen fanns inte innan – töm den (webbläsaren får inte radera filer utan vidare).
       await fsWrite(path, '');
-      toast('Tömde '+path+' (filen fanns inte innan – ta bort den själv om du vill)');
+      toast('Cleared '+path+' (file did not exist before — remove it manually if desired)');
     } else {
       await fsWrite(path, before);
-      toast('Återställde '+path);
+      toast('Restored '+path);
     }
     localUndo.delete(path);
-    if(node){ const st = node.querySelector('.state'); if(st) st.textContent = '↩ Ångrad'; }
+    if(node){ const st = node.querySelector('.state'); if(st) st.textContent = '↩ Undone'; }
     loadLocalTree();
-  }catch(e){ toast('Kunde inte ångra: '+(e.message||e), true); }
+  }catch(e){ toast('Could not undo: '+(e.message||e), true); }
 }
 /* Kort, läsbar form av verktygets argument – hela filinnehåll ska inte fylla loggen. */
 function toolArgsText(args){
@@ -2289,7 +2246,7 @@ function toolArgsText(args){
   const out = {};
   for(const k of Object.keys(args)){
     const v = args[k];
-    out[k] = (typeof v==='string' && v.length>80) ? (v.slice(0,80)+'… ('+v.length+' tecken)') : v;
+    out[k] = (typeof v==='string' && v.length>80) ? (v.slice(0,80)+'… ('+v.length+' chars)') : v;
   }
   try{ return JSON.stringify(out); }catch(e){ return ''; }
 }
@@ -2337,19 +2294,19 @@ function renderEdit(ed){
   const id = 'edit'+(codeEditSeq++);
   let acts, bodyHtml;
   if(ed.local){                                   // lokal mapp i webbläsaren → skriv lokalt
-    acts = '<button class="btn accent small" onclick="applyEditLocal(\''+id+'\')">Godkänn</button>'
-         + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
+    acts = '<button class="btn accent small" onclick="applyEditLocal(\''+id+'\')">Apply</button>'
+         + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Reject</button>';
     let d = (!ed.isNew && ed.old!=null && ed.old!==ed.content) ? jsLineDiff(ed.old, ed.content) : null;
     bodyHtml = d ? diffToHtml(d) : esc(ed.content);
   } else if(ed.scratch || !cfg.code_ws){          // ingen arbetsyta → bara kopiera
-    acts = '<button class="btn ghost small" onclick="copyEdit(\''+id+'\')">Kopiera</button>';
+    acts = '<button class="btn ghost small" onclick="copyEdit(\''+id+'\')">Copy</button>';
     bodyHtml = esc(ed.content);
   } else {                                        // server-arbetsyta → skriv på servern
-    acts = '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Godkänn</button>'
-         + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Avvisa</button>';
+    acts = '<button class="btn accent small" onclick="applyEdit(\''+id+'\')">Apply</button>'
+         + '<button class="btn ghost small" onclick="rejectEdit(\''+id+'\')">Reject</button>';
     bodyHtml = ed.diff ? diffToHtml(ed.diff) : esc(ed.content);
   }
-  const tag = ed.local && ed.isNew ? ' <span class="hint">(ny fil)</span>' : '';
+  const tag = ed.local && ed.isNew ? ' <span class="hint">(new file)</span>' : '';
   const node = codeAppend(
     '<div class="code-edit" id="'+id+'">'
     + '<div class="eh"><span class="path">'+esc(ed.path)+tag+'</span>'
@@ -2363,8 +2320,8 @@ function copyEdit(id){
   if(!node || !node._edit) return;
   const text = node._edit.content || '';
   if(navigator.clipboard){ navigator.clipboard.writeText(text).then(()=>{
-    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Kopierat</span>');
-  }).catch(()=>toast('Kunde inte kopiera', true)); }
+    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Copied</span>');
+  }).catch(()=>toast('Could not copy', true)); }
 }
 async function applyEdit(id){
   const node = document.getElementById(id);
@@ -2373,19 +2330,19 @@ async function applyEdit(id){
     const r = await api('/api/agent/apply', {method:'POST', headers:headers(true),
       body: JSON.stringify({path: node._edit.path, content: node._edit.content})});
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error||'fel');
+    if(!d.ok) throw new Error(d.error||'error');
     node.classList.add('done');
-    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Skrivet</span>');
+    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Written</span>');
     noteWrite(d.path || node._edit.path);   // så Ångra-knappen når även godkända förslag
-    toast('Ändring skriven: '+node._edit.path);
+    toast('Change applied: '+node._edit.path);
     loadTree(); gitStatus();
-  }catch(e){ toast('Kunde inte skriva: '+e.message, true); }
+  }catch(e){ toast('Could not write: '+e.message, true); }
 }
 function rejectEdit(id){
   const node = document.getElementById(id);
   if(!node) return;
   node.classList.add('done');
-  node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✕ Avvisad</span>');
+  node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✕ Rejected</span>');
 }
 /* ---- Godkänn/avvisa alla väntande ändringar ---- */
 function pendingEdits(){
@@ -2396,9 +2353,9 @@ function appendBatchBar(){
   if(pendingEdits().length < 2) return;
   const barId='batch'+(codeEditSeq++);
   const n = pendingEdits().length;
-  codeAppend('<div class="code-batch" id="'+barId+'">'+n+' föreslagna ändringar · '
-    +'<button class="btn accent small" onclick="approveAll(\''+barId+'\')">✓ Godkänn alla</button> '
-    +'<button class="btn ghost small" onclick="rejectAll(\''+barId+'\')">✕ Avvisa alla</button></div>');
+  codeAppend('<div class="code-batch" id="'+barId+'">'+n+' suggested changes · '
+    +'<button class="btn accent small" onclick="approveAll(\''+barId+'\')">✓ Apply all</button> '
+    +'<button class="btn ghost small" onclick="rejectAll(\''+barId+'\')">✕ Reject all</button></div>');
 }
 async function approveAll(barId){
   const bar=document.getElementById(barId); if(bar) bar.remove();
@@ -2415,7 +2372,7 @@ async function sendAgent(){
   const model = document.getElementById('codeModel').value;
   const inp = document.getElementById('codeInput');
   const text = inp.value.trim();
-  if(!model){ toast('Ingen modell vald', true); return; }
+  if(!model){ toast('No model selected', true); return; }
   if(codeController || !text) return;
   codeMessages.push({role:'user', content:text});
   planNode = null;          // ny fråga → ny plan
@@ -2424,7 +2381,7 @@ async function sendAgent(){
   inp.value='';
   // Knappen blir en stoppknapp under körningen (klick → codeController.abort()).
   // Den får INTE stängas av – då går körningen inte att avbryta.
-  const send = document.getElementById('codeSend'); send.textContent='■ Stoppa';
+  const send = document.getElementById('codeSend'); send.textContent='■ Stop';
   codeController = new AbortController();
   try{
     if(localDir) await runAgentLocal(model);      // lokal mapp i webbläsaren
@@ -2432,7 +2389,7 @@ async function sendAgent(){
   }catch(e){
     if(e.name!=='AbortError') codeAppend('<div class="code-tool">⚠ '+esc(e.message)+'</div>');
   }finally{
-    codeController=null; send.textContent='Skicka';
+    codeController=null; send.textContent='Send';
     saveCodeMsgs();   // spara konversationen (överlever omladdning)
   }
 }
@@ -2462,13 +2419,13 @@ async function runAgentServer(model){
         thinkText=''; think=null;
         // Utan steg-tak är det här enda tecknet på att den fortfarande jobbar.
         const send=document.getElementById('codeSend');
-        if(send && codeController) send.textContent='■ Stoppa (steg '+ev.n+')';
+        if(send && codeController) send.textContent='■ Stop (step '+ev.n+')';
       }
       else if(ev.type==='start'){
         if(ev.mode && ev.mode!==cfg.code_mode){ cfg.code_mode = ev.mode; updateModeBar(); }
-        codeAppend('<div class="code-step">Behörighet: '+esc(ev.mode_label||ev.mode||'')
-          + ' · ' + (ev.steps ? 'max '+ev.steps+' steg' : 'obegränsat antal steg')
-          + (ev.ctx ? ' · kontext '+ev.ctx+' token' : '')+'</div>');
+        codeAppend('<div class="code-step">Permission: '+esc(ev.mode_label||ev.mode||'')
+          + ' · ' + (ev.steps ? 'max '+ev.steps+' steps' : 'unlimited steps')
+          + (ev.ctx ? ' · context '+ev.ctx+' tokens' : '')+'</div>');
       }
       else if(ev.type==='delta'){
         thinkText += ev.text;
@@ -2502,11 +2459,11 @@ async function runAgentServer(model){
       else if(ev.type==='edit'){ renderEdit(ev); }
       else if(ev.type==='summary'){
         const parts = [];
-        if((ev.files||[]).length) parts.push((ev.files.length===1?'1 fil ändrad: ':ev.files.length+' filer ändrade: ')+ev.files.join(', '));
-        if(ev.commands) parts.push(ev.commands+' kommando'+(ev.commands===1?'':'n')+' kört');
-        if(ev.denied) parts.push(ev.denied+' åtgärd'+(ev.denied===1?'':'er')+' nekad'+(ev.denied===1?'':'e'));
-        if(ev.steps) parts.unshift(ev.steps+' steg');
-        if(parts.length) codeAppend('<div class="code-summary">Klart · '+esc(parts.join(' · '))+'</div>');
+        if((ev.files||[]).length) parts.push((ev.files.length===1?'1 file modified: ':ev.files.length+' files modified: ')+ev.files.join(', '));
+        if(ev.commands) parts.push(ev.commands+' command'+(ev.commands===1?'':'s')+' run');
+        if(ev.denied) parts.push(ev.denied+' action'+(ev.denied===1?'':'s')+' denied');
+        if(ev.steps) parts.unshift(ev.steps+' steps');
+        if(parts.length) codeAppend('<div class="code-summary">Done · '+esc(parts.join(' · '))+'</div>');
         if(ev.files && ev.files.length){ loadTree(); gitStatus(); }
       }
       else if(ev.type==='error'){ codeAppend('<div class="code-tool">⚠ '+esc(ev.text)+'</div>'); }
@@ -2551,52 +2508,52 @@ document.getElementById('codeInput').addEventListener('keydown', e=>{
 document.getElementById('codeModel').addEventListener('change', saveCodeModel);
 
 function runSecurityAudit(){
-  if(codeController){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
+  if(codeController){ toast('Codex is already working — wait or stop first', true); return; }
   const inp = document.getElementById('codeInput');
   if(!inp) return;
-  inp.value = 'Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n'
-    + 'ARBETSSÄTT & KRAV:\n'
-    + '1. Undersök källkoden noggrant med TOOL search och TOOL read_file.\n'
-    + '2. Granska autentisering, sessioner, databasfrågor, input-sanitering, tokens, API-nycklar och felmeddelanden.\n'
-    + '3. FÖR VARJE ENSKILT FYND / SÅRBARHET: anropa OMEDELBART verktyget TOOL create_issue med:\n'
-    + '   - title: "[SEC-X] Beskrivande rubrik för detta specifika problem"\n'
-    + '   - description: En komplett och utförlig åtgärdsbeskrivning formaterad i markdown så vem som helst kan lösa problemet:\n'
-    + '       ### Plats & Berörd kod\n'
-    + '       Exakt filnamn, funktion och radnummer.\n'
-    + '       ### Problem & Säkerhetsrisk\n'
-    + '       Vad problemet är, varför det är en risk och potentiell konsekvens.\n'
-    + '       ### Steg-för-steg åtgärdsplan & Kodexempel\n'
-    + '       Exakta instruktioner och fullständiga kodexempel (före/efter) som visar exakt hur koden ska ändras.\n'
-    + '       ### Acceptanskriterier & Verifiering\n'
-    + '       Hur utvecklaren eller testaren kontrollerar att fixen fungerar.\n'
-    + '   - labels: "security,P1" (eller P2/P3)\n'
-    + '4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n'
-    + '5. Avsluta med en kort sammanfattning av de issues som skapats.';
+  inp.value = 'Perform a comprehensive security audit of the project following the rules in .agents/skills/security-audit/SKILL.md.\n\n'
+    + 'WORKFLOW & REQUIREMENTS:\n'
+    + '1. Thoroughly investigate the source code using TOOL search and TOOL read_file.\n'
+    + '2. Review authentication, sessions, database queries, input sanitization, tokens, API keys, and error messages.\n'
+    + '3. FOR EACH INDIVIDUAL FINDING / VULNERABILITY: IMMEDIATELY invoke TOOL create_issue with:\n'
+    + '   - title: "[SEC-X] Descriptive title for this specific issue"\n'
+    + '   - description: A complete and detailed remediation description formatted in markdown so anyone can fix it:\n'
+    + '       ### Location & Affected Code\n'
+    + '       Exact filename, function, and line numbers.\n'
+    + '       ### Problem & Security Risk\n'
+    + '       What the issue is, why it is a risk, and potential impact.\n'
+    + '       ### Step-by-Step Remediation Plan & Code Examples\n'
+    + '       Exact instructions and complete code examples (before/after) showing exactly how to update the code.\n'
+    + '       ### Acceptance Criteria & Verification\n'
+    + '       How the developer or tester can verify the fix works.\n'
+    + '   - labels: "security,P1" (or P2/P3)\n'
+    + '4. IMPORTANT: Create EXACTLY ONE separate issue per finding. NEVER group multiple findings into a single issue.\n'
+    + '5. Finish with a brief summary of the created issues.';
   sendAgent();
 }
 
 function runPonytailAudit(){
-  if(codeController){ toast('Codex arbetar redan – vänta eller stoppa först', true); return; }
+  if(codeController){ toast('Codex is already working — wait or stop first', true); return; }
   const inp = document.getElementById('codeInput');
   if(!inp) return;
-  inp.value = 'Läs .agents/skills/ponytail-audit/SKILL.md och genomför en helkods-granskning (ponytail-audit) för att identifiera överarbetning, onödig komplexitet, duplicerad logik och död kod.\n\n'
-    + 'ARBETSSÄTT & KRAV:\n'
-    + '1. Undersök källkoden noggrant med TOOL tree {} och TOOL search / TOOL read_file.\n'
-    + '2. Identifiera ställen där standardbiblioteket kan ersätta egen kod, onödiga abstraktioner/wrappers, oanvänd kod eller överdriven komplexitet (taggar: delete, stdlib, native, reuse, yagni, shrink).\n'
-    + '3. FÖR VARJE ENSKILT FYND / FÖRENKLINGSPUNKT: anropa OMEDELBART verktyget TOOL create_issue med:\n'
-    + '   - title: "[PONYTAIL-X] Beskrivande rubrik för förenklingen"\n'
-    + '   - description: En komplett och utförlig åtgärdsbeskrivning formaterad i markdown så vem som helst kan implementera förenklingen:\n'
-    + '       ### Plats & Berörd kod\n'
-    + '       Exakt filnamn, funktion och radnummer.\n'
-    + '       ### Problem & Överarbetning / Komplexitet\n'
-    + '       Varför detta är onödigt, överarbetat, duplicerat eller död kod och vilken förenklingstag som gäller (delete/stdlib/native/reuse/yagni/shrink).\n'
-    + '       ### Steg-för-steg förenklingsplan & Kodexempel\n'
-    + '       Exakta instruktioner och fullständiga kodexempel (före/efter) som visar hur koden rensas bort eller ersätts med enklare/stdlib-kod.\n'
-    + '       ### Acceptanskriterier & Verifiering\n'
-    + '       Hur utvecklaren eller testaren kontrollerar att testerna fortfarande går igenom och att funktionaliteten bibehålls.\n'
-    + '   - labels: "refactor,ponytail,P2" (eller P3)\n'
-    + '4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n'
-    + '5. Avsluta med en sammanfattning av hur många rader/beroenden som kan sparas.';
+  inp.value = 'Read .agents/skills/ponytail-audit/SKILL.md and perform a full codebase audit (ponytail-audit) to identify over-engineering, unnecessary complexity, duplicate logic, and dead code.\n\n'
+    + 'WORKFLOW & REQUIREMENTS:\n'
+    + '1. Thoroughly investigate the source code using TOOL tree {} and TOOL search / TOOL read_file.\n'
+    + '2. Identify places where the standard library can replace custom code, unnecessary wrappers/abstractions, unused code, or excessive complexity (tags: delete, stdlib, native, reuse, yagni, shrink).\n'
+    + '3. FOR EACH INDIVIDUAL FINDING / SIMPLIFICATION ITEM: IMMEDIATELY invoke TOOL create_issue with:\n'
+    + '   - title: "[PONYTAIL-X] Descriptive title for the simplification"\n'
+    + '   - description: A complete and detailed remediation description formatted in markdown so anyone can implement the simplification:\n'
+    + '       ### Location & Affected Code\n'
+    + '       Exact filename, function, and line numbers.\n'
+    + '       ### Problem & Over-engineering / Complexity\n'
+    + '       Why this is unnecessary, over-engineered, duplicated, or dead code, and which simplification tag applies (delete/stdlib/native/reuse/yagni/shrink).\n'
+    + '       ### Step-by-Step Simplification Plan & Code Examples\n'
+    + '       Exact instructions and complete code examples (before/after) showing how the code is removed or replaced with simpler/stdlib code.\n'
+    + '       ### Acceptance Criteria & Verification\n'
+    + '       How the developer or tester verifies tests still pass and functionality is retained.\n'
+    + '   - labels: "refactor,ponytail,P2" (or P3)\n'
+    + '4. IMPORTANT: Create EXACTLY ONE separate issue per finding. NEVER group multiple findings into a single issue.\n'
+    + '5. Finish with a summary of lines and dependencies saved.';
   sendAgent();
 }
 
@@ -2610,28 +2567,28 @@ function agentLocalSys(){
   // Samma arbetssätt som serverns agent, men allt sker i webbläsaren mot din mapp.
   const mode = CODE_MODE_HINTS[cfg.code_mode] ? cfg.code_mode : 'ask';
   const rule = mode==='full'
-    ? 'Du har fria händer: dina ändringar skrivs direkt utan att användaren tillfrågas.'
+    ? 'You have full autonomy: your changes are written directly without asking the user.'
     : (mode==='auto_edit'
-       ? 'Dina filändringar skrivs direkt utan att fråga.'
-       : 'Varje skrivning måste användaren godkänna. Får du NEKAT: gör inte om samma sak.');
-  return 'Du är Codex, en kodagent som arbetar i en projektmapp på användarens dator. '
-    + 'Svara på svenska.\n\n'
-    + 'ARBETSSÄTT: läs och sök i koden först – gissa aldrig hur en fil ser ut. Är uppgiften i '
-    + 'flera steg, lägg upp en plan med TOOL todo. Ändra sedan med edit_file (byt ut en exakt '
-    + 'textbit) eller write_file (ny/liten fil). Sammanfatta kort till slut.\n\n'
-    + 'VERKTYG – skriv EXAKT en rad som börjar med "TOOL " följt av namn och ett JSON-objekt, '
-    + 'och inget annat på den raden:\n'
+       ? 'Your file edits are written directly without asking.'
+       : 'Every write requires user approval. If DENIED: do not repeat the exact same action.');
+  return 'You are Codex, a coding agent working in a project folder on the user\'s computer. '
+    + 'Respond in English.\n\n'
+    + 'WORKFLOW: read and search code first — never guess file contents. If a task has multiple '
+    + 'steps, make a plan with TOOL todo. Then modify with edit_file (replace exact text snippet) '
+    + 'or write_file (new/small file). Summarize briefly at the end.\n\n'
+    + 'TOOLS — output EXACTLY one line starting with "TOOL " followed by the tool name and a JSON object, '
+    + 'and nothing else on that line:\n'
     + '  TOOL list_dir {"path": "."}\n'
     + '  TOOL tree {}\n'
-    + '  TOOL read_file {"path": "fil.py", "start": 1, "end": 200}\n'
+    + '  TOOL read_file {"path": "file.py", "start": 1, "end": 200}\n'
     + '  TOOL search {"query": "text"}\n'
-    + '  TOOL edit_file {"path": "fil.py", "old_text": "exakt text", "new_text": "det den ska bli"}\n'
-    + '  TOOL write_file {"path": "ny.py", "content": "hela filens innehåll"}\n'
-    + '  TOOL todo {"items": ["Läs koden", "Ändra X"]}\n\n'
-    + 'REGLER:\n- ' + rule + '\n'
-    + '- edit_file kräver att old_text finns exakt en gång – ta med omgivande rader.\n'
-    + '- Det finns inga kommandon eller git här (mappen ligger i webbläsaren).\n'
-    + '- När du är klar: skriv svaret som vanlig text utan TOOL-rad.';
+    + '  TOOL edit_file {"path": "file.py", "old_text": "exact text", "new_text": "replacement"}\n'
+    + '  TOOL write_file {"path": "new.py", "content": "entire file content"}\n'
+    + '  TOOL todo {"items": ["Read code", "Modify X"]}\n\n'
+    + 'RULES:\n- ' + rule + '\n'
+    + '- edit_file requires old_text to appear exactly once — include surrounding lines if needed.\n'
+    + '- Shell commands and git are not available here (directory is in browser FS).\n'
+    + '- When done: write the response as regular text without a TOOL line.';
 }
 
 /* Fråga om lov i lokalt läge – samma ruta, men svaret stannar i webbläsaren. */
@@ -2651,15 +2608,15 @@ function askLocal(kind, key, title, detail){
       '<div class="code-ask" id="'+id+'">'
       + '<div class="ah"><span class="what">🔐 '+esc(title)+'</span>'
       + '<span class="acts">'
-      + '<button class="btn accent small" data-a="1">Tillåt</button>'
-      + '<button class="btn ghost small" data-a="2">Tillåt alltid</button>'
-      + '<button class="btn ghost small" data-a="0">Neka</button>'
+      + '<button class="btn accent small" data-a="1">Allow</button>'
+      + '<button class="btn ghost small" data-a="2">Allow always</button>'
+      + '<button class="btn ghost small" data-a="0">Deny</button>'
       + '</span></div>' + body + '</div>');
     node.scrollIntoView({block:'nearest'});
     const done = (allow, always)=>{
       node.classList.add('done');
       node.querySelector('.ah').insertAdjacentHTML('beforeend',
-        '<span class="state">'+(allow?(always?'✓ Tillåtet (alltid)':'✓ Tillåtet'):'✕ Nekat')+'</span>');
+        '<span class="state">'+(allow?(always?'✓ Allowed (always)':'✓ Allowed'):'✕ Denied')+'</span>');
       if(allow && always) localAlways.add(key);
       resolve(allow);
     };
@@ -2671,12 +2628,12 @@ function askLocal(kind, key, title, detail){
   });
 }
 async function pickLocalDir(){
-  if(!FS_OK){ toast('Din webbläsare stödjer inte lokal mapp – använd Chrome/Edge', true); return; }
+  if(!FS_OK){ toast('Your browser does not support local folders — use Chrome or Edge', true); return; }
   try{ localDir = await window.showDirectoryPicker(); }
   catch(e){ return; }   // användaren avbröt
   localDirName = localDir.name;
   try{ if(localDir.requestPermission) await localDir.requestPermission({mode:'readwrite'}); }catch(e){}
-  toast('Lokal mapp öppnad: '+localDirName);
+  toast('Local folder opened: '+localDirName);
   updateCodeView(); loadLocalTree();
 }
 function closeLocalDir(){ localDir=null; localDirName=''; updateCodeView(); }
@@ -2706,15 +2663,15 @@ async function fsWalk(dir, prefix, out, depth){
 async function loadLocalTree(){
   const box = document.getElementById('codeTree'); const pathEl=document.getElementById('codeWsPath');
   if(!box) return;
-  if(pathEl) pathEl.textContent = '📂 '+localDirName+' (lokal, i webbläsaren)';
-  box.innerHTML = '<div class="hint" style="padding:6px 8px">Läser…</div>';
+  if(pathEl) pathEl.textContent = '📂 '+localDirName+' (local, browser FS)';
+  box.innerHTML = '<div class="hint" style="padding:6px 8px">Reading…</div>';
   try{
     const out=[]; await fsWalk(localDir, '', out, 0);
     out.sort();
     box.innerHTML = out.map(f=>'<div class="f" title="'+esc(f)+'" onclick="askAboutFile(\''
       + esc(f).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">'+esc(f)+'</div>').join('')
-      || '<div class="hint" style="padding:6px 8px">(tom mapp)</div>';
-  }catch(e){ box.innerHTML='<div class="hint" style="padding:6px 8px">Kunde inte läsa mappen.</div>'; }
+      || '<div class="hint" style="padding:6px 8px">(empty folder)</div>';
+  }catch(e){ box.innerHTML='<div class="hint" style="padding:6px 8px">Could not read folder.</div>'; }
 }
 const TOOL_NAMES = new Set(['list_dir','tree','read_file','search','edit_file','write_file',
   'run_command','git_status','git_diff','git_branch','git_commit','todo']);
@@ -2786,13 +2743,13 @@ function stripEditsJs(text){
 /* Enkel rad-diff till förhandsvisning i frågerutan (lokalt läge). */
 function previewDiff(oldText, newText, path){
   const d = jsLineDiff(oldText||'', newText||'');
-  return d ? ('--- a/'+path+'\n+++ b/'+path+'\n'+d) : ('+++ b/'+path+'\n(för stor för diff)');
+  return d ? ('--- a/'+path+'\n+++ b/'+path+'\n'+d) : ('+++ b/'+path+'\n(too large for diff)');
 }
 async function execToolLocal(call){
   try{
     if(call.name==='tree'){
       const out=[]; await fsWalk(localDir,'',out,8);
-      return 'Filer i mappen:\n'+(out.slice(0,600).join('\n')||'(tom)');
+      return 'Files in folder:\n'+(out.slice(0,600).join('\n')||'(empty)');
     }
     if(call.name==='todo'){
       let items = call.args.items || call.args.todos || call.args.plan || [];
@@ -2800,56 +2757,56 @@ async function execToolLocal(call){
       const norm = (items||[]).slice(0,20).map(i=> (i && typeof i==='object')
         ? {text:String(i.text||i.task||''), done:!!i.done, active:(String(i.status||'').toLowerCase()==='doing')}
         : {text:String(i), done:false, active:false}).filter(i=>i.text);
-      if(!norm.length) return 'FEL: items saknas (en lista med punkter)';
+      if(!norm.length) return 'ERROR: items missing (a list of tasks)';
       renderPlan(norm);
-      return 'Planen är noterad och visas för användaren.';
+      return 'Plan recorded and displayed to the user.';
     }
     if(call.name==='write_file'){
       const path=(call.args.path||'').trim();
       const content=call.args.content;
-      if(!path) return 'FEL: path saknas';
-      if(content==null) return 'FEL: content saknas';
+      if(!path) return 'ERROR: path missing';
+      if(content==null) return 'ERROR: content missing';
       let cur=''; try{ cur = await fsRead(path); }catch(e){}
-      const ok = await askLocal('edit', 'write:'+path, 'Skriva filen '+path, previewDiff(cur, content, path));
-      if(!ok) return 'NEKAT: användaren sa nej till att skriva '+path+'. Gör inte om samma sak.';
+      const ok = await askLocal('edit', 'write:'+path, 'Write file '+path, previewDiff(cur, content, path));
+      if(!ok) return 'DENIED: user refused writing '+path+'. Do not repeat this action.';
       await fsWrite(path, String(content));
       renderApplied({path, diff: previewDiff(cur, content, path), created: cur==='',
                      local:true, before: cur});
       loadLocalTree();
-      return 'OK: skrev '+path+' ('+String(content).length+' tecken).';
+      return 'OK: wrote '+path+' ('+String(content).length+' chars).';
     }
     if(call.name==='edit_file'){
       const path=(call.args.path||'').trim();
       const oldText = call.args.old_text!=null ? call.args.old_text : call.args.old;
       const newText = call.args.new_text!=null ? call.args.new_text : call.args.new;
-      if(!path) return 'FEL: path saknas';
-      if(!oldText) return 'FEL: old_text saknas – ange den exakta text som ska bytas ut.';
-      let cur; try{ cur = await fsRead(path); }catch(e){ return 'FEL: ingen fil '+path; }
+      if(!path) return 'ERROR: path missing';
+      if(!oldText) return 'ERROR: old_text missing — specify the exact text to replace.';
+      let cur; try{ cur = await fsRead(path); }catch(e){ return 'ERROR: no file '+path; }
       const hits = cur.split(oldText).length-1;
-      if(hits!==1) return 'FEL: texten finns '+hits+' gånger i '+path
-        + '. Den måste finnas exakt en gång – läs filen och ta med fler omgivande rader.';
+      if(hits!==1) return 'ERROR: text occurs '+hits+' times in '+path
+        + '. It must occur exactly once — read the file and include more surrounding lines.';
       const updated = cur.replace(oldText, newText==null?'':newText);
-      const ok = await askLocal('edit', 'edit:'+path, 'Ändra i filen '+path, previewDiff(cur, updated, path));
-      if(!ok) return 'NEKAT: användaren sa nej till att ändra '+path+'. Gör inte om samma sak.';
+      const ok = await askLocal('edit', 'edit:'+path, 'Modify file '+path, previewDiff(cur, updated, path));
+      if(!ok) return 'DENIED: user refused modifying '+path+'. Do not repeat this action.';
       await fsWrite(path, updated);
       renderApplied({path, diff: previewDiff(cur, updated, path), created:false,
                      local:true, before: cur});
       loadLocalTree();
-      return 'OK: ändrade '+path+'.';
+      return 'OK: modified '+path+'.';
     }
     if(call.name==='run_command' || call.name==='git_status' || call.name==='git_diff'
        || call.name==='git_branch' || call.name==='git_commit'){
-      return 'FEL: '+call.name+' finns inte i lokalt mappläge (mappen ligger i webbläsaren, '
-        + 'inte på servern). Välj en arbetsyta på servern om du behöver köra kommandon eller git.';
+      return 'ERROR: '+call.name+' is not available in local folder mode (folder is in browser FS, '
+        + 'not on server). Select a server workspace if you need to run shell commands or git.';
     }
     if(call.name==='list_dir'){
       const out=[]; await fsWalk(await fsSubdir(call.args.path||'.'), '', out, 6);
-      return 'Innehåll:\n'+(out.slice(0,300).join('\n')||'(tom)');
+      return 'Contents:\n'+(out.slice(0,300).join('\n')||'(empty)');
     }
     if(call.name==='read_file'){
       const t = await fsRead(call.args.path); const ln=t.split('\n');
       let s=Math.max(1, call.args.start||1), e=Math.min(ln.length, call.args.end||ln.length);
-      return 'Fil '+call.args.path+' (rad '+s+'–'+e+' av '+ln.length+'):\n'
+      return 'File '+call.args.path+' (lines '+s+'–'+e+' of '+ln.length+'):\n'
         + ln.slice(s-1,e).map((l,k)=>(s+k)+'\t'+l).join('\n');
     }
     if(call.name==='search'){
@@ -2861,10 +2818,10 @@ async function execToolLocal(call){
         }catch(e){}
         if(hits.length>=40) break;
       }
-      return 'Sökträffar för '+JSON.stringify(q)+':\n'+(hits.join('\n')||'(inga)');
+      return 'Search results for '+JSON.stringify(q)+':\n'+(hits.join('\n')||'(none)');
     }
-    return 'Okänt verktyg: '+call.name;
-  }catch(e){ return 'FEL: '+(e.message||e); }
+    return 'Unknown tool: '+call.name;
+  }catch(e){ return 'ERROR: '+(e.message||e); }
 }
 async function runAgentLocal(model){
   let convo = [{role:'system', content: agentLocalSys()}].concat(codeMessages);
@@ -2885,7 +2842,7 @@ async function runAgentLocal(model){
       codeAppend('<div class="code-tool">🔧 <b>'+esc(call.name)+'</b> '+esc(JSON.stringify(call.args))
         +'<pre class="code-diff" style="margin-top:6px">'+esc(res.slice(0,4000))+'</pre></div>');
       convo.push({role:'assistant', content:full});
-      convo.push({role:'user', content:'VERKTYGSRESULTAT ('+call.name+'):\n'+res});
+      convo.push({role:'user', content:'TOOL RESULT ('+call.name+'):\n'+res});
       continue;
     }
     if(think) think.remove();
@@ -2907,9 +2864,9 @@ async function applyEditLocal(id){
   try{
     await fsWrite(node._edit.path, node._edit.content);
     node.classList.add('done');
-    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Skrivet lokalt</span>');
-    toast('Skrivet: '+node._edit.path); loadLocalTree();
-  }catch(e){ toast('Kunde inte skriva: '+(e.message||e), true); }
+    node.querySelector('.eh').insertAdjacentHTML('beforeend','<span class="state">✓ Written locally</span>');
+    toast('Written: '+node._edit.path); loadLocalTree();
+  }catch(e){ toast('Could not write: '+(e.message||e), true); }
 }
 
 /* ---- Kommandokörning (fas 4) ---- */
@@ -2953,7 +2910,7 @@ async function loadRepos(force){
   if(provEl && provEl.value) repoProvider = provEl.value;
   if(!sel) return;
   if(repoList.length && !force){ renderRepos(); return; }
-  sel.innerHTML = '<option value="">Hämtar dina '+(repoProvider==='gitlab'?'GitLab':'GitHub')+'-repon…</option>';
+  sel.innerHTML = '<option value="">Loading your '+(repoProvider==='gitlab'?'GitLab':'GitHub')+' repos…</option>';
   const endpoint = (repoProvider === 'gitlab') ? '/api/gitlab/repos' : '/api/github/repos';
   try{
     const r = await api(endpoint, {headers: headers(false)});
@@ -2963,15 +2920,15 @@ async function loadRepos(force){
     repoDir = d.dir || '';
     if(d.error){
       sel.innerHTML = '<option value="">'+esc(d.error)+'</option>';
-      const provName = repoProvider === 'gitlab' ? 'GitLab-token' : 'GitHub-token';
-      hint.innerHTML = 'Lägg in en ' + provName + ' i <a href="#" onclick="showView(\'settings\');'
-        + 'return false" style="color:var(--accent-hov)">Inställningar</a> för att lista repon automatiskt, eller klicka <b>➕ Ange repo…</b> för att ange direkt.';
+      const provName = repoProvider === 'gitlab' ? 'GitLab token' : 'GitHub token';
+      hint.innerHTML = 'Add a ' + provName + ' in <a href="#" onclick="showView(\'settings\');'
+        + 'return false" style="color:var(--accent-hov)">Settings</a> to list repos automatically, or click <b>➕ Custom repo…</b> to enter directly.';
       renderRepos(d.current);
       return;
     }
     renderRepos(d.current);
   }catch(e){
-    sel.innerHTML = '<option value="">Kunde inte hämta listan</option>';
+    sel.innerHTML = '<option value="">Could not load repo list</option>';
     hint.textContent = e.message;
   }
 }
@@ -2986,15 +2943,15 @@ function renderRepos(currentPath){
   });
   localRepos.forEach(lr => {
     if(!seen.has(lr.slug)){
-      options.push({slug: lr.slug, desc: '📁 Hämtat lokalt', priv: false});
+      options.push({slug: lr.slug, desc: '📁 Cloned locally', priv: false});
     }
   });
   if(!options.length){
-    sel.innerHTML = '<option value="">Inga repon i listan (klicka "➕ Ange repo…" för att ange direkt)</option>';
+    sel.innerHTML = '<option value="">No repos in list (click "➕ Custom repo…" to enter directly)</option>';
     onRepoPick();
     return;
   }
-  sel.innerHTML = '<option value="">Välj ett repo…</option>' + options.map(r=>
+  sel.innerHTML = '<option value="">Select a repo…</option>' + options.map(r=>
     '<option value="'+esc(r.slug)+'">'+esc(r.slug)+(r.priv?'  🔒':'')
     + (r.desc ? '  –  '+esc(r.desc) : '')+'</option>').join('');
   const mine = (currentPath || cfg.code_ws_path || '').split('/').pop();
@@ -3013,61 +2970,61 @@ function onRepoPick(){
   const local = localRepo(slug);
   if(rm){
     rm.style.display = local ? '' : 'none';
-    rm.title = local ? ('Radera ' + local.path + ' från serverns disk') : '';
+    rm.title = local ? ('Delete ' + local.path + ' from server disk') : '';
   }
   const hint = document.getElementById('codeRepoHint');
   if(!hint) return;
   if(local){
-    const bits = ['📁 hämtat: ' + local.path, 'gren ' + (local.branch||'?')];
+    const bits = ['📁 cloned: ' + local.path, 'branch ' + (local.branch||'?')];
     if(local.dirty) bits.push(local.dirty + (local.dirty === 1
-      ? ' osparad ändring' : ' osparade ändringar'));
+      ? ' uncommitted change' : ' uncommitted changes'));
     if(local.ahead) bits.push(local.ahead + (local.ahead === 1
-      ? ' opushad commit' : ' opushade commits'));
+      ? ' unpushed commit' : ' unpushed commits'));
     hint.textContent = bits.join(' · ');
   }else if(slug){
-    hint.textContent = 'Inte hämtat än – klicka "⬇ Hämta & arbeta här".';
+    hint.textContent = 'Not cloned yet — click "⬇ Clone & work here".';
   }else{
     const fetched = localRepos.length;
     hint.textContent = fetched
-      ? ('Välj ett repo eller klicka "➕ Ange repo…". ' + fetched + (fetched === 1
-          ? ' repo ligger hämtat på servern.' : ' repon ligger hämtade på servern.'))
-      : (repoDir ? ('Hämtas till ' + repoDir) : '');
+      ? ('Select a repo or click "➕ Custom repo…". ' + fetched + (fetched === 1
+          ? ' repo is cloned on server.' : ' repos are cloned on server.'))
+      : (repoDir ? ('Cloned into ' + repoDir) : '');
   }
 }
 async function promptCustomRepo(){
   const prov = repoProvider === 'gitlab' ? 'GitLab' : 'GitHub';
   const ex = repoProvider === 'gitlab'
-    ? 'anderssjoeberg75/ollamastudio eller http://gitlab.andrix.se/anderssjoeberg75/ollamastudio.git'
-    : 'ägare/repo eller https://github.com/…';
-  const val = prompt('Ange '+prov+'-repo (slug eller URL):\nExempel: '+ex, '');
+    ? 'anderssjoeberg75/ollamastudio or http://gitlab.andrix.se/anderssjoeberg75/ollamastudio.git'
+    : 'owner/repo or https://github.com/…';
+  const val = prompt('Enter '+prov+' repo (slug or URL):\nExample: '+ex, '');
   if(!val || !val.trim()) return;
   await doFetchRepo(val.trim());
 }
 async function removeRepo(){
   const slug = document.getElementById('codeRepoSelect').value;
   const local = localRepo(slug);
-  if(!local){ toast('Repot är inte hämtat', true); return; }
+  if(!local){ toast('Repo is not cloned', true); return; }
 
   const risk = [];
   if(local.dirty) risk.push(local.dirty + (local.dirty === 1
-    ? ' osparad ändring' : ' osparade ändringar'));
+    ? ' uncommitted change' : ' uncommitted changes'));
   if(local.ahead) risk.push(local.ahead + (local.ahead === 1
-    ? ' commit som inte pushats' : ' commits som inte pushats'));
-  if(local.ahead === null) risk.push('grenen "' + (local.branch||'?') + '" finns inte på origin '
-    + '– allt arbete i den är opushat');
+    ? ' unpushed commit' : ' unpushed commits'));
+  if(local.ahead === null) risk.push('branch "' + (local.branch||'?') + '" does not exist on origin '
+    + '— all commits are unpushed');
   const warn = risk.length
-    ? '\n\n⚠ DU FÖRLORAR:\n· ' + risk.join('\n· ') + '\nDet går inte att ångra.'
-    : '\n\nAllt arbete verkar pushat till servern, så det går att hämta hem igen.';
-  if(!confirm('Radera ' + slug + ' från serverns disk?\n\nMappen som tas bort:\n' + local.path
+    ? '\n\n⚠ YOU WILL LOSE:\n· ' + risk.join('\n· ') + '\nThis action cannot be undone.'
+    : '\n\nAll work appears pushed to remote, so it can be re-cloned.';
+  if(!confirm('Delete ' + slug + ' from server disk?\n\nFolder to remove:\n' + local.path
       + warn)) return;
 
-  if(risk.length && !confirm('Sista kontrollen: ' + risk.join(' och ')
-      + ' i ' + slug + ' försvinner för alltid.\n\nRadera ändå?')) return;
+  if(risk.length && !confirm('Final confirmation: ' + risk.join(' and ')
+      + ' in ' + slug + ' will be permanently lost.\n\nDelete anyway?')) return;
 
   const rm = document.getElementById('codeRepoRemove');
   const hint = document.getElementById('codeRepoHint');
   rm.disabled = true;
-  hint.textContent = 'Raderar ' + slug + '…';
+  hint.textContent = 'Deleting ' + slug + '…';
   try{
     const r = await api('/api/github/remove', {method:'POST', headers:headers(true),
       body: JSON.stringify({repo: slug})});
@@ -3082,42 +3039,42 @@ async function removeRepo(){
     else { const t = document.getElementById('codeTree'); if(t) t.innerHTML = ''; gitStatus(); }
   }catch(e){
     hint.textContent = '✕ ' + e.message;
-    toast('Kunde inte radera: '+e.message, true);
+    toast('Could not delete: '+e.message, true);
   }finally{
     rm.disabled = false;
   }
 }
 async function fetchRepo(){
   const slug = document.getElementById('codeRepoSelect').value;
-  if(!slug){ toast('Välj ett repo först', true); return; }
+  if(!slug){ toast('Select a repo first', true); return; }
   await doFetchRepo(slug);
 }
 async function doFetchRepo(target){
   const btn = document.getElementById('codeRepoFetch');
   const hint = document.getElementById('codeRepoHint');
   if(btn) btn.disabled = true;
-  hint.textContent = 'Hämtar ' + target + '… (första gången kan ta en stund)';
-  analyzeNote('⬇ <b>Hämtar ' + esc(target) + '…</b> repot analyseras så fort det är nere.', 'warn');
+  hint.textContent = 'Cloning ' + target + '… (initial clone may take a moment)';
+  analyzeNote('⬇ <b>Cloning ' + esc(target) + '…</b> repo will be analyzed upon completion.', 'warn');
   const endpoint = (repoProvider === 'gitlab') ? '/api/gitlab/fetch' : '/api/github/fetch';
   try{
     const r = await api(endpoint, {method:'POST', headers:headers(true),
       body: JSON.stringify({repo: target})});
     const d = await r.json();
     if(!d.ok) throw new Error(d.message || d.error || ('HTTP '+r.status));
-    hint.textContent = '✓ ' + d.message + ' · arbetsyta: ' + d.path;
-    toast('Arbetar nu mot ' + target);
+    hint.textContent = '✓ ' + d.message + ' · workspace: ' + d.path;
+    toast('Now working with ' + target);
     await loadRepos(true);
     document.getElementById('codeRepoSelect').value = target;
     onRepoPick();
     try{ const cr = await fetch('/api/config', {headers: headers(false)}); if(cr.ok) cfg = await cr.json(); }catch(e){}
     updateCodeView(); loadTree(); gitStatus();
     analyzedPath = cfg.code_ws_path || '';
-    if(d.analysis) analyzeNote('✓ <b>Repot är analyserat.</b> ' + esc(d.analysis)
-      + ' — Codex vet nu vad projektet innehåller och var funktionerna finns.', 'ok');
+    if(d.analysis) analyzeNote('✓ <b>Repository analyzed.</b> ' + esc(d.analysis)
+      + ' — Codex now knows project structure and functions.', 'ok');
     else analyzeWorkspace(true);
   }catch(e){
     hint.textContent = '✕ ' + e.message;
-    toast('Kunde inte hämta repot: '+e.message, true);
+    toast('Could not clone repo: '+e.message, true);
   }finally{
     if(btn) btn.disabled = false;
   }
@@ -3133,11 +3090,11 @@ async function gitStatus(){
     const slug = g.slug || ((g.owner && g.repo_name) ? (g.owner+'/'+g.repo_name) : 'git-remote');
     const provName = g.provider === 'gitlab' ? 'GitLab' : (g.provider === 'github' ? 'GitHub' : 'Git');
     document.getElementById('codeGitInfo').innerHTML =
-      'Gren <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' ändrade filer · '+provName+': '+esc(slug)
-      + (g.has_token ? '' : ' · <span style="color:var(--amber)">ingen token</span>');
+      'Branch <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' modified files · '+provName+': '+esc(slug)
+      + (g.has_token ? '' : ' · <span style="color:var(--amber)">no token</span>');
     const prBtn = document.getElementById('codePrMrBtn');
     if(prBtn){
-      prBtn.textContent = (g.provider === 'gitlab') ? 'Skapa MR' : 'Skapa PR';
+      prBtn.textContent = (g.provider === 'gitlab') ? 'Create MR' : 'Create PR';
     }
   }catch(e){ bar.style.display='none'; }
 }
@@ -3146,28 +3103,28 @@ async function gitPost(path, body){
   return await r.json();
 }
 async function gitBranch(){
-  const name = prompt('Namn på ny gren:', 'claude/andring');
+  const name = prompt('New branch name:', 'feature/update');
   if(!name) return;
-  gitMsg('Skapar gren…');
+  gitMsg('Creating branch…');
   const d = await gitPost('/api/git/branch', {name});
   if(d.status) lastGit=d.status, gitStatus();
-  gitMsg(d.ok ? ('✓ Gren skapad: '+esc(name)) : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+  gitMsg(d.ok ? ('✓ Branch created: '+esc(name)) : ('✕ '+esc(d.message||d.error||'error')), !d.ok);
 }
 async function gitCommit(){
-  const msg = prompt('Commit-meddelande:', 'Ändringar via kodassistenten');
+  const msg = prompt('Commit message:', 'Changes via AI assistant');
   if(!msg) return;
-  gitMsg('Committar…');
+  gitMsg('Committing…');
   const d = await gitPost('/api/git/commit', {message: msg});
   gitStatus();
-  gitMsg(d.ok ? '✓ Committat' : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+  gitMsg(d.ok ? '✓ Committed' : ('✕ '+esc(d.message||d.error||'error')), !d.ok);
 }
 async function gitPush(){
   const branch = lastGit && lastGit.branch;
   const prov = (lastGit && lastGit.provider === 'gitlab') ? 'GitLab' : ((lastGit && lastGit.provider === 'github') ? 'GitHub' : 'remote');
-  if(!confirm('Pusha grenen "'+(branch||'')+'" till '+prov+'?')) return;
-  gitMsg('Pushar…');
+  if(!confirm('Push branch "'+(branch||'')+'" to '+prov+'?')) return;
+  gitMsg('Pushing…');
   const d = await gitPost('/api/git/push', {});
-  gitMsg(d.ok ? '✓ Pushad' : ('✕ '+esc(d.message||d.error||'fel')), !d.ok);
+  gitMsg(d.ok ? '✓ Pushed' : ('✕ '+esc(d.message||d.error||'error')), !d.ok);
 }
 async function createPrOrMr(){
   if(lastGit && lastGit.provider === 'gitlab'){
@@ -3178,34 +3135,34 @@ async function createPrOrMr(){
 }
 async function gitlabMR(){
   if(lastGit && lastGit.branch && !lastGit.has_token){
-    gitMsg('✕ Ingen GitLab-token sparad (⚙ Inställningar).', true); return;
+    gitMsg('✕ No GitLab token saved (⚙ Settings).', true); return;
   }
-  const title = prompt('Merge Request-titel:', 'Ändringar via kodassistenten');
+  const title = prompt('Merge Request title:', 'Changes via AI assistant');
   if(title===null) return;
-  const body = prompt('MR-beskrivning (valfritt):', '') || '';
-  gitMsg('Skapar Merge Request…');
+  const body = prompt('MR description (optional):', '') || '';
+  gitMsg('Creating Merge Request…');
   const d = await gitPost('/api/gitlab/mr', {title, body});
   if(d.ok && d.url){
-    gitMsg('✓ MR skapad: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a>');
-    toast('Merge Request skapad');
+    gitMsg('✓ MR created: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a>');
+    toast('Merge Request created');
   }else{
-    gitMsg('✕ '+esc(d.message||d.error||'kunde inte skapa MR'), true);
+    gitMsg('✕ '+esc(d.message||d.error||'could not create MR'), true);
   }
 }
 async function githubPR(){
   if(lastGit && lastGit.branch && !lastGit.has_token){
-    gitMsg('✕ Ingen GitHub-token sparad (⚙ Inställningar).', true); return;
+    gitMsg('✕ No GitHub token saved (⚙ Settings).', true); return;
   }
-  const title = prompt('PR-titel:', 'Ändringar via kodassistenten');
+  const title = prompt('PR title:', 'Changes via AI assistant');
   if(title===null) return;
-  const body = prompt('PR-beskrivning (valfritt):', '') || '';
-  gitMsg('Skapar pull request…');
+  const body = prompt('PR description (optional):', '') || '';
+  gitMsg('Creating pull request…');
   const d = await gitPost('/api/github/pr', {title, body});
   if(d.ok && d.url){
-    gitMsg('✓ PR skapad: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a>');
-    toast('Pull request skapad');
+    gitMsg('✓ PR created: <a href="'+esc(d.url)+'" target="_blank" rel="noopener">'+esc(d.url)+'</a>');
+    toast('Pull request created');
   }else{
-    gitMsg('✕ '+esc(d.message||d.error||'kunde inte skapa PR'), true);
+    gitMsg('✕ '+esc(d.message||d.error||'could not create PR'), true);
   }
 }
 
@@ -3230,18 +3187,18 @@ async function loadMemories(){
   const list = document.getElementById('memList');
   const cnt = document.getElementById('memCount');
   if(!list) return;
-  list.innerHTML = '<div class="mem-empty">Hämtar…</div>';
+  list.innerHTML = '<div class="mem-empty">Loading…</div>';
   try{
     const r = await api('/api/memory', {headers: headers(false)});
     const d = await r.json();
     const mems = d.memories || [];
     if(cnt) cnt.textContent = mems.length ? '('+mems.length+')' : '';
-    if(!mems.length){ list.innerHTML = '<div class="mem-empty">Inga sparade minnen än.</div>'; return; }
+    if(!mems.length){ list.innerHTML = '<div class="mem-empty">No saved memories yet.</div>'; return; }
     list.innerHTML = mems.map(m=>
       '<div class="mem-item"><span>'+esc(m.text)+'</span>'
-      + (m.id ? '<button title="Ta bort" onclick="deleteMemory(\''+esc(String(m.id)).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">✕</button>' : '')
+      + (m.id ? '<button title="Delete" onclick="deleteMemory(\''+esc(String(m.id)).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">✕</button>' : '')
       + '</div>').join('');
-  }catch(e){ list.innerHTML = '<div class="mem-empty">Kunde inte hämta minnet.</div>'; }
+  }catch(e){ list.innerHTML = '<div class="mem-empty">Could not load memory.</div>'; }
 }
 async function addMemory(){
   const inp = document.getElementById('memAddInput');
@@ -3249,7 +3206,7 @@ async function addMemory(){
   if(!t){ return; }
   inp.value='';
   await memWrite(t, '');   // spara som ett användarpåstående
-  toast('Sparat i minnet');
+  toast('Saved to memory');
   setTimeout(loadMemories, 600);   // Mem0 kan extrahera med viss fördröjning
 }
 async function deleteMemory(id){
@@ -3257,20 +3214,20 @@ async function deleteMemory(id){
     const r = await api('/api/memory/delete', {method:'POST', headers:headers(true),
       body: JSON.stringify({id})});
     const d = await r.json().catch(()=>({}));
-    if(!d.ok){ toast('Kunde inte ta bort'+(d.error?': '+d.error:''), true); }
+    if(!d.ok){ toast('Could not delete'+(d.error?': '+d.error:''), true); }
     loadMemories();   // ladda om oavsett så listan speglar faktiskt läge
-  }catch(e){ toast('Kunde inte ta bort', true); }
+  }catch(e){ toast('Could not delete', true); }
 }
 async function clearMemories(){
-  if(!confirm('Rensa ALLA sparade minnen för den här användaren?')) return;
+  if(!confirm('Clear ALL saved memories for this user?')) return;
   try{
     const r = await api('/api/memory/delete', {method:'POST', headers:headers(true),
       body: JSON.stringify({all:true})});   // uttryckligt val – aldrig via tomt id
     const d = await r.json().catch(()=>({}));
-    if(d.ok) toast('Minnet rensat');
-    else toast('Kunde inte rensa'+(d.error?': '+d.error:''), true);
+    if(d.ok) toast('Memories cleared');
+    else toast('Could not clear memories'+(d.error?': '+d.error:''), true);
     loadMemories();
-  }catch(e){ toast('Kunde inte rensa', true); }
+  }catch(e){ toast('Could not clear memories', true); }
 }
 function populateBackends(){
   const sel = document.getElementById('chatBackend');
@@ -3299,7 +3256,7 @@ function pctBar(frac, color){
 async function fetchSystem(){
   try{
     const r = await fetch('/api/system', {headers: headers(false)});
-    if(!r.ok){ document.getElementById('systemBody').innerHTML='<div class="sys-warn">Kunde inte hämta systeminfo.</div>'; return; }
+    if(!r.ok){ document.getElementById('systemBody').innerHTML='<div class="sys-warn">Could not load system info.</div>'; return; }
     lastSystem = await r.json();
     renderSystem(lastSystem);
   }catch(e){}
@@ -3310,19 +3267,19 @@ function renderSystem(s){
   html += '<div class="metric"><div class="h"><span class="name">Processor (CPU)</span>'
         + '<span class="val">'+(cpu.percent!=null?cpu.percent+'%':'–')+'</span></div>'
         + pctBar((cpu.percent||0)/100)
-        + '<div class="sub">'+(cpu.cores?cpu.cores+' kärnor':'')
+        + '<div class="sub">'+(cpu.cores?cpu.cores+' cores':'')
         + (cpu.load?' · load '+cpu.load.map(x=>x.toFixed(2)).join(' / '):'')+'</div></div>';
   const mfrac = (mem.total&&mem.used!=null)?mem.used/mem.total:0;
-  html += '<div class="metric"><div class="h"><span class="name">Minne (RAM)</span>'
+  html += '<div class="metric"><div class="h"><span class="name">Memory (RAM)</span>'
         + '<span class="val">'+(mem.total?humanSize(mem.used)+' / '+humanSize(mem.total):'–')+'</span></div>'
         + pctBar(mfrac)
-        + '<div class="sub">'+(mem.total?(mfrac*100).toFixed(0)+'% använt':'')+'</div></div>';
+        + '<div class="sub">'+(mem.total?(mfrac*100).toFixed(0)+'% used':'')+'</div></div>';
   html += '</div>';
 
-  html += '<div class="section-title" style="margin-top:14px">Grafikkort (GPU)</div>';
+  html += '<div class="section-title" style="margin-top:14px">Graphics Card (GPU)</div>';
   if(s.gpu_error) html += '<div class="sysnote">'+esc(s.gpu_error)+'</div>';
   if(!s.gpus || !s.gpus.length){
-    if(!s.gpu_error) html += '<div class="sysnote">Inga GPU:er rapporterades.</div>';
+    if(!s.gpu_error) html += '<div class="sysnote">No GPUs reported.</div>';
   } else {
     for(const g of s.gpus){
       const memFrac = g.mem_total_mb ? g.mem_used_mb/g.mem_total_mb : 0;
@@ -3337,18 +3294,18 @@ function renderSystem(s){
       const busy = (g.procs||[]).some(p=>p.is_ollama) || (g.mem_used_mb||0) > 400;
       title += '<button class="btn ghost small gpu-unload" data-gpu="'+g.index+'"'
              + (busy ? '' : ' disabled')
-             + ' title="'+(busy ? 'Ladda ur modellen så VRAM:et blir ledigt'
-                                : 'Ingen modell ligger laddad på det här kortet')+'">'
-             + '⏏ Ladda ur</button>';
+             + ' title="'+(busy ? 'Unload model to free VRAM'
+                                : 'No model currently loaded on this GPU')+'">'
+             + '⏏ Unload</button>';
       title += '</div>';
       const hd = (t,v)=>'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--subtle);margin-bottom:6px"><span>'+t+'</span><span>'+v+'</span></div>';
       const metrics = '<div class="gpu-metrics">'
-        + '<div>'+hd('Användning', g.util!=null?g.util+'%':'–')+pctBar(utilFrac)+'</div>'
+        + '<div>'+hd('Utilization', g.util!=null?g.util+'%':'–')+pctBar(utilFrac)+'</div>'
         + '<div>'+hd('VRAM', g.mem_total_mb?mbSize(g.mem_used_mb)+' / '+mbSize(g.mem_total_mb):'–')+pctBar(memFrac, g.mem_total_mb&&memFrac>0.9?'var(--danger)':'var(--accent)')+'</div>'
         + '</div>';
       let stats = '<div class="gpu-stats">';
       if(g.temp!=null) stats += '<span>Temp: '+g.temp+' °C</span>';
-      if(g.power!=null) stats += '<span>Effekt: '+g.power.toFixed(0)+(g.power_limit?' / '+g.power_limit.toFixed(0):'')+' W</span>';
+      if(g.power!=null) stats += '<span>Power: '+g.power.toFixed(0)+(g.power_limit?' / '+g.power_limit.toFixed(0):'')+' W</span>';
       stats += '</div>';
       let procs = '';
       const plist = g.procs||[];
@@ -3360,7 +3317,7 @@ function renderSystem(s){
         }
         procs += '</div>';
       } else {
-        procs = '<div class="gpu-procs"><div class="row">Inga processer använder denna GPU just nu.</div></div>';
+        procs = '<div class="gpu-procs"><div class="row">No processes using this GPU right now.</div></div>';
       }
       html += '<div class="gpu-card">'+title+metrics+stats+procs+'</div>';
     }
@@ -3378,39 +3335,39 @@ async function unloadGpu(index, btn){
   // instansen håller. Säg det INNAN, inte efteråt.
   const multi = (cfg.backends||[]).some(b=>b.gpu!==null && b.gpu!==undefined && b.gpu!=='');
   const warn = multi ? '' :
-    '\n\nOBS: Ollama kör som EN instans för alla kort här, så alla laddade '
-    + 'modeller laddas ur – inte bara den på GPU '+index+'.';
-  if(!confirm('Ladda ur modellen på GPU '+index+(name?' ('+name+')':'')+'?\n\n'
-      + 'VRAM:et frigörs. Nästa fråga får ladda modellen igen, vilket tar några '
-      + 'sekunder.' + warn)) return;
+    '\n\nNOTE: Ollama runs as ONE instance across all cards here, so all loaded '
+    + 'models will be unloaded — not only the one on GPU '+index+'.';
+  if(!confirm('Unload model on GPU '+index+(name?' ('+name+')':'')+'?\n\n'
+      + 'VRAM will be freed. The next query will reload the model, which may take '
+      + 'a few seconds.' + warn)) return;
   const old = btn.textContent;
-  btn.disabled = true; btn.textContent = '⏳ Laddar ur…';
+  btn.disabled = true; btn.textContent = '⏳ Unloading…';
   try{
     const r = await api('/api/gpu/unload', {method:'POST', headers:headers(true),
       body: JSON.stringify({index})});
     const d = await r.json();
-    if(!d.ok) throw new Error((d.failed&&d.failed[0]&&d.failed[0].error) || d.error || 'kunde inte ladda ur');
+    if(!d.ok) throw new Error((d.failed&&d.failed[0]&&d.failed[0].error) || d.error || 'could not unload');
     if(d.unloaded.length){
-      toast('Laddade ur ' + d.unloaded.join(', ')
-            + (d.freed_bytes ? ' · ' + humanSize(d.freed_bytes) + ' frigjort' : ''));
+      toast('Unloaded ' + d.unloaded.join(', ')
+            + (d.freed_bytes ? ' · ' + humanSize(d.freed_bytes) + ' freed' : ''));
     } else {
       // Inget laddades ur. Servern säger varför – visa DET, inte ett tomt besked.
-      alert(d.message || ('Ingen modell låg laddad på GPU ' + index));
+      alert(d.message || ('No model was loaded on GPU ' + index));
       // Ligger modellen i en annan instans? Erbjud att tömma den i stället.
       const other = (d.elsewhere||[])[0];
-      if(other && confirm('Ladda ur ' + other.model + ' i ' + other.backend + ' i stället?\n\n'
-          + 'Det frigör VRAM:et, men gäller hela den instansen.')){
+      if(other && confirm('Unload ' + other.model + ' in ' + other.backend + ' instead?\n\n'
+          + 'This frees VRAM, but applies to that entire instance.')){
         const r2 = await api('/api/gpu/unload', {method:'POST', headers:headers(true),
           body: JSON.stringify({backend: other.backend})});
         const d2 = await r2.json();
-        if(!d2.ok) throw new Error(d2.error || 'kunde inte ladda ur');
-        toast('Laddade ur ' + d2.unloaded.join(', ')
-              + (d2.freed_bytes ? ' · ' + humanSize(d2.freed_bytes) + ' frigjort' : ''));
+        if(!d2.ok) throw new Error(d2.error || 'could not unload');
+        toast('Unloaded ' + d2.unloaded.join(', ')
+              + (d2.freed_bytes ? ' · ' + humanSize(d2.freed_bytes) + ' freed' : ''));
       }
     }
     refresh();                                   // visa det tomma kortet direkt
   }catch(e){
-    toast('Kunde inte ladda ur: '+e.message, true);
+    toast('Could not unload: '+e.message, true);
     btn.disabled = false; btn.textContent = old;
   }
 }
@@ -3441,16 +3398,16 @@ function closeScheduleModal(){
 async function populateScheduleProjects(){
   const sel = document.getElementById('schProjectSelect');
   if(!sel) return;
-  sel.innerHTML = '<option value="">Laddar projekt från GitLab…</option>';
+  sel.innerHTML = '<option value="">Loading projects from GitLab…</option>';
   try{
     const r = await api('/api/gitlab/repos');
     const d = await r.json();
     const repos = d.repos || [];
     if(!repos.length){
-      sel.innerHTML = '<option value="">Inga GitLab-projekt hittades (kontrollera GitLab-token under ⚙ Inställningar)</option>';
+      sel.innerHTML = '<option value="">No GitLab projects found (verify GitLab token under ⚙ Settings)</option>';
       return;
     }
-    let html = '<option value="">-- Välj GitLab-projekt --</option>';
+    let html = '<option value="">-- Select GitLab project --</option>';
     for(const repo of repos){
       const slug = repo.slug || repo.name;
       html += `<option value="${escSch(slug)}">${escSch(slug)}</option>`;
@@ -3483,7 +3440,7 @@ async function populateScheduleProjects(){
       }
     };
   }catch(e){
-    sel.innerHTML = '<option value="">Kunde inte hämta GitLab-projekt: ' + escSch(e.message) + '</option>';
+    sel.innerHTML = '<option value="">Could not load GitLab projects: ' + escSch(e.message) + '</option>';
   }
 }
 
@@ -3502,13 +3459,13 @@ async function loadScheduleJobs(){
     const jobs = d.jobs || [];
     window._lastScheduleJobs = jobs;
     if(!jobs.length){
-      container.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:12px;text-align:center;background:var(--bg);border-radius:8px">Inga schemalagda granskningar ännu. Välj ett projekt ovan och spara för att schemalägga.</div>';
+      container.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:12px;text-align:center;background:var(--bg);border-radius:8px">No scheduled audits yet. Select a project above and save to schedule.</div>';
       return;
     }
     let hasRunning = false;
     let html = '';
     for(const job of jobs){
-      if(job.running || (job.last_status && job.last_status.includes('Körs nu'))) {
+      if(job.running || (job.last_status && (job.last_status.includes('Körs nu') || job.last_status.includes('Running')))) {
         hasRunning = true;
       }
       // Säkerhet toggle-knapp
@@ -3516,21 +3473,21 @@ async function loadScheduleJobs(){
       const secStyle = secOn
         ? 'background:rgba(124,92,255,0.12);border:1px solid var(--accent);color:var(--accent-hov);font-weight:600'
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
-      const secBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_security', ${!secOn})" title="${secOn ? 'Säkerhetsgranskning är aktiv – klicka för att inaktivera' : 'Säkerhetsgranskning är inaktiv – klicka för att aktivera'}" style="${secStyle}"><span>🛡</span><span>Säkerhet</span></button>`;
+      const secBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_security', ${!secOn})" title="${secOn ? 'Security audit active — click to disable' : 'Security audit inactive — click to enable'}" style="${secStyle}"><span>🛡</span><span>Security</span></button>`;
 
       // Pentest toggle-knapp
       const penOn = job.run_pentest !== undefined ? !!job.run_pentest : true;
       const penStyle = penOn
         ? 'background:rgba(255,180,84,0.12);border:1px solid var(--amber);color:var(--amber);font-weight:600'
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
-      const penBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_pentest', ${!penOn})" title="${penOn ? 'Penetrationstest är aktivt – klicka för att inaktivera' : 'Penetrationstest är inaktivt – klicka för att aktivera'}" style="${penStyle}"><span>🎯</span><span>Pentest</span></button>`;
+      const penBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_pentest', ${!penOn})" title="${penOn ? 'Penetration test active — click to disable' : 'Penetration test inactive — click to enable'}" style="${penStyle}"><span>🎯</span><span>Pentest</span></button>`;
 
       // Ponytail toggle-knapp
       const pnyOn = !!job.run_ponytail;
       const pnyStyle = pnyOn
         ? 'background:rgba(57,214,127,0.12);border:1px solid var(--green);color:var(--green);font-weight:600'
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
-      const pnyBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_ponytail', ${!pnyOn})" title="${pnyOn ? 'Ponytail-granskning är aktiv – klicka för att inaktivera' : 'Ponytail-granskning är inaktiv – klicka för att aktivera'}" style="${pnyStyle}"><span>✂</span><span>Ponytail</span></button>`;
+      const pnyBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_ponytail', ${!pnyOn})" title="${pnyOn ? 'Ponytail audit active — click to disable' : 'Ponytail audit inactive — click to enable'}" style="${pnyStyle}"><span>✂</span><span>Ponytail</span></button>`;
 
       // Säkerhetsläge / Testläge väljare
       let modeBorder = 'var(--accent)';
@@ -3548,11 +3505,11 @@ async function loadScheduleJobs(){
       const secModeBadge = `
         <span style="position:relative;display:inline-flex;align-items:center">
           <select class="sch-mode-select" onchange="updateScheduleSecMode('${escSch(job.id)}', this.value)"
-                  title="Testläge: klicka för att välja säkerhetsnivå"
+                  title="Security mode: click to select level"
                   style="background:${modeBg};border:1px solid ${modeBorder};color:${modeColor};font-weight:600;outline:none;appearance:none;-webkit-appearance:none">
-            <option value="safe" ${job.sec_mode !== 'full' && job.sec_mode !== 'passive' ? 'selected' : ''}>🛡️ Safe-läge</option>
+            <option value="safe" ${job.sec_mode !== 'full' && job.sec_mode !== 'passive' ? 'selected' : ''}>🛡️ Safe mode</option>
             <option value="full" ${job.sec_mode === 'full' ? 'selected' : ''}>⚠️ Full pentest</option>
-            <option value="passive" ${job.sec_mode === 'passive' ? 'selected' : ''}>🔍 Passiv analys</option>
+            <option value="passive" ${job.sec_mode === 'passive' ? 'selected' : ''}>🔍 Passive analysis</option>
           </select>
           <span style="position:absolute;right:6px;pointer-events:none;font-size:9px;color:${modeColor}">▾</span>
         </span>
@@ -3561,13 +3518,13 @@ async function loadScheduleJobs(){
       let prodBadge = '';
       if(job.prod_server){
         const cleanServer = job.prod_server.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-        prodBadge = `<span class="sch-prod-badge" style="background:var(--card);border:1px solid var(--border);color:var(--subtle)" title="Produktionsserver: ${escSch(job.prod_server)} (klicka för att öppna)" onclick="window.open('${escSch(job.prod_server)}', '_blank')"><span>🌐</span><span class="sch-prod-text">${escSch(cleanServer)}</span></span>`;
+        prodBadge = `<span class="sch-prod-badge" style="background:var(--card);border:1px solid var(--border);color:var(--subtle)" title="Production server: ${escSch(job.prod_server)} (click to open)" onclick="window.open('${escSch(job.prod_server)}', '_blank')"><span>🌐</span><span class="sch-prod-text">${escSch(cleanServer)}</span></span>`;
       }
-      const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
+      const statusColor = job.running ? 'var(--amber)' : (job.last_status && (job.last_status.startsWith('Fel') || job.last_status.startsWith('Error')) ? 'var(--danger)' : 'var(--subtle)');
       const statusIcon = job.running ? '⏳ ' : '';
       
-      const nextRunStr = job.next_run ? new Date(job.next_run * 1000).toLocaleString('sv-SE', {dateStyle:'short', timeStyle:'short'}) : '-';
-      const lastRunStr = job.last_run ? new Date(job.last_run * 1000).toLocaleString('sv-SE', {dateStyle:'short', timeStyle:'short'}) : 'Aldrig';
+      const nextRunStr = job.next_run ? new Date(job.next_run * 1000).toLocaleString('en-US', {dateStyle:'short', timeStyle:'short'}) : '-';
+      const lastRunStr = job.last_run ? new Date(job.last_run * 1000).toLocaleString('en-US', {dateStyle:'short', timeStyle:'short'}) : 'Never';
 
       html += `
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;overflow:hidden">
@@ -3577,30 +3534,30 @@ async function loadScheduleJobs(){
               ${secBadge} ${penBadge} ${pnyBadge} ${secModeBadge} ${prodBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-              <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Kör granskningen direkt">
-                ${job.running ? '⏳ Körs nu…' : '▶ Kör nu'}
+              <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Run audit now">
+                ${job.running ? '⏳ Running now…' : '▶ Run now'}
               </button>
-              <button class="btn ghost small" onclick="toggleScheduleJob('${escSch(job.id)}', ${!job.enabled})" title="${job.enabled ? 'Pausa schemat' : 'Aktivera schemat'}">
-                ${job.enabled ? '⏸ Pausa' : '▶ Aktivera'}
+              <button class="btn ghost small" onclick="toggleScheduleJob('${escSch(job.id)}', ${!job.enabled})" title="${job.enabled ? 'Pause schedule' : 'Enable schedule'}">
+                ${job.enabled ? '⏸ Pause' : '▶ Enable'}
               </button>
-              <button class="btn ghost small" onclick="deleteScheduleJob('${escSch(job.id)}')" title="Ta bort detta schema" style="color:var(--danger)">
+              <button class="btn ghost small" onclick="deleteScheduleJob('${escSch(job.id)}')" title="Delete this schedule" style="color:var(--danger)">
                 🗑
               </button>
             </div>
           </div>
           <div style="display:flex;gap:14px;font-size:12px;color:var(--faint);flex-wrap:wrap;align-items:center">
-            <span>⏱ Intervall: <b>var ${job.interval_hours}e timme</b></span>
-            ${job.run_time ? `<span>⏰ Klockslag: <b>kl. ${escSch(job.run_time)}</b></span>` : ''}
+            <span>⏱ Interval: <b>every ${job.interval_hours}h</b></span>
+            ${job.run_time ? `<span>⏰ Time: <b>${escSch(job.run_time)}</b></span>` : ''}
             <span id="schNextRunWrapper_${escSch(job.id)}" style="display:inline-flex;align-items:center;gap:4px">
               <span class="sch-cal-btn" onclick="openEditNextRun('${escSch(job.id)}', ${job.next_run})"
-                    title="Klicka för att ändra datum och klockslag för nästa körning"
+                    title="Click to edit next run time"
                     style="cursor:pointer;padding:1px 4px;border-radius:4px;border:1px solid var(--border);background:var(--card);font-size:12px;display:inline-flex;align-items:center;line-height:1;transition:all .15s"
                     onmouseover="this.style.borderColor='var(--accent)';this.style.transform='scale(1.1)'"
                     onmouseout="this.style.borderColor='var(--border)';this.style.transform='none'">📅</span>
-              <span>Nästa körning: <b style="cursor:pointer;text-decoration:underline dashed var(--border)" onclick="openEditNextRun('${escSch(job.id)}', ${job.next_run})" title="Klicka på kalenderikonen eller tiden för att ändra">${nextRunStr}</b></span>
+              <span>Next run: <b style="cursor:pointer;text-decoration:underline dashed var(--border)" onclick="openEditNextRun('${escSch(job.id)}', ${job.next_run})" title="Click calendar icon or time to edit">${nextRunStr}</b></span>
             </span>
-            <span>🕒 Senast körd: <b>${lastRunStr}</b></span>
-            <span>Status: <b style="color:${job.enabled ? 'var(--green)' : 'var(--faint)'}">${job.enabled ? 'Aktiv' : 'Pausad'}</b></span>
+            <span>🕒 Last run: <b>${lastRunStr}</b></span>
+            <span>Status: <b style="color:${job.enabled ? 'var(--green)' : 'var(--faint)'}">${job.enabled ? 'Active' : 'Paused'}</b></span>
           </div>
           ${job.last_status ? `
             <div style="font-size:12px;color:${statusColor};background:var(--card);padding:6px 10px;border-radius:6px;border:1px solid var(--border);word-break:break-word">
@@ -3619,7 +3576,7 @@ async function loadScheduleJobs(){
       schPollTimer = null;
     }
   }catch(e){
-    container.innerHTML = '<div style="color:var(--danger);font-size:13px">Kunde inte ladda scheman: ' + escSch(e.message) + '</div>';
+    container.innerHTML = '<div style="color:var(--danger);font-size:13px">Could not load schedules: ' + escSch(e.message) + '</div>';
   }
 }
 
@@ -3644,8 +3601,8 @@ function openEditNextRun(jobId, currentNextRun){
       <input type="datetime-local" id="schEditDt_${jobId}" value="${isoVal}"
              style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:2px 6px;font-size:12px;box-sizing:border-box"
              onkeydown="if(event.key==='Enter') saveEditedNextRun('${jobId}'); else if(event.key==='Escape') loadScheduleJobs();">
-      <button class="btn accent small" style="padding:2px 8px;font-size:11px" onclick="saveEditedNextRun('${jobId}')" title="Spara ny tid">Spara</button>
-      <button class="btn ghost small" style="padding:2px 6px;font-size:11px" onclick="loadScheduleJobs()" title="Avbryt">✕</button>
+      <button class="btn accent small" style="padding:2px 8px;font-size:11px" onclick="saveEditedNextRun('${jobId}')" title="Save new time">Save</button>
+      <button class="btn ghost small" style="padding:2px 6px;font-size:11px" onclick="loadScheduleJobs()" title="Cancel">✕</button>
     </span>
   `;
   const inp = document.getElementById('schEditDt_' + jobId);
@@ -3660,12 +3617,12 @@ function openEditNextRun(jobId, currentNextRun){
 async function saveEditedNextRun(jobId){
   const inp = document.getElementById('schEditDt_' + jobId);
   if(!inp || !inp.value){
-    toast('Ange ett giltigt datum och klockslag', true);
+    toast('Enter a valid date and time', true);
     return;
   }
   const dt = new Date(inp.value);
   if(isNaN(dt.getTime())){
-    toast('Ogiltigt datum eller tid', true);
+    toast('Invalid date or time', true);
     return;
   }
   const nextRunTs = Math.floor(dt.getTime() / 1000);
@@ -3683,11 +3640,11 @@ async function saveEditedNextRun(jobId){
       })
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte spara');
-    toast('Nästa körning ändrad till ' + dt.toLocaleString('sv-SE', {dateStyle:'short', timeStyle:'short'}));
+    if(!d.ok) throw new Error(d.error || 'could not save');
+    toast('Next run updated to ' + dt.toLocaleString('en-US', {dateStyle:'short', timeStyle:'short'}));
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte uppdatera tid: ' + e.message, true);
+    toast('Could not update time: ' + e.message, true);
   }
 }
 
@@ -3695,7 +3652,7 @@ async function addScheduleJob(){
   const sel = document.getElementById('schProjectSelect');
   const project = (sel ? sel.value : '').trim();
   if(!project){
-    toast('Välj ett GitLab-projekt först', true);
+    toast('Select a GitLab project first', true);
     return;
   }
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
@@ -3708,7 +3665,7 @@ async function addScheduleJob(){
   const secMode = (document.getElementById('schSecMode') ? document.getElementById('schSecMode').value : 'safe').trim() || 'safe';
 
   if(!runSecurity && !runPentest && !runPonytail){
-    toast('Du måste välja minst en granskning (säkerhet, pentest eller ponytail)', true);
+    toast('Select at least one audit type (security, pentest, or ponytail)', true);
     return;
   }
 
@@ -3730,15 +3687,15 @@ async function addScheduleJob(){
       })
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte spara schema');
-    toast('Schema sparat för ' + project);
+    if(!d.ok) throw new Error(d.error || 'could not save schedule');
+    toast('Schedule saved for ' + project);
     if(prodServer || secMode){
       currentProjectTargets[project] = {project, prod_server: prodServer, has_token: !!prodToken, sec_mode: secMode};
       renderProjectTargets(currentProjectTargets);
     }
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte spara schema: ' + e.message, true);
+    toast('Could not save schedule: ' + e.message, true);
   }
 }
 
@@ -3750,11 +3707,11 @@ async function runScheduleJobNow(id){
       body: JSON.stringify({id})
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte starta jobb');
-    toast('Granskning startad i bakgrunden');
+    if(!d.ok) throw new Error(d.error || 'could not start job');
+    toast('Audit started in background');
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte starta granskning: ' + e.message, true);
+    toast('Could not start audit: ' + e.message, true);
   }
 }
 
@@ -3766,11 +3723,11 @@ async function toggleScheduleJob(id, enabled){
       body: JSON.stringify({id, enabled})
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte uppdatera');
-    toast(enabled ? 'Schema aktiverat' : 'Schema pausat');
+    if(!d.ok) throw new Error(d.error || 'could not update');
+    toast(enabled ? 'Schedule enabled' : 'Schedule paused');
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte uppdatera: ' + e.message, true);
+    toast('Could not update: ' + e.message, true);
   }
 }
 
@@ -3782,7 +3739,7 @@ async function toggleScheduleFeature(id, featureKey, newVal){
     const willPen = featureKey === 'run_pentest' ? false : (job.run_pentest !== undefined ? !!job.run_pentest : true);
     const willPny = featureKey === 'run_ponytail' ? false : !!job.run_ponytail;
     if(!willSec && !willPen && !willPny){
-      toast('Minst en granskning (säkerhet, pentest eller ponytail) måste vara aktiv', true);
+      toast('At least one audit type (security, pentest, or ponytail) must be active', true);
       return;
     }
   }
@@ -3797,17 +3754,17 @@ async function toggleScheduleFeature(id, featureKey, newVal){
       body: JSON.stringify(payload)
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte uppdatera');
+    if(!d.ok) throw new Error(d.error || 'could not update');
     const labelMap = {
-      run_security: 'Säkerhetsgranskning',
-      run_pentest: 'Penetrationstest',
-      run_ponytail: 'Ponytail-granskning'
+      run_security: 'Security audit',
+      run_pentest: 'Penetration test',
+      run_ponytail: 'Ponytail audit'
     };
     const name = labelMap[featureKey] || featureKey;
-    toast(name + (newVal ? ' aktiverad' : ' inaktiverad'));
+    toast(name + (newVal ? ' enabled' : ' disabled'));
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte uppdatera: ' + e.message, true);
+    toast('Could not update: ' + e.message, true);
   }
 }
 
@@ -3819,21 +3776,21 @@ async function updateScheduleSecMode(id, newMode){
       body: JSON.stringify({ id: id, sec_mode: newMode })
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte uppdatera');
+    if(!d.ok) throw new Error(d.error || 'could not update');
     const modeNames = {
-      safe: 'Safe-läge (icke-destruktivt)',
-      full: 'Full pentest (aktiv)',
-      passive: 'Passiv analys'
+      safe: 'Safe mode (non-destructive)',
+      full: 'Full pentest (active)',
+      passive: 'Passive analysis'
     };
-    toast('Testläge ändrat till ' + (modeNames[newMode] || newMode));
+    toast('Security mode changed to ' + (modeNames[newMode] || newMode));
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte ändra testläge: ' + e.message, true);
+    toast('Could not change security mode: ' + e.message, true);
   }
 }
 
 async function deleteScheduleJob(id){
-  if(!confirm('Vill du ta bort detta schema?')) return;
+  if(!confirm('Delete this schedule?')) return;
   try{
     const r = await api('/api/schedule/delete', {
       method: 'POST',
@@ -3841,11 +3798,11 @@ async function deleteScheduleJob(id){
       body: JSON.stringify({id})
     });
     const d = await r.json();
-    if(!d.ok) throw new Error(d.error || 'kunde inte ta bort');
-    toast('Schema borttaget');
+    if(!d.ok) throw new Error(d.error || 'could not delete');
+    toast('Schedule deleted');
     loadScheduleJobs();
   }catch(e){
-    toast('Kunde inte ta bort schema: ' + e.message, true);
+    toast('Could not delete schedule: ' + e.message, true);
   }
 }
 

@@ -2265,8 +2265,8 @@ class TestCodexUiGuards(unittest.TestCase):
                            w.PAGE, re.S)
         self.assertIsNotNone(button, "hittade inte Codex Töm-knappen")
         markup = button.group(0)
-        self.assertIn("Töm loggen", markup)
-        self.assertIn("filerna i arbetsytan rörs inte", markup)
+        self.assertIn("Clear log", markup)
+        self.assertIn("workspace files are not touched", markup)
         self.assertNotIn("🗑", markup)      # papperskorgen betyder radera filer
 
     def test_saved_reply_is_the_final_answer_not_every_step(self):

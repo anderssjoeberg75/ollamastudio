@@ -368,9 +368,9 @@ def code_enabled():
 # "full"      – fria händer: gör allt utan att fråga (även kommandon utanför listan)
 CODE_MODES = ("ask", "auto_edit", "full")
 CODE_MODE_LABELS = {
-    "ask": "Fråga om lov",
-    "auto_edit": "Skriv filer själv",
-    "full": "Fria händer",
+    "ask": "Ask permission",
+    "auto_edit": "Edit files automatically",
+    "full": "Full autonomy",
 }
 
 
