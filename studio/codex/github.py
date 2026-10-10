@@ -106,7 +106,9 @@ def github_fetch_repo(slug, branch=""):
     vi klonar via en autentiserad URL och sätter sedan tillbaka en ren origin,
     precis som git_push() gör vid pushen.
     """
-    slug = (slug or "").strip().strip("/")
+    raw = (slug or "").strip().strip("/")
+    m = re.match(r"^(?:https?://[^/]+/|git@[^:]+:)?([^/]+/[^/]+?)(?:\.git)?/?$", raw)
+    slug = m.group(1) if m else raw
     if not _SLUG_RE.match(slug):
         return False, "Ogiltigt repo-namn (väntar ägare/namn)", ""
     if not git_available():
@@ -135,23 +137,38 @@ def github_fetch_repo(slug, branch=""):
         return (text or "").replace(token, "***")
 
     if os.path.isdir(os.path.join(target, ".git")):
-        # Redan hämtat – uppdatera i stället för att klona om.
+        # Redan hämtat – säkerställ att origin pekar på GitHub
+        cur_origin = (_git(["remote", "get-url", "origin"], cwd=target)[1] or "").strip()
+        if not cur_origin:
+            _git(["remote", "add", "origin", clean_url], cwd=target)
+        elif cur_origin != clean_url:
+            _git(["remote", "set-url", "origin", clean_url], cwd=target)
+
         fetch_source = "origin" if not os.path.exists(raw_source) else raw_source
         rc, _out, err = _git(["fetch", fetch_source, "--prune"], timeout=180, cwd=target, extra_env=auth_env)
-        if rc != 0:
-            return False, "Kunde inte hämta uppdateringar: " + hide(err), target
-        if branch:
-            _git(["checkout", branch], timeout=60, cwd=target)
-        current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target)[1] or "").strip()
-        dirty = bool((_git(["status", "--porcelain"], cwd=target)[1] or "").strip())
-        if dirty:
-            # Rör aldrig ett träd med osparade ändringar – bara hämta hem refsen.
-            return True, ("%s hämtat – dina osparade ändringar i %s är kvar"
-                          % (slug, current or "?")), target
-        rc, _out, err = _git(["merge", "--ff-only", "FETCH_HEAD"], timeout=60, cwd=target)
-        note = ("uppdaterad" if rc == 0
-                else "hämtat (grenen %s ligger före/isär – inget slogs ihop)" % (current or "?"))
-        return True, "%s %s (gren %s)" % (slug, note, current or "?"), target
+        if rc != 0 and cur_origin and cur_origin != clean_url:
+            dirty = bool((_git(["status", "--porcelain"], cwd=target)[1] or "").strip())
+            if not dirty:
+                _rmtree_force(target)
+
+        if os.path.isdir(os.path.join(target, ".git")):
+            if rc != 0:
+                return False, "Kunde inte hämta uppdateringar: " + hide(err), target
+            if branch:
+                _git(["checkout", branch], timeout=60, cwd=target)
+            current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target)[1] or "").strip()
+            dirty = bool((_git(["status", "--porcelain"], cwd=target)[1] or "").strip())
+            if dirty:
+                # Rör aldrig ett träd med osparade ändringar – bara hämta hem refsen.
+                return True, ("%s hämtat – dina osparade ändringar i %s är kvar"
+                              % (slug, current or "?")), target
+            rc, _out, err = _git(["merge", "--ff-only", "FETCH_HEAD"], timeout=60, cwd=target)
+            if rc != 0 and cur_origin and cur_origin != clean_url:
+                _git(["reset", "--hard", "FETCH_HEAD"], timeout=60, cwd=target)
+                rc = 0
+            note = ("uppdaterad" if rc == 0
+                    else "hämtat (grenen %s ligger före/isär – inget slogs ihop)" % (current or "?"))
+            return True, "%s %s (gren %s)" % (slug, note, current or "?"), target
 
     args = ["clone", "--depth", "50"]
     if branch:

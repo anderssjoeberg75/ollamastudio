@@ -147,6 +147,38 @@ Granskningen klar.
         self.assertEqual(findings[1]["title"], "[PONYTAIL-01] Ta bort oanvänd helper i utils.py")
         self.assertIn("ponytail", findings[1]["labels"])
 
+    def test_gitlab_fetch_repo_switches_origin_url(self):
+        import unittest.mock
+        from studio.codex.gitlab import gitlab_fetch_repo
+        
+        calls = []
+        def fake_git(args, **kwargs):
+            calls.append(args)
+            if args[:3] == ["remote", "get-url", "origin"]:
+                return (0, "https://github.com/owner/repo.git", "")
+            return (0, "", "")
+
+        with unittest.mock.patch("studio.codex.gitlab.git_available", return_value=True), \
+             unittest.mock.patch("studio.codex.gitlab.setting_str", return_value="tok123"), \
+             unittest.mock.patch("studio.codex.gitlab.code_repos_root", return_value="/fake/repos"), \
+             unittest.mock.patch("os.path.isdir", return_value=True), \
+             unittest.mock.patch("studio.codex.gitlab._git", side_effect=fake_git):
+            ok, msg, path = gitlab_fetch_repo("owner/repo")
+            self.assertTrue(ok)
+            # Verify remote set-url was called with the gitlab clean_url
+            set_url_calls = [c for c in calls if len(c) >= 4 and c[0] == "remote" and c[1] == "set-url"]
+            self.assertTrue(len(set_url_calls) > 0)
+            self.assertEqual(set_url_calls[0][3], "http://gitlab.andrix.se/owner/repo.git")
+
+    def test_gitlab_fetch_repo_delegates_github_url(self):
+        import unittest.mock
+        from studio.codex.gitlab import gitlab_fetch_repo
+        
+        with unittest.mock.patch("studio.codex.github.github_fetch_repo", return_value=(True, "github ok", "/path")) as mock_gh:
+            ok, msg, path = gitlab_fetch_repo("https://github.com/testorg/testrepo.git")
+            self.assertTrue(ok)
+            mock_gh.assert_called_once_with("testorg/testrepo", branch="")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -558,11 +558,17 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
         ),
     }
 
+    is_github = "github.com" in project.lower()
+    provider_name = "GitHub" if is_github else "GitLab"
     if status_cb:
-        status_cb("Optimal hårdvara (%s) och modell (%s) valda. Hämtar %s från GitLab..."
-                  % (base_url, model, project))
+        status_cb("Optimal hårdvara (%s) och modell (%s) valda. Hämtar %s från %s..."
+                  % (base_url, model, project, provider_name))
 
-    ok, msg, target_dir = gitlab_fetch_repo(project, branch)
+    if is_github:
+        from studio.codex.github import github_fetch_repo
+        ok, msg, target_dir = github_fetch_repo(project, branch)
+    else:
+        ok, msg, target_dir = gitlab_fetch_repo(project, branch)
     if not ok or not target_dir:
         return False, "Kunde inte hämta repot: " + msg, 0, 0
 

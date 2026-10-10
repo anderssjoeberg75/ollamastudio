@@ -17,7 +17,7 @@ from . import gitops
 from .gitops import (_git, git_auth_env, git_available, git_current_branch, git_is_repo,
                      git_remote_info)
 from .github import (code_repos_root, local_repo_state, local_repos,
-                     remove_local_repo, repo_dir_name)
+                     _rmtree_force, remove_local_repo, repo_dir_name)
 
 _repos_cache = {"at": 0, "items": []}
 _repos_lock = threading.Lock()
@@ -134,6 +134,9 @@ def gitlab_fetch_repo(target, branch=""):
     scheme, host, slug, clean_url = parse_gitlab_target(target)
     if not slug:
         return False, "Ogiltigt GitLab-repo (ange ägare/namn eller full url)", ""
+    if host == "github.com":
+        from .github import github_fetch_repo
+        return github_fetch_repo(slug, branch=branch)
     if not git_available():
         return False, "git är inte installerat på servern", ""
 
@@ -152,21 +155,38 @@ def gitlab_fetch_repo(target, branch=""):
         return (text or "").replace(token, "***")
 
     if os.path.isdir(os.path.join(target_dir, ".git")):
-        # Redan hämtat – hämta uppdateringar
+        # Redan hämtat – säkerställ att origin pekar på rätt GitLab-URL
+        cur_origin = (_git(["remote", "get-url", "origin"], cwd=target_dir)[1] or "").strip()
+        if not cur_origin:
+            _git(["remote", "add", "origin", clean_url], cwd=target_dir)
+        elif cur_origin != clean_url:
+            _git(["remote", "set-url", "origin", clean_url], cwd=target_dir)
+
         rc, _out, err = _git(["fetch", "origin", "--prune"], timeout=180, cwd=target_dir, extra_env=auth_env)
-        if rc != 0:
-            return False, "Kunde inte hämta uppdateringar: " + hide(err), target_dir
-        if branch:
-            _git(["checkout", branch], timeout=60, cwd=target_dir)
-        current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target_dir)[1] or "").strip()
-        dirty = bool((_git(["status", "--porcelain"], cwd=target_dir)[1] or "").strip())
-        if dirty:
-            return True, ("%s hämtat – dina osparade ändringar i %s är kvar"
-                          % (slug, current or "?")), target_dir
-        rc, _out, err = _git(["merge", "--ff-only", "FETCH_HEAD"], timeout=60, cwd=target_dir)
-        note = ("uppdaterad" if rc == 0
-                else "hämtat (grenen %s ligger före/isär – inget slogs ihop)" % (current or "?"))
-        return True, "%s %s (gren %s)" % (slug, note, current or "?"), target_dir
+        if rc != 0 and cur_origin and cur_origin != clean_url:
+            # Mismatched remote som inte gick att hämta; klona om rent om osparade ändringar saknas
+            dirty = bool((_git(["status", "--porcelain"], cwd=target_dir)[1] or "").strip())
+            if not dirty:
+                _rmtree_force(target_dir)
+
+        if os.path.isdir(os.path.join(target_dir, ".git")):
+            if rc != 0:
+                return False, "Kunde inte hämta uppdateringar: " + hide(err), target_dir
+            if branch:
+                _git(["checkout", branch], timeout=60, cwd=target_dir)
+            current = (_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=target_dir)[1] or "").strip()
+            dirty = bool((_git(["status", "--porcelain"], cwd=target_dir)[1] or "").strip())
+            if dirty:
+                return True, ("%s hämtat – dina osparade ändringar i %s är kvar"
+                              % (slug, current or "?")), target_dir
+            rc, _out, err = _git(["merge", "--ff-only", "FETCH_HEAD"], timeout=60, cwd=target_dir)
+            if rc != 0 and cur_origin and cur_origin != clean_url:
+                # Vid byte av remote-URL: synka grenen till det nya repots HEAD
+                _git(["reset", "--hard", "FETCH_HEAD"], timeout=60, cwd=target_dir)
+                rc = 0
+            note = ("uppdaterad" if rc == 0
+                    else "hämtat (grenen %s ligger före/isär – inget slogs ihop)" % (current or "?"))
+            return True, "%s %s (gren %s)" % (slug, note, current or "?"), target_dir
 
     args = ["clone", "--depth", "50"]
     if branch:
