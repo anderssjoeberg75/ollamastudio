@@ -3469,10 +3469,12 @@ async function populateScheduleProjects(){
           const intEl = document.getElementById('schInterval');
           const timeEl = document.getElementById('schTime');
           const secEl = document.getElementById('schRunSecurity');
+          const penEl = document.getElementById('schRunPentest');
           const pnyEl = document.getElementById('schRunPonytail');
           if(intEl && existing.interval_hours) intEl.value = existing.interval_hours;
           if(timeEl && existing.run_time) timeEl.value = existing.run_time;
           if(secEl) secEl.checked = !!existing.run_security;
+          if(penEl) penEl.checked = existing.run_pentest !== undefined ? !!existing.run_pentest : true;
           if(pnyEl) pnyEl.checked = !!existing.run_ponytail;
         }
       }
@@ -3504,6 +3506,7 @@ async function loadScheduleJobs(){
         hasRunning = true;
       }
       const secBadge = job.run_security ? '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px">🛡 Säkerhet</span>' : '';
+      const penBadge = job.run_pentest ? '<span style="background:var(--card);border:1px solid var(--amber);color:var(--amber);padding:2px 6px;border-radius:4px;font-size:11px">🎯 Pentest</span>' : '';
       const pnyBadge = job.run_ponytail ? '<span style="background:var(--card);border:1px solid var(--green);color:var(--green);padding:2px 6px;border-radius:4px;font-size:11px">✂ Ponytail</span>' : '';
       const prodBadge = job.prod_server ? `<span style="background:var(--card);border:1px solid var(--border);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Produktionsserver för projektet">🌐 ${escSch(job.prod_server)}</span>` : '';
       const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
@@ -3517,7 +3520,7 @@ async function loadScheduleJobs(){
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:8px">
               <span style="font-weight:600;font-size:14px;color:var(--text)">🦊 ${escSch(job.project)}</span>
-              ${secBadge} ${pnyBadge} ${prodBadge}
+              ${secBadge} ${penBadge} ${pnyBadge} ${prodBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Kör granskningen direkt">
@@ -3643,13 +3646,14 @@ async function addScheduleJob(){
   }
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
   const runTime = (document.getElementById('schTime') ? document.getElementById('schTime').value : '').trim();
-  const runSecurity = document.getElementById('schRunSecurity').checked;
-  const runPonytail = document.getElementById('schRunPonytail').checked;
+  const runSecurity = document.getElementById('schRunSecurity') ? document.getElementById('schRunSecurity').checked : true;
+  const runPentest = document.getElementById('schRunPentest') ? document.getElementById('schRunPentest').checked : true;
+  const runPonytail = document.getElementById('schRunPonytail') ? document.getElementById('schRunPonytail').checked : true;
   const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
   const prodToken = (document.getElementById('schProdToken') ? document.getElementById('schProdToken').value : '').trim();
 
-  if(!runSecurity && !runPonytail){
-    toast('Du måste välja minst en granskning (säkerhet eller ponytail)', true);
+  if(!runSecurity && !runPentest && !runPonytail){
+    toast('Du måste välja minst en granskning (säkerhet, pentest eller ponytail)', true);
     return;
   }
 
@@ -3662,6 +3666,7 @@ async function addScheduleJob(){
         interval_hours: interval,
         run_time: runTime,
         run_security: runSecurity,
+        run_pentest: runPentest,
         run_ponytail: runPonytail,
         prod_server: prodServer,
         prod_token: prodToken,

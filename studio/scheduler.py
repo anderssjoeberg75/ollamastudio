@@ -93,9 +93,10 @@ def scheduler_db_init():
                 "enabled INTEGER DEFAULT 1, "
                 "prod_server TEXT DEFAULT '', "
                 "prod_token TEXT DEFAULT '', "
-                "run_time TEXT DEFAULT '')"
+                "run_time TEXT DEFAULT '', "
+                "run_pentest INTEGER DEFAULT 1)"
             )
-            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time
+            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_pentest
             cur = conn.execute("PRAGMA table_info(schedules)")
             existing_cols = {row[1] for row in cur.fetchall()}
             if "prod_server" not in existing_cols:
@@ -104,6 +105,8 @@ def scheduler_db_init():
                 conn.execute("ALTER TABLE schedules ADD COLUMN prod_token TEXT DEFAULT ''")
             if "run_time" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN run_time TEXT DEFAULT ''")
+            if "run_pentest" not in existing_cols:
+                conn.execute("ALTER TABLE schedules ADD COLUMN run_pentest INTEGER DEFAULT 1")
             conn.commit()
         finally:
             conn.close()
@@ -119,7 +122,7 @@ def schedule_list():
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest "
                 "FROM schedules ORDER BY project ASC"
             )
             for row in cur.fetchall():
@@ -140,6 +143,7 @@ def schedule_list():
                     "prod_server": row[10] or "",
                     "has_prod_token": bool(row[11]),
                     "run_time": row[12] or "",
+                    "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
                     "running": is_running,
                 })
         finally:
@@ -155,7 +159,7 @@ def schedule_get(job_id):
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest "
                 "FROM schedules WHERE id = ?", (job_id,)
             )
             row = cur.fetchone()
@@ -177,6 +181,7 @@ def schedule_get(job_id):
                 "prod_server": row[10] or "",
                 "has_prod_token": bool(row[11]),
                 "run_time": row[12] or "",
+                "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
                 "running": is_running,
             }
         finally:
@@ -191,6 +196,7 @@ def schedule_save(job_data):
     branch = (job_data.get("branch") or "").strip()
     run_security = 1 if job_data.get("run_security", True) else 0
     run_ponytail = 1 if job_data.get("run_ponytail", True) else 0
+    run_pentest = 1 if job_data.get("run_pentest", True) else 0
     interval_hours = max(1, int(job_data.get("interval_hours") or 24))
     enabled = 1 if job_data.get("enabled", True) else 0
     run_time = (job_data.get("run_time") or "").strip()
@@ -217,6 +223,8 @@ def schedule_save(job_data):
             run_security = 1 if existing.get("run_security") else 0
         if "run_ponytail" not in job_data:
             run_ponytail = 1 if existing.get("run_ponytail") else 0
+        if "run_pentest" not in job_data:
+            run_pentest = 1 if existing.get("run_pentest", True) else 0
         if "interval_hours" not in job_data:
             interval_hours = existing.get("interval_hours", 24)
         if "enabled" not in job_data:
@@ -266,17 +274,18 @@ def schedule_save(job_data):
         try:
             conn.execute(
                 "INSERT INTO schedules(id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "project=excluded.project, branch=excluded.branch, "
                 "run_security=excluded.run_security, run_ponytail=excluded.run_ponytail, "
+                "run_pentest=excluded.run_pentest, "
                 "interval_hours=excluded.interval_hours, next_run=excluded.next_run, "
                 "enabled=excluded.enabled, last_status=excluded.last_status, "
                 "prod_server=excluded.prod_server, prod_token=excluded.prod_token, "
                 "run_time=excluded.run_time",
                 (job_id, project, branch, run_security, run_ponytail,
-                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time)
+                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest)
             )
             conn.commit()
         finally:
@@ -366,6 +375,29 @@ SECURITY_AUDIT_PROMPT = (
     "   - labels: \"security,P1\" (eller P2/P3)\n"
     "4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n"
     "5. Avsluta med en kort sammanfattning av de issues som skapats."
+)
+
+PENTEST_AUDIT_PROMPT = (
+    "Genomför ett disciplinerat penetrationstest (pentest) och säkerhetstestning mot projektets målmiljö och API:er "
+    "enligt .agents/skills/openclaw-redteam/SKILL.md, .agents/rules/redteam.md och relevanta SecOpsAgentKit-skills "
+    "(dast-zap, dast-nuclei, dast-ffuf, webapp-sqlmap, webapp-nikto, recon-nmap).\n\n"
+    "ARBETSSÄTT & SÄKERHETSKRAV:\n"
+    "1. Identifiera exponerade endpoints, API-rutter, autentiseringsmekanismer och nätverkstjänster via kod och server.\n"
+    "2. All testning mot målservern ska ske med strikt icke-destruktiva (benign) payloads och strikt inom scoping.\n"
+    "3. FÖR VARJE ENSKILT SÅRBARHETSFYND / PENTEST-FYND: anropa OMEDELBART verktyget TOOL create_issue med:\n"
+    "   - title: \"[PENTEST-X] Beskrivande rubrik för fyndet\"\n"
+    "   - description: En fullständig rapport formaterad i markdown:\n"
+    "       ### Mål & Endpoint\n"
+    "       URL / endpoint och HTTP-metod.\n"
+    "       ### Sårbarhet & Attackvektor\n"
+    "       Beskrivning av sårbarheten, svaghet och potentiell konsekvens (CWE/OWASP).\n"
+    "       ### Bevis & Reproduktionssteg (PoC)\n"
+    "       Hur sårbarheten påvisades på ett säkert sätt.\n"
+    "       ### Åtgärdsförslag\n"
+    "       Konkret åtgärdsplan för hur systemet säkras.\n"
+    "   - labels: \"security,pentest,P1\" (eller P2/P3)\n"
+    "4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n"
+    "5. Avsluta med en kort sammanfattning av genomförda pentest-moment."
 )
 
 PONYTAIL_AUDIT_PROMPT = (
@@ -473,8 +505,8 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
     return getattr(ctx, "issues_created", 0), getattr(ctx, "last_error", None)
 
 
-def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, status_cb=None,
-                       prod_server="", prod_token=""):
+def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_pentest=True,
+                       status_cb=None, prod_server="", prod_token=""):
     """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
 
     Väljer automatiskt den mest optimala hårdvaran (snabbaste GPU-instansen) och
@@ -501,15 +533,24 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     settings_set({"code_workspace": target_dir})
 
     sec_count = 0
+    pen_count = 0
     pny_count = 0
     errors = []
 
     try:
         if run_security:
             sec_prompt = SECURITY_AUDIT_PROMPT
+            if status_cb:
+                status_cb("Kör säkerhetsgranskning (kod/SAST) mot %s (%s på %s)..." % (project, model, base_url))
+            sec_count, sec_err = _run_single_headless_pass(sec_prompt, model, project, base_url=base_url)
+            if sec_err:
+                errors.append("Säkerhetsgranskning: " + sec_err)
+
+        if run_pentest:
+            pen_prompt = PENTEST_AUDIT_PROMPT
             if prod_server:
                 token_desc = " (med access-token)" if prod_token else " (utan token)"
-                sec_prompt += (
+                pen_prompt += (
                     "\n\nPRODUKTIONSSERVER & MÅLMILJÖ FÖR DETTA PROJEKT:\n"
                     "- Målserver: %s%s\n"
                     "- Enligt .agents/skills/openclaw-redteam/SKILL.md och .agents/rules/redteam.md ska nätverkstester, "
@@ -518,10 +559,10 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
                 )
             if status_cb:
                 srv_msg = (" mot %s" % prod_server) if prod_server else ""
-                status_cb("Kör säkerhetsgranskning mot %s%s (%s på %s)..." % (project, srv_msg, model, base_url))
-            sec_count, sec_err = _run_single_headless_pass(sec_prompt, model, project, base_url=base_url)
-            if sec_err:
-                errors.append("Säkerhetsgranskning: " + sec_err)
+                status_cb("Kör penetrationstest (pentest)%s (%s på %s)..." % (srv_msg, model, base_url))
+            pen_count, pen_err = _run_single_headless_pass(pen_prompt, model, project, base_url=base_url)
+            if pen_err:
+                errors.append("Penetrationstest: " + pen_err)
 
         if run_ponytail:
             if status_cb:
@@ -534,14 +575,21 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
         if prev_workspace and prev_workspace != target_dir:
             settings_set({"code_workspace": prev_workspace})
 
-    total = sec_count + pny_count
+    total = sec_count + pen_count + pny_count
     if errors and total == 0:
         summary = "Fel under körning (%s på %s): %s" % (model, base_url, "; ".join(errors))
-        return False, summary, sec_count, pny_count
+        return False, summary, sec_count + pen_count, pny_count
 
-    summary = ("Klar (%s på %s): %d säkerhets- och %d ponytail-punkter sparade som GitLab Work Items."
-               % (model, base_url, sec_count, pny_count))
-    return True, summary, sec_count, pny_count
+    parts = []
+    if run_security:
+        parts.append("%d säkerhets-" % sec_count)
+    if run_pentest:
+        parts.append("%d pentest-" % pen_count)
+    if run_ponytail:
+        parts.append("%d ponytail-" % pny_count)
+    parts_str = " och ".join(parts) if len(parts) <= 2 else (", ".join(parts[:-1]) + " och " + parts[-1])
+    summary = ("Klar (%s på %s): %s punkter sparade som GitLab Work Items." % (model, base_url, parts_str)) if parts else "Klar: Inga moment valda."
+    return True, summary, sec_count + pen_count, pny_count
 
 
 
@@ -584,6 +632,7 @@ def _execute_job(job_id):
             branch=job.get("branch", ""),
             run_security=job.get("run_security", True),
             run_ponytail=job.get("run_ponytail", True),
+            run_pentest=job.get("run_pentest", True),
             status_cb=on_status,
             prod_server=target_server,
             prod_token=target_token

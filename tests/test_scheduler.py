@@ -41,6 +41,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(saved["project"], "anderssjoeberg75/ollamastudio")
         self.assertEqual(saved["interval_hours"], 24)
         self.assertTrue(saved["run_security"])
+        self.assertTrue(saved["run_pentest"])
         self.assertTrue(saved["run_ponytail"])
         self.assertTrue(saved["enabled"])
 
@@ -48,12 +49,14 @@ class TestScheduler(unittest.TestCase):
         all_jobs = schedule_list()
         self.assertEqual(len(all_jobs), 1)
         self.assertEqual(all_jobs[0]["id"], saved["id"])
+        self.assertTrue(all_jobs[0]["run_pentest"])
 
     def test_get_and_update_schedule(self):
         saved = schedule_save({
             "project": "group/subgroup/project",
             "interval_hours": 12,
             "run_security": True,
+            "run_pentest": False,
             "run_ponytail": False
         })
         jid = saved["id"]
@@ -61,6 +64,7 @@ class TestScheduler(unittest.TestCase):
         fetched = schedule_get(jid)
         self.assertIsNotNone(fetched)
         self.assertEqual(fetched["project"], "group/subgroup/project")
+        self.assertFalse(fetched["run_pentest"])
         self.assertFalse(fetched["run_ponytail"])
 
         # Uppdatera
@@ -69,11 +73,13 @@ class TestScheduler(unittest.TestCase):
             "project": "group/subgroup/project",
             "interval_hours": 48,
             "run_security": False,
+            "run_pentest": True,
             "run_ponytail": True,
             "enabled": False
         })
         self.assertEqual(updated["interval_hours"], 48)
         self.assertFalse(updated["run_security"])
+        self.assertTrue(updated["run_pentest"])
         self.assertTrue(updated["run_ponytail"])
         self.assertFalse(updated["enabled"])
 
