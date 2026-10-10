@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import studio.config as config
 from studio.scheduler import (
     scheduler_db_init, schedule_list, schedule_get, schedule_save,
-    schedule_delete, _update_job_status, run_headless_audit
+    schedule_delete, _update_job_status, run_headless_audit, compute_next_run
 )
 
 
@@ -99,6 +99,50 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(updated["last_status"], "Körs nu...")
         self.assertEqual(updated["last_run"], 12345.0)
         self.assertEqual(updated["next_run"], 67890.0)
+
+    def test_compute_next_run(self):
+        import datetime
+        # Bas-tid: 2026-10-10 11:30:00
+        base_dt = datetime.datetime(2026, 10, 10, 11, 30, 0)
+        base_ts = base_dt.timestamp()
+
+        # Framtida klockslag idag (14:00)
+        next_ts = compute_next_run(24, "14:00", from_time=base_ts)
+        next_dt = datetime.datetime.fromtimestamp(next_ts)
+        self.assertEqual(next_dt.year, 2026)
+        self.assertEqual(next_dt.month, 10)
+        self.assertEqual(next_dt.day, 10)
+        self.assertEqual(next_dt.hour, 14)
+        self.assertEqual(next_dt.minute, 0)
+
+        # Passerande klockslag idag (02:00) -> nästa dag vid 24h intervall
+        next_ts2 = compute_next_run(24, "02:00", from_time=base_ts)
+        next_dt2 = datetime.datetime.fromtimestamp(next_ts2)
+        self.assertEqual(next_dt2.day, 11)
+        self.assertEqual(next_dt2.hour, 2)
+        self.assertEqual(next_dt2.minute, 0)
+
+        # Sub-24h intervall (6h från 02:00 med bas-tid 11:30:00 -> 14:00)
+        next_ts3 = compute_next_run(6, "02:00", from_time=base_ts)
+        next_dt3 = datetime.datetime.fromtimestamp(next_ts3)
+        self.assertEqual(next_dt3.day, 10)
+        self.assertEqual(next_dt3.hour, 14)
+        self.assertEqual(next_dt3.minute, 0)
+
+    def test_schedule_with_run_time(self):
+        saved = schedule_save({
+            "project": "org/repo-nightly",
+            "interval_hours": 24,
+            "run_time": "03:00",
+            "enabled": True
+        })
+        self.assertEqual(saved["run_time"], "03:00")
+        fetched = schedule_get(saved["id"])
+        self.assertEqual(fetched["run_time"], "03:00")
+        import datetime
+        dt = datetime.datetime.fromtimestamp(fetched["next_run"])
+        self.assertEqual(dt.hour, 3)
+        self.assertEqual(dt.minute, 0)
 
     @patch("studio.scheduler.setting_str")
     def test_run_headless_audit_no_token(self, mock_setting):

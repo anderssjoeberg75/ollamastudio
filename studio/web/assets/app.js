@@ -3463,6 +3463,19 @@ async function populateScheduleProjects(){
       const tokEl = document.getElementById('schProdToken');
       if(srvEl) srvEl.value = pt.prod_server || '';
       if(tokEl) tokEl.value = '';
+      if(window._lastScheduleJobs){
+        const existing = window._lastScheduleJobs.find(j => j.project === p);
+        if(existing){
+          const intEl = document.getElementById('schInterval');
+          const timeEl = document.getElementById('schTime');
+          const secEl = document.getElementById('schRunSecurity');
+          const pnyEl = document.getElementById('schRunPonytail');
+          if(intEl && existing.interval_hours) intEl.value = existing.interval_hours;
+          if(timeEl && existing.run_time) timeEl.value = existing.run_time;
+          if(secEl) secEl.checked = !!existing.run_security;
+          if(pnyEl) pnyEl.checked = !!existing.run_ponytail;
+        }
+      }
     };
   }catch(e){
     sel.innerHTML = '<option value="">Kunde inte hämta GitLab-projekt: ' + escSch(e.message) + '</option>';
@@ -3476,6 +3489,7 @@ async function loadScheduleJobs(){
     const r = await api('/api/schedule/jobs');
     const d = await r.json();
     const jobs = d.jobs || [];
+    window._lastScheduleJobs = jobs;
     if(!jobs.length){
       container.innerHTML = '<div style="color:var(--faint);font-size:13px;padding:12px;text-align:center;background:var(--bg);border-radius:8px">Inga schemalagda granskningar ännu. Välj ett projekt ovan och spara för att schemalägga.</div>';
       return;
@@ -3516,6 +3530,7 @@ async function loadScheduleJobs(){
           </div>
           <div style="display:flex;gap:14px;font-size:12px;color:var(--faint);flex-wrap:wrap">
             <span>⏱ Intervall: <b>var ${job.interval_hours}e timme</b></span>
+            ${job.run_time ? `<span>⏰ Klockslag: <b>kl. ${escSch(job.run_time)}</b></span>` : ''}
             <span>📅 Nästa körning: <b>${nextRunStr}</b></span>
             <span>🕒 Senast körd: <b>${lastRunStr}</b></span>
             <span>Status: <b style="color:${job.enabled ? 'var(--green)' : 'var(--faint)'}">${job.enabled ? 'Aktiv' : 'Pausad'}</b></span>
@@ -3549,6 +3564,7 @@ async function addScheduleJob(){
     return;
   }
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
+  const runTime = (document.getElementById('schTime') ? document.getElementById('schTime').value : '').trim();
   const runSecurity = document.getElementById('schRunSecurity').checked;
   const runPonytail = document.getElementById('schRunPonytail').checked;
   const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
@@ -3566,6 +3582,7 @@ async function addScheduleJob(){
       body: JSON.stringify({
         project: project,
         interval_hours: interval,
+        run_time: runTime,
         run_security: runSecurity,
         run_ponytail: runPonytail,
         prod_server: prodServer,

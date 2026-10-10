@@ -4,6 +4,7 @@ Låter användaren schemalägga automatiska säkerhets- och ponytail-genomgånga
 av valda GitLab-projekt. Granskningen körs i bakgrunden via Codex-protokollet,
 och varje identifierat fynd sparas som ett Work Item (Issue) i GitLab.
 """
+import datetime
 import json
 import os
 import sqlite3
@@ -37,6 +38,42 @@ _scheduler_started = False
 _scheduler_lock = threading.Lock()
 
 
+def compute_next_run(interval_hours, run_time="", from_time=None):
+    """Beräknar unix-timestamp för nästa schemalagda körning.
+
+    Om `run_time` anges (t.ex. '02:00' eller '23:30'):
+    - Beräknas nästa körning till det klockslaget.
+    - Om klockslaget redan passerat idag schemaläggs det till nästa intervallpunkt.
+    - Om intervallet är mindre än 24h (t.ex. 6h eller 12h) stegras från klockslaget till nästa punkt efter nu.
+    """
+    base_ts = from_time if from_time is not None else time.time()
+    now = datetime.datetime.fromtimestamp(base_ts)
+    run_time = (run_time or "").strip()
+    interval = max(1, int(interval_hours or 24))
+    if run_time:
+        try:
+            parts = run_time.split(":")
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) > 1 else 0
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                target_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if target_today > now:
+                    return target_today.timestamp()
+                # Klockslaget har redan passerat idag
+                if interval < 24:
+                    cand = target_today
+                    while cand <= now:
+                        cand += datetime.timedelta(hours=interval)
+                    return cand.timestamp()
+                else:
+                    days = max(1, interval // 24)
+                    return (target_today + datetime.timedelta(days=days)).timestamp()
+        except Exception:
+            pass
+    return (now + datetime.timedelta(hours=interval)).timestamp()
+
+
+
 def scheduler_db_init():
     """Initierar tabellen för schemalagda jobb om den saknas samt migrerar kolumner."""
     with _settings_lock:
@@ -55,15 +92,18 @@ def scheduler_db_init():
                 "last_status TEXT DEFAULT '', "
                 "enabled INTEGER DEFAULT 1, "
                 "prod_server TEXT DEFAULT '', "
-                "prod_token TEXT DEFAULT '')"
+                "prod_token TEXT DEFAULT '', "
+                "run_time TEXT DEFAULT '')"
             )
-            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token
+            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time
             cur = conn.execute("PRAGMA table_info(schedules)")
             existing_cols = {row[1] for row in cur.fetchall()}
             if "prod_server" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN prod_server TEXT DEFAULT ''")
             if "prod_token" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN prod_token TEXT DEFAULT ''")
+            if "run_time" not in existing_cols:
+                conn.execute("ALTER TABLE schedules ADD COLUMN run_time TEXT DEFAULT ''")
             conn.commit()
         finally:
             conn.close()
@@ -79,7 +119,7 @@ def schedule_list():
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time "
                 "FROM schedules ORDER BY project ASC"
             )
             for row in cur.fetchall():
@@ -99,6 +139,7 @@ def schedule_list():
                     "enabled": bool(row[9]),
                     "prod_server": row[10] or "",
                     "has_prod_token": bool(row[11]),
+                    "run_time": row[12] or "",
                     "running": is_running,
                 })
         finally:
@@ -114,7 +155,7 @@ def schedule_get(job_id):
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time "
                 "FROM schedules WHERE id = ?", (job_id,)
             )
             row = cur.fetchone()
@@ -135,6 +176,7 @@ def schedule_get(job_id):
                 "enabled": bool(row[9]),
                 "prod_server": row[10] or "",
                 "has_prod_token": bool(row[11]),
+                "run_time": row[12] or "",
                 "running": is_running,
             }
         finally:
@@ -151,6 +193,7 @@ def schedule_save(job_data):
     run_ponytail = 1 if job_data.get("run_ponytail", True) else 0
     interval_hours = max(1, int(job_data.get("interval_hours") or 24))
     enabled = 1 if job_data.get("enabled", True) else 0
+    run_time = (job_data.get("run_time") or "").strip()
 
     prod_server = (job_data.get("prod_server") or "").strip()
     prod_token_input = job_data.get("prod_token")
@@ -166,7 +209,16 @@ def schedule_save(job_data):
     now = time.time()
     existing = schedule_get(job_id)
     if existing:
-        next_run = float(job_data.get("next_run") or existing.get("next_run") or (now + interval_hours * 3600))
+        time_changed = (
+            ("run_time" in job_data and run_time != (existing.get("run_time") or "")) or
+            ("interval_hours" in job_data and interval_hours != existing.get("interval_hours"))
+        )
+        if "next_run" in job_data and job_data["next_run"]:
+            next_run = float(job_data["next_run"])
+        elif time_changed or not existing.get("next_run"):
+            next_run = compute_next_run(interval_hours, run_time, from_time=now)
+        else:
+            next_run = float(existing.get("next_run") or compute_next_run(interval_hours, run_time, from_time=now))
         last_run = float(existing.get("last_run") or 0.0)
         last_status = job_data.get("last_status") if "last_status" in job_data else existing.get("last_status", "")
         if prod_token_input is None:
@@ -180,7 +232,10 @@ def schedule_save(job_data):
         else:
             prod_token = prod_token_input.strip()
     else:
-        next_run = float(job_data.get("next_run") or (now + interval_hours * 3600))
+        if "next_run" in job_data and job_data["next_run"]:
+            next_run = float(job_data["next_run"])
+        else:
+            next_run = compute_next_run(interval_hours, run_time, from_time=now)
         last_run = 0.0
         last_status = ""
         prod_token = (prod_token_input or "").strip()
@@ -194,16 +249,17 @@ def schedule_save(job_data):
         try:
             conn.execute(
                 "INSERT INTO schedules(id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "project=excluded.project, branch=excluded.branch, "
                 "run_security=excluded.run_security, run_ponytail=excluded.run_ponytail, "
                 "interval_hours=excluded.interval_hours, next_run=excluded.next_run, "
                 "enabled=excluded.enabled, last_status=excluded.last_status, "
-                "prod_server=excluded.prod_server, prod_token=excluded.prod_token",
+                "prod_server=excluded.prod_server, prod_token=excluded.prod_token, "
+                "run_time=excluded.run_time",
                 (job_id, project, branch, run_security, run_ponytail,
-                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token)
+                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time)
             )
             conn.commit()
         finally:
@@ -518,7 +574,8 @@ def _execute_job(job_id):
         finish_str = time.strftime("%Y-%m-%d %H:%M")
         status_text = ("%s (%s)" % (summary, finish_str)) if ok else ("Fel: %s (%s)" % (summary, finish_str))
         interval = max(1, job.get("interval_hours", 24))
-        next_run = time.time() + interval * 3600
+        run_time = job.get("run_time", "")
+        next_run = compute_next_run(interval, run_time, from_time=time.time())
         _update_job_status(job_id, status=status_text, last_run=time.time(), next_run=next_run)
     except Exception as e:
         finish_str = time.strftime("%Y-%m-%d %H:%M")
