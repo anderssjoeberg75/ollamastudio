@@ -144,6 +144,18 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(dt.hour, 3)
         self.assertEqual(dt.minute, 0)
 
+        # Delvis uppdatering (ändra bara next_run och run_time utan att ange project etc.)
+        updated = schedule_save({
+            "id": saved["id"],
+            "next_run": 1791654321.0,
+            "run_time": "04:30"
+        })
+        self.assertEqual(updated["project"], "org/repo-nightly")
+        self.assertEqual(updated["next_run"], 1791654321.0)
+        self.assertEqual(updated["run_time"], "04:30")
+        self.assertEqual(updated["interval_hours"], 24)
+        self.assertTrue(updated["enabled"])
+
     @patch("studio.scheduler.setting_str")
     def test_run_headless_audit_no_token(self, mock_setting):
         mock_setting.return_value = ""

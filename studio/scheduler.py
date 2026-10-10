@@ -209,6 +209,23 @@ def schedule_save(job_data):
     now = time.time()
     existing = schedule_get(job_id)
     if existing:
+        if not project:
+            project = existing.get("project", "")
+        if "branch" not in job_data:
+            branch = existing.get("branch", "")
+        if "run_security" not in job_data:
+            run_security = 1 if existing.get("run_security") else 0
+        if "run_ponytail" not in job_data:
+            run_ponytail = 1 if existing.get("run_ponytail") else 0
+        if "interval_hours" not in job_data:
+            interval_hours = existing.get("interval_hours", 24)
+        if "enabled" not in job_data:
+            enabled = 1 if existing.get("enabled") else 0
+        if "run_time" not in job_data:
+            run_time = existing.get("run_time", "")
+        if not prod_server and "prod_server" not in job_data:
+            prod_server = existing.get("prod_server", "")
+
         time_changed = (
             ("run_time" in job_data and run_time != (existing.get("run_time") or "")) or
             ("interval_hours" in job_data and interval_hours != existing.get("interval_hours"))

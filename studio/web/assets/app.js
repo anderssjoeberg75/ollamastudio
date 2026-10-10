@@ -3485,6 +3485,9 @@ async function populateScheduleProjects(){
 async function loadScheduleJobs(){
   const container = document.getElementById('schJobsList');
   if(!container) return;
+  if(document.querySelector('[id^="schEditDt_"]')){
+    return; // Användaren redigerar en tid just nu – undvik att skriva över inputfältet
+  }
   try{
     const r = await api('/api/schedule/jobs');
     const d = await r.json();
@@ -3528,10 +3531,17 @@ async function loadScheduleJobs(){
               </button>
             </div>
           </div>
-          <div style="display:flex;gap:14px;font-size:12px;color:var(--faint);flex-wrap:wrap">
+          <div style="display:flex;gap:14px;font-size:12px;color:var(--faint);flex-wrap:wrap;align-items:center">
             <span>⏱ Intervall: <b>var ${job.interval_hours}e timme</b></span>
             ${job.run_time ? `<span>⏰ Klockslag: <b>kl. ${escSch(job.run_time)}</b></span>` : ''}
-            <span>📅 Nästa körning: <b>${nextRunStr}</b></span>
+            <span id="schNextRunWrapper_${escSch(job.id)}" style="display:inline-flex;align-items:center;gap:4px">
+              <span class="sch-cal-btn" onclick="openEditNextRun('${escSch(job.id)}', ${job.next_run})"
+                    title="Klicka för att ändra datum och klockslag för nästa körning"
+                    style="cursor:pointer;padding:1px 4px;border-radius:4px;border:1px solid var(--border);background:var(--card);font-size:12px;display:inline-flex;align-items:center;line-height:1;transition:all .15s"
+                    onmouseover="this.style.borderColor='var(--accent)';this.style.transform='scale(1.1)'"
+                    onmouseout="this.style.borderColor='var(--border)';this.style.transform='none'">📅</span>
+              <span>Nästa körning: <b style="cursor:pointer;text-decoration:underline dashed var(--border)" onclick="openEditNextRun('${escSch(job.id)}', ${job.next_run})" title="Klicka på kalenderikonen eller tiden för att ändra">${nextRunStr}</b></span>
+            </span>
             <span>🕒 Senast körd: <b>${lastRunStr}</b></span>
             <span>Status: <b style="color:${job.enabled ? 'var(--green)' : 'var(--faint)'}">${job.enabled ? 'Aktiv' : 'Pausad'}</b></span>
           </div>
@@ -3553,6 +3563,74 @@ async function loadScheduleJobs(){
     }
   }catch(e){
     container.innerHTML = '<div style="color:var(--danger);font-size:13px">Kunde inte ladda scheman: ' + escSch(e.message) + '</div>';
+  }
+}
+
+function toLocalDatetimeInput(ts){
+  const d = ts ? new Date(ts * 1000) : new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function openEditNextRun(jobId, currentNextRun){
+  const wrapper = document.getElementById('schNextRunWrapper_' + jobId);
+  if(!wrapper) return;
+  const isoVal = toLocalDatetimeInput(currentNextRun);
+  wrapper.innerHTML = `
+    <span style="display:inline-flex;align-items:center;gap:4px;background:var(--card);padding:2px 6px;border-radius:6px;border:1px solid var(--accent)">
+      <span>📅</span>
+      <input type="datetime-local" id="schEditDt_${jobId}" value="${isoVal}"
+             style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:2px 6px;font-size:12px;box-sizing:border-box"
+             onkeydown="if(event.key==='Enter') saveEditedNextRun('${jobId}'); else if(event.key==='Escape') loadScheduleJobs();">
+      <button class="btn accent small" style="padding:2px 8px;font-size:11px" onclick="saveEditedNextRun('${jobId}')" title="Spara ny tid">Spara</button>
+      <button class="btn ghost small" style="padding:2px 6px;font-size:11px" onclick="loadScheduleJobs()" title="Avbryt">✕</button>
+    </span>
+  `;
+  const inp = document.getElementById('schEditDt_' + jobId);
+  if(inp){
+    inp.focus();
+    if(typeof inp.showPicker === 'function'){
+      try{ inp.showPicker(); }catch(_){}
+    }
+  }
+}
+
+async function saveEditedNextRun(jobId){
+  const inp = document.getElementById('schEditDt_' + jobId);
+  if(!inp || !inp.value){
+    toast('Ange ett giltigt datum och klockslag', true);
+    return;
+  }
+  const dt = new Date(inp.value);
+  if(isNaN(dt.getTime())){
+    toast('Ogiltigt datum eller tid', true);
+    return;
+  }
+  const nextRunTs = Math.floor(dt.getTime() / 1000);
+  const pad = n => String(n).padStart(2, '0');
+  const runTimeStr = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+
+  try{
+    const r = await api('/api/schedule/jobs', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({
+        id: jobId,
+        next_run: nextRunTs,
+        run_time: runTimeStr
+      })
+    });
+    const d = await r.json();
+    if(!d.ok) throw new Error(d.error || 'kunde inte spara');
+    toast('Nästa körning ändrad till ' + dt.toLocaleString('sv-SE', {dateStyle:'short', timeStyle:'short'}));
+    loadScheduleJobs();
+  }catch(e){
+    toast('Kunde inte uppdatera tid: ' + e.message, true);
   }
 }
 
