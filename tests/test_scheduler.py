@@ -43,6 +43,7 @@ class TestScheduler(unittest.TestCase):
         self.assertTrue(saved["run_security"])
         self.assertTrue(saved["run_pentest"])
         self.assertTrue(saved["run_ponytail"])
+        self.assertEqual(saved["sec_mode"], "safe")
         self.assertTrue(saved["enabled"])
 
         # Kontrollera att det listas
@@ -50,6 +51,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(len(all_jobs), 1)
         self.assertEqual(all_jobs[0]["id"], saved["id"])
         self.assertTrue(all_jobs[0]["run_pentest"])
+        self.assertEqual(all_jobs[0]["sec_mode"], "safe")
 
     def test_get_and_update_schedule(self):
         saved = schedule_save({
@@ -57,7 +59,8 @@ class TestScheduler(unittest.TestCase):
             "interval_hours": 12,
             "run_security": True,
             "run_pentest": False,
-            "run_ponytail": False
+            "run_ponytail": False,
+            "sec_mode": "full"
         })
         jid = saved["id"]
 
@@ -66,6 +69,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(fetched["project"], "group/subgroup/project")
         self.assertFalse(fetched["run_pentest"])
         self.assertFalse(fetched["run_ponytail"])
+        self.assertEqual(fetched["sec_mode"], "full")
 
         # Uppdatera
         updated = schedule_save({
@@ -75,13 +79,35 @@ class TestScheduler(unittest.TestCase):
             "run_security": False,
             "run_pentest": True,
             "run_ponytail": True,
+            "sec_mode": "passive",
             "enabled": False
         })
         self.assertEqual(updated["interval_hours"], 48)
         self.assertFalse(updated["run_security"])
         self.assertTrue(updated["run_pentest"])
         self.assertTrue(updated["run_ponytail"])
+        self.assertEqual(updated["sec_mode"], "passive")
         self.assertFalse(updated["enabled"])
+
+    def test_schedule_sec_mode_and_target_sync(self):
+        saved = schedule_save({
+            "project": "org/api-service",
+            "prod_server": "https://api.example.com",
+            "sec_mode": "full",
+        })
+        self.assertEqual(saved["sec_mode"], "full")
+        self.assertEqual(saved["prod_server"], "https://api.example.com")
+
+        # Kontrollera att centrala project_targets också uppdaterades
+        pt = config.project_target_get("org/api-service")
+        self.assertEqual(pt["prod_server"], "https://api.example.com")
+        self.assertEqual(pt["sec_mode"], "full")
+
+        # Skapa ett jobb utan angivet sec_mode för samma projekt -> ska ärva från project_targets
+        saved2 = schedule_save({
+            "project": "org/api-service",
+        })
+        self.assertEqual(saved2["sec_mode"], "full")
 
     def test_delete_schedule(self):
         saved = schedule_save({

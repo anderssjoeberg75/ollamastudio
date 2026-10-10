@@ -3461,8 +3461,10 @@ async function populateScheduleProjects(){
       const pt = currentProjectTargets[p] || {};
       const srvEl = document.getElementById('schProdServer');
       const tokEl = document.getElementById('schProdToken');
+      const secModeEl = document.getElementById('schSecMode');
       if(srvEl) srvEl.value = pt.prod_server || '';
       if(tokEl) tokEl.value = '';
+      if(secModeEl) secModeEl.value = pt.sec_mode || 'safe';
       if(window._lastScheduleJobs){
         const existing = window._lastScheduleJobs.find(j => j.project === p);
         if(existing){
@@ -3476,6 +3478,7 @@ async function populateScheduleProjects(){
           if(secEl) secEl.checked = !!existing.run_security;
           if(penEl) penEl.checked = existing.run_pentest !== undefined ? !!existing.run_pentest : true;
           if(pnyEl) pnyEl.checked = !!existing.run_ponytail;
+          if(secModeEl && existing.sec_mode) secModeEl.value = existing.sec_mode;
         }
       }
     };
@@ -3508,6 +3511,14 @@ async function loadScheduleJobs(){
       const secBadge = job.run_security ? '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px">🛡 Säkerhet</span>' : '';
       const penBadge = job.run_pentest ? '<span style="background:var(--card);border:1px solid var(--amber);color:var(--amber);padding:2px 6px;border-radius:4px;font-size:11px">🎯 Pentest</span>' : '';
       const pnyBadge = job.run_ponytail ? '<span style="background:var(--card);border:1px solid var(--green);color:var(--green);padding:2px 6px;border-radius:4px;font-size:11px">✂ Ponytail</span>' : '';
+      let secModeBadge = '';
+      if(job.sec_mode === 'full'){
+        secModeBadge = '<span style="background:var(--card);border:1px solid var(--danger);color:var(--danger);padding:2px 6px;border-radius:4px;font-size:11px" title="Full penetrationstestning">⚠️ Full pentest</span>';
+      } else if(job.sec_mode === 'passive'){
+        secModeBadge = '<span style="background:var(--card);border:1px solid var(--subtle);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Passiv analys (icke-intrusiv)">🔍 Passiv</span>';
+      } else {
+        secModeBadge = '<span style="background:var(--card);border:1px solid var(--accent);color:var(--accent-hov);padding:2px 6px;border-radius:4px;font-size:11px" title="Safe-läge (icke-destruktivt)">🛡️ Safe-läge</span>';
+      }
       const prodBadge = job.prod_server ? `<span style="background:var(--card);border:1px solid var(--border);color:var(--subtle);padding:2px 6px;border-radius:4px;font-size:11px" title="Produktionsserver för projektet">🌐 ${escSch(job.prod_server)}</span>` : '';
       const statusColor = job.running ? 'var(--amber)' : (job.last_status && job.last_status.startsWith('Fel') ? 'var(--danger)' : 'var(--subtle)');
       const statusIcon = job.running ? '⏳ ' : '';
@@ -3520,7 +3531,7 @@ async function loadScheduleJobs(){
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:8px">
               <span style="font-weight:600;font-size:14px;color:var(--text)">🦊 ${escSch(job.project)}</span>
-              ${secBadge} ${penBadge} ${pnyBadge} ${prodBadge}
+              ${secBadge} ${penBadge} ${pnyBadge} ${secModeBadge} ${prodBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Kör granskningen direkt">
@@ -3651,6 +3662,7 @@ async function addScheduleJob(){
   const runPonytail = document.getElementById('schRunPonytail') ? document.getElementById('schRunPonytail').checked : true;
   const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
   const prodToken = (document.getElementById('schProdToken') ? document.getElementById('schProdToken').value : '').trim();
+  const secMode = (document.getElementById('schSecMode') ? document.getElementById('schSecMode').value : 'safe').trim() || 'safe';
 
   if(!runSecurity && !runPentest && !runPonytail){
     toast('Du måste välja minst en granskning (säkerhet, pentest eller ponytail)', true);
@@ -3670,14 +3682,15 @@ async function addScheduleJob(){
         run_ponytail: runPonytail,
         prod_server: prodServer,
         prod_token: prodToken,
+        sec_mode: secMode,
         enabled: true
       })
     });
     const d = await r.json();
     if(!d.ok) throw new Error(d.error || 'kunde inte spara schema');
     toast('Schema sparat för ' + project);
-    if(prodServer){
-      currentProjectTargets[project] = {project, prod_server: prodServer, has_token: !!prodToken};
+    if(prodServer || secMode){
+      currentProjectTargets[project] = {project, prod_server: prodServer, has_token: !!prodToken, sec_mode: secMode};
       renderProjectTargets(currentProjectTargets);
     }
     loadScheduleJobs();

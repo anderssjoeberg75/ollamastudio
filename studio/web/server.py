@@ -324,9 +324,10 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             proj = (data.get("project") or "").strip()
             srv = (data.get("prod_server") or "").strip()
             tok = data.get("prod_token")
+            sec_mode = data.get("sec_mode")
             if not proj:
                 return self._send_json({"error": "project saknas"}, 400)
-            project_target_set(proj, srv, tok)
+            project_target_set(proj, srv, tok, sec_mode=sec_mode)
             return self._send_json({"ok": True, "targets": project_targets_list()})
 
         if path == "/api/schedule/delete":

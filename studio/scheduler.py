@@ -94,9 +94,10 @@ def scheduler_db_init():
                 "prod_server TEXT DEFAULT '', "
                 "prod_token TEXT DEFAULT '', "
                 "run_time TEXT DEFAULT '', "
-                "run_pentest INTEGER DEFAULT 1)"
+                "run_pentest INTEGER DEFAULT 1, "
+                "sec_mode TEXT DEFAULT 'safe')"
             )
-            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_pentest
+            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_pentest/sec_mode
             cur = conn.execute("PRAGMA table_info(schedules)")
             existing_cols = {row[1] for row in cur.fetchall()}
             if "prod_server" not in existing_cols:
@@ -107,6 +108,8 @@ def scheduler_db_init():
                 conn.execute("ALTER TABLE schedules ADD COLUMN run_time TEXT DEFAULT ''")
             if "run_pentest" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN run_pentest INTEGER DEFAULT 1")
+            if "sec_mode" not in existing_cols:
+                conn.execute("ALTER TABLE schedules ADD COLUMN sec_mode TEXT DEFAULT 'safe'")
             conn.commit()
         finally:
             conn.close()
@@ -122,7 +125,7 @@ def schedule_list():
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode "
                 "FROM schedules ORDER BY project ASC"
             )
             for row in cur.fetchall():
@@ -144,6 +147,7 @@ def schedule_list():
                     "has_prod_token": bool(row[11]),
                     "run_time": row[12] or "",
                     "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
+                    "sec_mode": (row[14] if len(row) > 14 and row[14] else "safe") or "safe",
                     "running": is_running,
                 })
         finally:
@@ -159,7 +163,7 @@ def schedule_get(job_id):
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode "
                 "FROM schedules WHERE id = ?", (job_id,)
             )
             row = cur.fetchone()
@@ -182,6 +186,7 @@ def schedule_get(job_id):
                 "has_prod_token": bool(row[11]),
                 "run_time": row[12] or "",
                 "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
+                "sec_mode": (row[14] if len(row) > 14 and row[14] else "safe") or "safe",
                 "running": is_running,
             }
         finally:
@@ -189,7 +194,7 @@ def schedule_get(job_id):
 
 
 def schedule_save(job_data):
-    """Skapar eller uppdaterar ett schemalagt jobb och synkar produktionsserver."""
+    """Skapar eller uppdaterar ett schemalagt jobb och synkar produktionsserver samt säkerhetsläge."""
     scheduler_db_init()
     job_id = (job_data.get("id") or "").strip() or uuid.uuid4().hex[:10]
     project = (job_data.get("project") or "").strip()
@@ -200,17 +205,20 @@ def schedule_save(job_data):
     interval_hours = max(1, int(job_data.get("interval_hours") or 24))
     enabled = 1 if job_data.get("enabled", True) else 0
     run_time = (job_data.get("run_time") or "").strip()
+    sec_mode = (job_data.get("sec_mode") or "").strip().lower()
 
     prod_server = (job_data.get("prod_server") or "").strip()
     prod_token_input = job_data.get("prod_token")
 
-    # Om ingen prod_server angavs i jobbet, kolla om det finns sparat för projektet i project_targets
-    if not prod_server:
+    # Om ingen prod_server eller sec_mode angavs i jobbet, kolla om det finns sparat för projektet i project_targets
+    if not prod_server or not sec_mode:
         pt = config.project_target_get(project)
-        if pt.get("prod_server"):
+        if not prod_server and pt.get("prod_server"):
             prod_server = pt["prod_server"]
             if prod_token_input is None:
                 prod_token_input = pt.get("prod_token", "")
+        if not sec_mode and pt.get("sec_mode"):
+            sec_mode = pt["sec_mode"]
 
     now = time.time()
     existing = schedule_get(job_id)
@@ -233,6 +241,8 @@ def schedule_save(job_data):
             run_time = existing.get("run_time", "")
         if not prod_server and "prod_server" not in job_data:
             prod_server = existing.get("prod_server", "")
+        if not sec_mode and "sec_mode" not in job_data:
+            sec_mode = existing.get("sec_mode", "safe")
 
         time_changed = (
             ("run_time" in job_data and run_time != (existing.get("run_time") or "")) or
@@ -265,17 +275,20 @@ def schedule_save(job_data):
         last_status = ""
         prod_token = (prod_token_input or "").strip()
 
+    if sec_mode not in ("safe", "full", "passive"):
+        sec_mode = "safe"
+
     # Spara även till centrala project_targets
-    if prod_server or prod_token:
-        config.project_target_set(project, prod_server, prod_token)
+    if prod_server or prod_token or sec_mode:
+        config.project_target_set(project, prod_server, prod_token, sec_mode=sec_mode)
 
     with _settings_lock:
         conn = sqlite3.connect(config.DB_PATH)
         try:
             conn.execute(
                 "INSERT INTO schedules(id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "project=excluded.project, branch=excluded.branch, "
                 "run_security=excluded.run_security, run_ponytail=excluded.run_ponytail, "
@@ -283,9 +296,9 @@ def schedule_save(job_data):
                 "interval_hours=excluded.interval_hours, next_run=excluded.next_run, "
                 "enabled=excluded.enabled, last_status=excluded.last_status, "
                 "prod_server=excluded.prod_server, prod_token=excluded.prod_token, "
-                "run_time=excluded.run_time",
+                "run_time=excluded.run_time, sec_mode=excluded.sec_mode",
                 (job_id, project, branch, run_security, run_ponytail,
-                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest)
+                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode)
             )
             conn.commit()
         finally:
@@ -506,7 +519,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
 
 
 def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_pentest=True,
-                       status_cb=None, prod_server="", prod_token=""):
+                       status_cb=None, prod_server="", prod_token="", sec_mode="safe"):
     """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
 
     Väljer automatiskt den mest optimala hårdvaran (snabbaste GPU-instansen) och
@@ -520,6 +533,30 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     model = _get_active_code_model(base_url=base_url)
     if not model:
         return False, "Ingen Ollama-modell tillgänglig på %s" % base_url, 0, 0
+
+    mode = (sec_mode or "safe").strip().lower()
+    if mode not in ("safe", "full", "passive"):
+        mode = "safe"
+
+    mode_instructions = {
+        "safe": (
+            "SÄKERHETSNIVÅ & TESTLÄGE: SAFE (ICKE-DESTRUKTIVT)\n"
+            "- Använd uteslutande ofarliga (benign) payloads och sonderingar.\n"
+            "- Inga attacker som kan orsaka denial-of-service, dataförlust eller prestandapåverkan.\n"
+            "- Verifiera sårbarheter med säkra bevis (t.ex. läsa versionsheaders, syntaxkontroller, ofarliga strängar)."
+        ),
+        "full": (
+            "SÄKERHETSNIVÅ & TESTLÄGE: FULL PENTEST (AKTIV TESTNING)\n"
+            "- Genomför fullständig aktiv säkerhetskontroll och penetrationstestning.\n"
+            "- Djupgående sårbarhetsverifiering med realistiska Proof-of-Concept (PoC) för identifierade svagheter.\n"
+            "- Verifiera bypasses, autentiseringsbrister, SQL-injektioner och input-validering."
+        ),
+        "passive": (
+            "SÄKERHETSNIVÅ & TESTLÄGE: PASSIV ANALYS\n"
+            "- Endast passiv inspektion: granska källkod, HTTP-headers, TLS-certifikat, öppna tjänster och konfigurationsfiler.\n"
+            "- Skicka INGA aktiva fuzzing-, injektions- eller intrångs-payloads mot målservern."
+        ),
+    }
 
     if status_cb:
         status_cb("Optimal hårdvara (%s) och modell (%s) valda. Hämtar %s från GitLab..."
@@ -539,27 +576,28 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     try:
         if run_security:
-            sec_prompt = SECURITY_AUDIT_PROMPT
+            sec_prompt = SECURITY_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
             if status_cb:
-                status_cb("Kör säkerhetsgranskning (kod/SAST) mot %s (%s på %s)..." % (project, model, base_url))
+                status_cb("Kör säkerhetsgranskning (kod/SAST, läge: %s) mot %s (%s på %s)..." % (mode, project, model, base_url))
             sec_count, sec_err = _run_single_headless_pass(sec_prompt, model, project, base_url=base_url)
             if sec_err:
                 errors.append("Säkerhetsgranskning: " + sec_err)
 
         if run_pentest:
-            pen_prompt = PENTEST_AUDIT_PROMPT
+            pen_prompt = PENTEST_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
             if prod_server:
                 token_desc = " (med access-token)" if prod_token else " (utan token)"
                 pen_prompt += (
                     "\n\nPRODUKTIONSSERVER & MÅLMILJÖ FÖR DETTA PROJEKT:\n"
                     "- Målserver: %s%s\n"
+                    "- Testläge / Säkerhetsnivå: %s\n"
                     "- Enligt .agents/skills/openclaw-redteam/SKILL.md och .agents/rules/redteam.md ska nätverkstester, "
-                    "endpoints och autentisering granskas och testas mot denna målserver med strikt icke-destruktiva (benign) payloads.\n"
-                    % (prod_server, token_desc)
+                    "endpoints och autentisering granskas och testas mot denna målserver enligt angiven säkerhetsnivå.\n"
+                    % (prod_server, token_desc, mode.upper())
                 )
             if status_cb:
                 srv_msg = (" mot %s" % prod_server) if prod_server else ""
-                status_cb("Kör penetrationstest (pentest)%s (%s på %s)..." % (srv_msg, model, base_url))
+                status_cb("Kör penetrationstest (pentest, läge: %s)%s (%s på %s)..." % (mode, srv_msg, model, base_url))
             pen_count, pen_err = _run_single_headless_pass(pen_prompt, model, project, base_url=base_url)
             if pen_err:
                 errors.append("Penetrationstest: " + pen_err)
@@ -615,6 +653,7 @@ def _execute_job(job_id):
     try:
         eff = config.effective_project_target(job["project"])
         target_server = (job.get("prod_server") or "").strip() or eff.get("prod_server", "")
+        target_mode = (job.get("sec_mode") or "").strip() or eff.get("sec_mode", "safe")
         target_token = ""
         if (job.get("prod_server") or "").strip():
             with _settings_lock:
@@ -635,7 +674,8 @@ def _execute_job(job_id):
             run_pentest=job.get("run_pentest", True),
             status_cb=on_status,
             prod_server=target_server,
-            prod_token=target_token
+            prod_token=target_token,
+            sec_mode=target_mode,
         )
         finish_str = time.strftime("%Y-%m-%d %H:%M")
         status_text = ("%s (%s)" % (summary, finish_str)) if ok else ("Fel: %s (%s)" % (summary, finish_str))
