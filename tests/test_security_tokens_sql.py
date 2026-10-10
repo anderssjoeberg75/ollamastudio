@@ -28,9 +28,11 @@ class TestSecurityTokensAndSql(unittest.TestCase):
     # ---- 1. Git Authentication & ExtraHeader ----
     def test_git_auth_env_gitlab(self):
         env = git_auth_env("glpat-secret123", "gitlab")
-        self.assertEqual(env.get("GIT_CONFIG_COUNT"), "1")
+        self.assertEqual(env.get("GIT_CONFIG_COUNT"), "2")
         self.assertEqual(env.get("GIT_CONFIG_KEY_0"), "http.extraHeader")
-        self.assertEqual(env.get("GIT_CONFIG_VALUE_0"), "PRIVATE-TOKEN: glpat-secret123")
+        self.assertTrue(env.get("GIT_CONFIG_VALUE_0", "").startswith("Authorization: Basic "))
+        self.assertEqual(env.get("GIT_CONFIG_KEY_1"), "http.extraHeader")
+        self.assertEqual(env.get("GIT_CONFIG_VALUE_1"), "PRIVATE-TOKEN: glpat-secret123")
 
     def test_git_auth_env_github(self):
         env = git_auth_env("ghp_secret456", "github")

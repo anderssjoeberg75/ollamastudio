@@ -8,6 +8,7 @@ Codex and coding agents working in this repository must adhere to the following 
 - **Compilation / Execution**: [`.agents/rules/compile.md`](.agents/rules/compile.md) — Python virtual environment & runtime instructions.
 - **Accounts & Configuration**: [`.agents/rules/accounts.md`](.agents/rules/accounts.md) — Handling environment variables and local accounts.
 - **GitHub / Version Control**: [`.agents/rules/github.md`](.agents/rules/github.md) — Commit & branch guidelines.
+- **Red Team Security Guidelines**: [`.agents/rules/redteam.md`](.agents/rules/redteam.md) — Disciplined red-team protocol, command logging, safety constraints, and chain of command during security testing.
 
 ## Available Skills (`.agents/skills/`)
 Always consult and load the relevant `SKILL.md` from `.agents/skills/<skill-name>/SKILL.md` when handling matching tasks:
@@ -26,3 +27,6 @@ Always consult and load the relevant `SKILL.md` from `.agents/skills/<skill-name
    - Code diff review focused strictly on eliminating over-engineering and complexity.
 7. **`security-audit`** ([`.agents/skills/security-audit/SKILL.md`](.agents/skills/security-audit/SKILL.md))
    - Comprehensive security guidance, vulnerability discovery, threat modeling, and defensive audit workflows.
+8. **`openclaw-redteam`** ([`.agents/skills/openclaw-redteam/SKILL.md`](.agents/skills/openclaw-redteam/SKILL.md))
+   - Disciplined OpenClaw red-team operator guidelines, scope discipline, command logging, authority structure (zero, ste, sam), and safety constraints for security testing.
+

@@ -26,6 +26,7 @@ def _git(args, timeout=30, extra_env=None, cwd=None):
         return 1, "", "git är inte installerat på servern"
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"   # fråga aldrig efter lösenord interaktivt
+    env["GCM_INTERACTIVE"] = "never"   # förhindra interaktiva dialoger från Git Credential Manager
     if extra_env:
         env.update(extra_env)
     try:
@@ -184,17 +185,25 @@ def git_auth_env(token, provider="gitlab"):
     Undviker att token exponeras i URL, processargument (ps) eller sparas i .git/config."""
     if not token:
         return {}
+    import base64
     if provider == "gitlab":
-        header = "PRIVATE-TOKEN: %s" % token
+        # GitLab Git over HTTP kräver HTTP Basic auth ('oauth2:<token>').
+        # PRIVATE-TOKEN stöds i REST API men inte i alla Git Smart HTTP-servrar.
+        b64 = base64.b64encode(("oauth2:%s" % token).encode("ascii")).decode("ascii")
+        headers = [
+            "Authorization: Basic %s" % b64,
+            "PRIVATE-TOKEN: %s" % token,
+        ]
     else:  # github
-        import base64
         b64 = base64.b64encode(("x-access-token:%s" % token).encode("ascii")).decode("ascii")
-        header = "Authorization: Basic %s" % b64
-    return {
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": header,
-    }
+        headers = [
+            "Authorization: Basic %s" % b64,
+        ]
+    env = {"GIT_CONFIG_COUNT": str(len(headers))}
+    for idx, hdr in enumerate(headers):
+        env["GIT_CONFIG_KEY_%d" % idx] = "http.extraHeader"
+        env["GIT_CONFIG_VALUE_%d" % idx] = hdr
+    return env
 
 
 def _authed_push_url(owner, repo, token):
