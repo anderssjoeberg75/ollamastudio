@@ -14,6 +14,8 @@ from .context import cap_tool_result
 from .gitops import (git_commit_all, git_create_branch, git_diff_text,
                      git_status_info)
 from .gitlab import gitlab_create_issue
+from .skills import (get_agent, get_skill, get_workflow, list_agents,
+                     list_skills, list_workflows)
 from .workspace import (CODE_READ_LINES, ws_current, ws_diff, ws_edit_file,
                         ws_list_dir, ws_read_file, ws_resolve, ws_search,
                         ws_tree, ws_write_file)
@@ -41,6 +43,9 @@ AGENT_TOOLS_TEXT = (
     "  TOOL search {\"query\": \"text\", \"glob\": \"*.py\", \"regex\": false, "
     "\"ignore_case\": false}\n"
     "  TOOL find_symbol {\"name\": \"funktionsnamn\"}   (var något definieras)\n"
+    "  TOOL agent {\"name\": \"python-reviewer\"}        (ladda specialistagent: build-error-resolver, architect, code-simplifier, m.fl.)\n"
+    "  TOOL skill {\"name\": \"tdd-workflow\"}           (ladda metodik/skill: verification-loop, security-review, m.fl.)\n"
+    "  TOOL workflow {\"name\": \"build-fix\"}           (ladda arbetsflöde: quality-gate, plan, m.fl.)\n"
     "  TOOL edit_file {\"path\": \"fil.py\", \"old_text\": \"exakt text som finns\", "
     "\"new_text\": \"det den ska bli\"}\n"
     "  TOOL write_file {\"path\": \"ny.py\", \"content\": \"hela filens innehåll\"}\n"
@@ -100,6 +105,9 @@ def agent_system_prompt(mode=None):
         "     - ### Problem / Överarbetning / Risk (vad är problemet, risken, onödig komplexitet eller död kod)\n"
         "     - ### Steg-för-steg åtgärdsplan & Kodexempel (konkret kod hur det ska fixas/tas bort/förenklas med före/efter)\n"
         "     - ### Acceptanskriterier & Verifiering (hur man testar att det är löst och att tester passerar)\n"
+        "- Vid specifika moment: ta stöd av specialistagenter eller skills via `TOOL agent` (71 st, t.ex. "
+        "python-reviewer, build-error-resolver, architect, code-simplifier) eller `TOOL skill` (338 st, t.ex. "
+        "tdd-workflow, verification-loop, security-review) för att ladda metodik och krav.\n"
         "- Uppfinn inga verktyg och kör inga verktyg du inte fått resultat för.\n"
         "- När du är klar: skriv svaret som vanlig text utan TOOL-rad."
     )
@@ -125,7 +133,7 @@ _EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)'
 AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "find_symbol",
                     "edit_file", "write_file",
                     "run_command", "git_status", "git_diff", "git_branch", "git_commit",
-                    "create_issue", "todo"}
+                    "create_issue", "todo", "agent", "skill", "workflow"}
 
 
 def _json_object_at(text, i):
@@ -421,6 +429,51 @@ def agent_tool_exec(name, args, ctx=None):
             return ("Planen är noterad och visas för användaren:\n"
                     + "\n".join(("[x] " if i["done"] else "[ ] ") + i["text"] for i in items),
                     {"summary": "%d/%d klara" % (done, len(items)), "todo": items})
+
+        if name == "agent":
+            ag_name = (args.get("name") or args.get("agent") or "").strip()
+            if not ag_name or ag_name.lower() in ("list", "all"):
+                agents = list_agents()
+                return ("Specialistagenter (%d st tillgängliga):\n%s\nAnropa med: TOOL agent {\"name\": \"...\"}"
+                        % (len(agents), ", ".join(agents[:40]) + ("..." if len(agents) > 40 else "")),
+                        {"summary": "%d agenter" % len(agents)})
+            content = get_agent(ag_name)
+            if not content:
+                similar = [a for a in list_agents() if ag_name.lower() in a.lower()]
+                hint = (" Förslag: " + ", ".join(similar[:5])) if similar else ""
+                return ("Hittade inte agenten %r.%s" % (ag_name, hint), {"summary": "agent saknas"})
+            return ("Instruktioner för agent %s:\n%s" % (ag_name, content[:8000]),
+                    {"summary": "agent: " + ag_name})
+
+        if name == "skill":
+            sk_name = (args.get("name") or args.get("skill") or "").strip()
+            if not sk_name or sk_name.lower() in ("list", "all"):
+                skills = list_skills()
+                return ("Skills (%d st tillgängliga):\n%s\nAnropa med: TOOL skill {\"name\": \"...\"}"
+                        % (len(skills), ", ".join(skills[:50]) + ("..." if len(skills) > 50 else "")),
+                        {"summary": "%d skills" % len(skills)})
+            content = get_skill(sk_name)
+            if not content:
+                similar = [s for s in list_skills() if sk_name.lower() in s.lower()]
+                hint = (" Förslag: " + ", ".join(similar[:5])) if similar else ""
+                return ("Hittade inte skillen %r.%s" % (sk_name, hint), {"summary": "skill saknas"})
+            return ("Instruktioner för skill %s:\n%s" % (sk_name, content[:8000]),
+                    {"summary": "skill: " + sk_name})
+
+        if name == "workflow":
+            wf_name = (args.get("name") or args.get("workflow") or "").strip()
+            if not wf_name or wf_name.lower() in ("list", "all"):
+                wfs = list_workflows()
+                return ("Workflows (%d st tillgängliga):\n%s\nAnropa med: TOOL workflow {\"name\": \"...\"}"
+                        % (len(wfs), ", ".join(wfs[:40]) + ("..." if len(wfs) > 40 else "")),
+                        {"summary": "%d workflows" % len(wfs)})
+            content = get_workflow(wf_name)
+            if not content:
+                similar = [w for w in list_workflows() if wf_name.lower() in w.lower()]
+                hint = (" Förslag: " + ", ".join(similar[:5])) if similar else ""
+                return ("Hittade inte workflow %r.%s" % (wf_name, hint), {"summary": "workflow saknas"})
+            return ("Workflow %s:\n%s" % (wf_name, content[:8000]),
+                    {"summary": "workflow: " + wf_name})
 
         # ---- Skrivande verktyg: kräver en körning (och oftast ett godkännande) ----
         if name in ("write_file", "edit_file", "run_command", "git_branch", "git_commit", "create_issue"):

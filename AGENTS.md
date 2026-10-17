@@ -9,6 +9,7 @@ Codex and coding agents working in this repository must adhere to the following 
 - **Accounts & Configuration**: [`.agents/rules/accounts.md`](.agents/rules/accounts.md) — Handling environment variables and local accounts.
 - **GitHub / Version Control**: [`.agents/rules/github.md`](.agents/rules/github.md) — Commit & branch guidelines.
 - **Red Team Security Guidelines**: [`.agents/rules/redteam.md`](.agents/rules/redteam.md) — Disciplined red-team protocol, command logging, safety constraints, and chain of command during security testing.
+- **Modellprioritering (Ollama & Gratismodeller)**: [`.agents/rules/model-priority.md`](.agents/rules/model-priority.md) — Lokala Ollama-modeller och kostnadsfria modeller prioriteras alltid i första hand vid körning av agenter och specialistverktyg.
 
 ## Available Skills (`.agents/skills/`)
 Always consult and load the relevant `SKILL.md` from `.agents/skills/<skill-name>/SKILL.md` when handling matching tasks:
@@ -74,4 +75,37 @@ Färdigheter från [SecOpsAgentKit](https://github.com/AgentSecOps/SecOpsAgentKi
 - **`policy-opa`** ([`.agents/skills/policy-opa/SKILL.md`](.agents/skills/policy-opa/SKILL.md)) — Policy as Code och efterlevnadskontroller med Open Policy Agent (Rego).
 - **`pytm`** ([`.agents/skills/pytm/SKILL.md`](.agents/skills/pytm/SKILL.md)) — Kod-driven hotmodellering (Threat Modeling as Code) med pytm.
 
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Everything Claude Code (ECC) Agent Harness (`.agents/`)
+
+Projektet har nu ECC (Everything Claude Code / Codex Agent OS) integrerat under `.agents/`:
+- **71 Specialiserade Agenter** ([`.agents/agents/`](.agents/agents/)):
+  - **Arkitektur & Planering**: `architect.md`, `code-architect.md`, `planner.md`, `plan-canvas.md`
+  - **Språkspecifika Granskare**: `python-reviewer.md`, `vue-reviewer.md`, `react-reviewer.md`, `typescript-reviewer.md`, `go-reviewer.md`, `rust-reviewer.md`, `fastapi-reviewer.md`, `django-reviewer.md`
+  - **Build & Felreparering**: `build-error-resolver.md`, `react-build-resolver.md`, `rust-build-resolver.md`, `cpp-build-resolver.md`
+  - **Testning, TDD & QA**: `tdd-guide.md`, `e2e-runner.md`, `pr-test-analyzer.md`
+  - **Förenkling & Städning**: `code-simplifier.md`, `refactor-cleaner.md` (samverkar med Ponytail)
+  - **Säkerhet & Prestanda**: `security-reviewer.md`, `performance-optimizer.md`, `database-reviewer.md`
+- **311+ Specialiserade Skills** ([`.agents/skills/`](.agents/skills/)):
+  - **Test & Verifiering**: `tdd-workflow`, `verification-loop`, `change-impact`, `module-regression`
+  - **Mönster & Ramverk**: `fastapi-patterns`, `django-patterns`, `react-patterns`, `vue-patterns`, `nextjs-turbopack`, `hexagonal-architecture`
+  - **Data & Databaser**: `postgres-patterns`, `redis-patterns`, `database-migrations`, `connections-optimizer`
+  - **Minne & Kontinuerligt Lärande**: `continuous-learning-v2`, `rules-distill`, `unified-memory`
+  - **Token- & Prompt-Optimering**: `token-budget-advisor`, `prompt-caching-strategy`, `prompt-optimizer`
+- **98 Workflows** ([`.agents/workflows/`](.agents/workflows/)):
+  - `/build-fix`, `/plan`, `/plan-prd`, `/code-review`, `/quality-gate`, `/refactor-clean`, m.fl.
+- **128 Detaljerade Regler** ([`.agents/rules/`](.agents/rules/)):
+  - Språkspecifika och designmässiga riktlinjer.
 

@@ -115,6 +115,23 @@ def classify_task(text="", labels=""):
     return "general"
 
 
+TASK_RECOMMENDATIONS = {
+    "security": {"agent": "security-reviewer", "skill": "security-review"},
+    "refactor_complex": {"agent": "architect", "skill": "hexagonal-architecture"},
+    "testing": {"agent": "tdd-guide", "skill": "tdd-workflow"},
+    "ponytail": {"agent": "code-simplifier", "skill": "ponytail-audit"},
+    "lint": {"agent": "python-reviewer", "skill": "plankton-code-quality"},
+    "general": {"agent": "code-reviewer", "skill": "verification-loop"},
+}
+
+
+def _decorate(result, task_type):
+    rec = TASK_RECOMMENDATIONS.get(task_type, TASK_RECOMMENDATIONS["general"])
+    result["agent"] = rec["agent"]
+    result["skill"] = rec["skill"]
+    return result
+
+
 def select_best_model_for_task(text="", labels="", installed_models=None, prefer_local=False):
     """Väljer den optimala modellen enligt regelverket.
 
@@ -122,6 +139,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
     - model: modellnamnet att använda
     - reason: varför modellen valdes
     - task_type: identifierad uppgiftstyp
+    - agent: rekommenderad ECC specialistagent
+    - skill: rekommenderad ECC skill/metod
     """
     if isinstance(labels, (list, tuple, set)):
         labels = " ".join(str(l) for l in labels)
@@ -155,130 +174,130 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
     # -> Claude Sonnet 5.5 är bäst i världen på att åtgärda sårbarheter utan regressioner
     if task_type == "security":
         if agy_ok:
-            return {
+            return _decorate({
                 "model": "antigravity:claude-sonnet-5-5-medium",
                 "reason": "Claude Sonnet 5.5 valdes: Bäst precision och säkerhetsresonemang för sårbarhetsåtgärder.",
                 "task_type": task_type
-            }
+            }, task_type)
         if omni_ok:
-            return {
+            return _decorate({
                 "model": "omniroute:auto/coding",
                 "reason": "OmniRoute Auto Coding valdes: Multi-provider routing över 358 leverantörer.",
                 "task_type": task_type
-            }
-        return {
+            }, task_type)
+        return _decorate({
             "model": local_candidate or "deepseek-r1",
             "reason": "Lokal resonemangsmodell valdes för säkerhetsfix (offline-läge).",
             "task_type": task_type
-        }
+        }, task_type)
 
     # 2. Komplex refaktorisering / Arkitektur
     if task_type == "refactor_complex":
         if agy_ok:
-            return {
+            return _decorate({
                 "model": "antigravity:claude-sonnet-5-5-medium",
                 "reason": "Claude Sonnet 5.5 valdes för flerfilsarkitektur och djup refaktorisering.",
                 "task_type": task_type
-            }
+            }, task_type)
         if omni_ok:
-            return {
+            return _decorate({
                 "model": "omniroute:auto/coding",
                 "reason": "OmniRoute Auto Coding valdes för arkitektur och refaktorisering.",
                 "task_type": task_type
-            }
-        return {
+            }, task_type)
+        return _decorate({
             "model": local_candidate or "qwen2.5-coder",
             "reason": "Lokal modell valdes för refaktorisering (offline).",
             "task_type": task_type
-        }
+        }, task_type)
 
     # 3. Tester (generering och validering av enhetstester)
     # -> Gemini 3.8 Flash är blixtsnabb och skriver utmärkta tester
     if task_type == "testing":
         if agy_ok:
-            return {
+            return _decorate({
                 "model": "antigravity:gemini-3.8-flash-medium",
                 "reason": "Gemini 3.8 Flash valdes: Blixtsnabb respons och hög kvalitet på enhetstester.",
                 "task_type": task_type
-            }
+            }, task_type)
         if omni_ok:
-            return {
+            return _decorate({
                 "model": "omniroute:auto/fast",
                 "reason": "OmniRoute Auto Fast valdes för snabb generering av enhetstester.",
                 "task_type": task_type
-            }
-        return {
+            }, task_type)
+        return _decorate({
             "model": local_candidate or "qwen2.5-coder",
             "reason": "Lokal kodmodell valdes för testskrivning.",
             "task_type": task_type
-        }
+        }, task_type)
 
     # 4. Ponytail / Förenkling (YAGNI, ta bort död kod, förenkla)
     # -> Ponytail föredrar lokala modeller om de finns, annars Gemini Flash
     if task_type == "ponytail":
         if local_candidate and prefer_local:
-            return {
+            return _decorate({
                 "model": local_candidate,
                 "reason": "Lokal modell valdes för minimalistisk Ponytail-kodstädning.",
                 "task_type": task_type
-            }
+            }, task_type)
         if agy_ok:
-            return {
+            return _decorate({
                 "model": "antigravity:gemini-3.8-flash-medium",
                 "reason": "Gemini 3.8 Flash valdes för snabb och minimalistisk kodförenkling.",
                 "task_type": task_type
-            }
+            }, task_type)
         if omni_ok:
-            return {
+            return _decorate({
                 "model": "omniroute:auto/coding",
                 "reason": "OmniRoute Auto Coding valdes för minimalistisk kodförenkling.",
                 "task_type": task_type
-            }
-        return {
+            }, task_type)
+        return _decorate({
             "model": local_candidate or "llama3.2",
             "reason": "Lokal modell valdes för förenklingsgranskning.",
             "task_type": task_type
-        }
+        }, task_type)
 
     # 5. Linter och formatering
     if task_type == "lint":
         if agy_ok:
-            return {
+            return _decorate({
                 "model": "antigravity:gemini-3.8-flash-medium",
                 "reason": "Gemini 3.8 Flash valdes för snabb syntax- och linterfix.",
                 "task_type": task_type
-            }
+            }, task_type)
         if omni_ok:
-            return {
+            return _decorate({
                 "model": "omniroute:auto/fast",
                 "reason": "OmniRoute Auto Fast valdes för snabb syntax- och formateringsfix.",
                 "task_type": task_type
-            }
-        return {
+            }, task_type)
+        return _decorate({
             "model": local_candidate or "qwen2.5-coder",
             "reason": "Lokal modell valdes för formateringsfix.",
             "task_type": task_type
-        }
+        }, task_type)
 
     # 6. Allmän kodning / standard
     if agy_ok:
-        return {
+        return _decorate({
             "model": "antigravity:claude-sonnet-5-5-medium",
             "reason": "Claude Sonnet 5.5 valdes som standard för högsta kodkvalitet.",
             "task_type": task_type
-        }
+        }, task_type)
     if omni_ok:
-        return {
+        return _decorate({
             "model": "omniroute:auto/coding",
             "reason": "OmniRoute Auto Coding valdes med multi-provider fallback.",
             "task_type": task_type
-        }
+        }, task_type)
 
-    return {
+    return _decorate({
         "model": local_candidate or "qwen2.5-coder",
         "reason": "Lokal Ollama-modell valdes.",
         "task_type": task_type
-    }
+    }, task_type)
 
 
 def get_model_matrix():

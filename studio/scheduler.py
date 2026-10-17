@@ -585,6 +585,17 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             installed_models=installed_local
         )
         chosen_model = route_info.get("model") if isinstance(route_info, dict) else route_info
+        rec_agent = route_info.get("agent") if isinstance(route_info, dict) else ""
+
+        agent_guidance = ""
+        if rec_agent:
+            try:
+                from .codex.skills import get_agent
+                ag_text = get_agent(rec_agent)
+                if ag_text:
+                    agent_guidance = f"\n\nSPECIALISTDIREKTIV ({rec_agent}):\n{ag_text[:1200]}\n"
+            except Exception:
+                pass
 
         if status_cb:
             status_cb("Åtgärdar fynd #%s ('%s') med modell %s..." % (iid, title[:35], chosen_model))
@@ -593,13 +604,13 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             "Du har i uppgift att åtgärda följande fynd i källkoden:\n\n"
             "TITEL: %s\n"
             "LABELS: %s\n\n"
-            "BESKRIVNING & ÅTGÄRDSPLAN:\n%s\n\n"
+            "BESKRIVNING & ÅTGÄRDSPLAN:\n%s%s\n\n"
             "ARBETSSÄTT & KRAV:\n"
             "1. Undersök berörd kod med TOOL read_file eller TOOL search.\n"
-            "2. Gör nödvändiga korrigeringar med TOOL replace_file eller TOOL write_file.\n"
+            "2. Gör nödvändiga korrigeringar med TOOL edit_file eller TOOL write_file.\n"
             "3. Rör inte orelaterad kod. Följ YAGNI och Ponytail-principerna.\n"
             "4. Avsluta med en kort sammanfattning av vad som åtgärdats."
-            % (title, ", ".join(labels), desc)
+            % (title, ", ".join(labels), desc, agent_guidance)
         )
 
         _, fix_err = _run_single_headless_pass(fix_prompt, chosen_model, project_slug, base_url=base)
