@@ -110,7 +110,12 @@ class BaseHandler(BaseHTTPRequestHandler):
 
     # ---- Chatt med auto-webbsök -----------------------------------------
     def _open_chat_stream(self, messages, model, opts, base):
-        """Öppna en strömmande /api/chat mot en Ollama-backend."""
+        """Öppna en strömmande /api/chat mot en Ollama-backend (eller Antigravity-abonnemang)."""
+        m_str = str(model or "")
+        if m_str.startswith("antigravity:") or m_str.startswith("gemini:") or m_str.startswith("claude:"):
+            from studio.antigravity_bridge import AntigravityStream
+            return AntigravityStream(messages, m_str)
+
         payload = {"model": model, "messages": messages, "stream": True}
         if opts:
             payload["options"] = opts

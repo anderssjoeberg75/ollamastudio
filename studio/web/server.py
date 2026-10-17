@@ -261,7 +261,13 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:
-                    return self._send_json(self._upstream_get(upstream))
+                    data = self._upstream_get(upstream)
+                    if path == "/api/models" and isinstance(data, dict):
+                        from studio.antigravity_bridge import antigravity_models
+                        extra = antigravity_models()
+                        if extra:
+                            data["models"] = extra + (data.get("models") or [])
+                    return self._send_json(data)
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 502)
             return self._send_json({"error": "not found"}, 404)   # okänd API-väg → JSON
