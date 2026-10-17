@@ -71,15 +71,23 @@ class BaseHandler(BaseHTTPRequestHandler):
             return json.loads(resp.read().decode("utf-8"))
 
     def _proxy_stream(self, upstream_path, payload, base=None):
-        """POSTa till en Ollama-backend och strömma NDJSON-svaret rad för rad till webbläsaren."""
-        try:
-            body = json.dumps(payload).encode()
-            req = urllib.request.Request((base or _backends.PRIMARY["url"]) + upstream_path, data=body,
-                                         method="POST",
-                                         headers={"Content-Type": "application/json"})
-            upstream = urllib.request.urlopen(req, timeout=120)
-        except Exception as e:
-            return self._send_json({"error": str(e)}, 502)
+        """POSTa till en Ollama-backend (eller Antigravity-abonnemang) och strömma NDJSON-svaret rad för rad till webbläsaren."""
+        m_str = str(payload.get("model") or "")
+        if m_str.startswith("antigravity:") or m_str.startswith("gemini:") or m_str.startswith("claude:"):
+            from studio.antigravity_bridge import AntigravityStream
+            try:
+                upstream = AntigravityStream(payload.get("messages") or [], m_str)
+            except Exception as e:
+                return self._send_json({"error": str(e)}, 502)
+        else:
+            try:
+                body = json.dumps(payload).encode()
+                req = urllib.request.Request((base or _backends.PRIMARY["url"]) + upstream_path, data=body,
+                                             method="POST",
+                                             headers={"Content-Type": "application/json"})
+                upstream = urllib.request.urlopen(req, timeout=120)
+            except Exception as e:
+                return self._send_json({"error": str(e)}, 502)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
