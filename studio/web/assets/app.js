@@ -1788,7 +1788,83 @@ async function loadSettingsForm(){
   renderProjectTargets(s.project_targets || {});
   populateSecProjectSelect();
   document.getElementById('stDbPath').textContent = s.db_path ? ('Saved in: '+s.db_path) : '';
+  set('stOmniRouteUrl', s.omniroute_url || 'http://127.0.0.1:20128');
   loadAntigravityStatus();
+  loadOmniRouteStatus();
+}
+
+async function loadOmniRouteStatus(){
+  const badge = document.getElementById('omniStatusBadge');
+  const details = document.getElementById('omniStatusDetails');
+  if(!badge || !details) return;
+  badge.textContent = 'Kontrollerar…';
+  badge.style.background = 'rgba(49,248,137,0.15)';
+  badge.style.color = 'var(--green)';
+
+  try {
+    const r = await api('/api/omniroute/status');
+    const d = await r.json();
+    if(d.available){
+      badge.textContent = '● Aktiv (' + (d.models_count || 0) + ' modeller)';
+      badge.style.background = 'rgba(57,214,127,0.15)';
+      badge.style.color = 'var(--green)';
+
+      const sampleModels = (d.models || []).slice(0, 8).map(m => `<span style="display:inline-block;padding:2px 8px;border-radius:6px;background:var(--card);border:1px solid var(--border);margin:2px 4px 2px 0;font-size:12px">⚡ <b>${esc(m)}</b></span>`).join('');
+
+      details.innerHTML = `
+        <div style="color:var(--green);font-weight:600;margin-bottom:6px">✓ OmniRoute Gateway är ansluten och servar modeller!</div>
+        <div style="color:var(--subtle);font-size:12px;margin-bottom:6px">Endpoint: <code>${esc(d.url)}/v1</code> &bull; Totalt modeller/kombos: <b>${d.models_count || 0}</b></div>
+        <div style="margin-top:6px">${sampleModels || '<i>Standardkombos (auto/coding, auto, auto/fast) aktiva</i>'}</div>
+      `;
+    } else {
+      badge.textContent = '● Ej nåbar';
+      badge.style.background = 'rgba(255,92,108,0.15)';
+      badge.style.color = 'var(--danger)';
+      details.innerHTML = `
+        <div style="color:var(--danger);font-weight:600;margin-bottom:6px">✗ Kunde inte ansluta till OmniRoute</div>
+        <div style="color:var(--subtle);font-size:12px">URL: <code>${esc(d.url)}</code> (${esc(d.error || 'Kontrollera att tjänsten är igång')})</div>
+      `;
+    }
+  } catch(e) {
+    badge.textContent = 'Fel';
+    badge.style.color = 'var(--danger)';
+    details.textContent = 'Kunde inte hämta status: ' + e.message;
+  }
+}
+
+async function pingOmniRoute(){
+  const resEl = document.getElementById('omniPingResult');
+  const btn = document.getElementById('btnOmniPing');
+  if(!resEl) return;
+  resEl.textContent = '⏳ Testar OmniRoute…';
+  if(btn) btn.disabled = true;
+
+  try {
+    const r = await api('/api/omniroute/ping', {method: 'POST', headers: headers(true)});
+    const d = await r.json();
+    if(d.ok){
+      resEl.innerHTML = `<span style="color:var(--green);font-weight:600">✓ ${esc(d.message)}</span>`;
+      loadOmniRouteStatus();
+    } else {
+      resEl.innerHTML = `<span style="color:var(--danger)">✗ ${esc(d.message || 'Test misslyckades')}</span>`;
+    }
+  } catch(e){
+    resEl.innerHTML = `<span style="color:var(--danger)">✗ Nätverksfel: ${esc(e.message)}</span>`;
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+async function saveOmniRouteSettings(){
+  const u = val('stOmniRouteUrl');
+  if(u){
+    await api('/api/settings', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({ omniroute_url: u })
+    });
+    loadOmniRouteStatus();
+  }
 }
 
 async function loadAntigravityStatus(){
@@ -2010,7 +2086,8 @@ function collectSettings(){
     code_ctx: val('stCodeCtx'),
     code_temp: val('stCodeTemp'),
     sec_target_url: val('stSecTarget'),
-    sec_test_mode: val('stSecMode')
+    sec_test_mode: val('stSecMode'),
+    omniroute_url: val('stOmniRouteUrl') || 'http://127.0.0.1:20128'
   };
   const key = val('stMem0Key');
   if(mem0KeyClear && !key) body.mem0_api_key = null;

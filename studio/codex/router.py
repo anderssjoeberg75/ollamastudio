@@ -9,9 +9,24 @@ modellernas specifika styrkor:
 import re
 
 from ..antigravity_bridge import antigravity_available, antigravity_models
+from ..omniroute_bridge import omniroute_available, omniroute_models
 
 
 MODEL_MATRIX = {
+    "omniroute:auto/coding": {
+        "name": "OmniRoute Auto Coding",
+        "provider": "omniroute_gateway",
+        "tier": "gateway_coding",
+        "strengths": ["358 leverantörer", "auto-fallback", "150+ gratistiers", "token-komprimering"],
+        "best_for": ["general_coding", "multi_provider_fallback", "free_tiers"]
+    },
+    "omniroute:auto": {
+        "name": "OmniRoute Auto Balanced",
+        "provider": "omniroute_gateway",
+        "tier": "gateway_balanced",
+        "strengths": ["16-faktor live scoring", "resilient", "automatisk routing"],
+        "best_for": ["balanced", "general"]
+    },
     "antigravity:claude-sonnet-5-5-medium": {
         "name": "Claude Sonnet 5.5",
         "provider": "anthropic_subscription",
@@ -112,6 +127,7 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
         labels = " ".join(str(l) for l in labels)
     task_type = classify_task(text, labels)
     agy_ok = antigravity_available() and not prefer_local
+    omni_ok = omniroute_available() and not prefer_local
 
     installed_names = []
     for m in (installed_models or []):
@@ -144,6 +160,12 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "reason": "Claude Sonnet 5.5 valdes: Bäst precision och säkerhetsresonemang för sårbarhetsåtgärder.",
                 "task_type": task_type
             }
+        if omni_ok:
+            return {
+                "model": "omniroute:auto/coding",
+                "reason": "OmniRoute Auto Coding valdes: Multi-provider routing över 358 leverantörer.",
+                "task_type": task_type
+            }
         return {
             "model": local_candidate or "deepseek-r1",
             "reason": "Lokal resonemangsmodell valdes för säkerhetsfix (offline-läge).",
@@ -156,6 +178,12 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
             return {
                 "model": "antigravity:claude-sonnet-5-5-medium",
                 "reason": "Claude Sonnet 5.5 valdes för flerfilsarkitektur och djup refaktorisering.",
+                "task_type": task_type
+            }
+        if omni_ok:
+            return {
+                "model": "omniroute:auto/coding",
+                "reason": "OmniRoute Auto Coding valdes för arkitektur och refaktorisering.",
                 "task_type": task_type
             }
         return {
@@ -171,6 +199,12 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
             return {
                 "model": "antigravity:gemini-3.8-flash-medium",
                 "reason": "Gemini 3.8 Flash valdes: Blixtsnabb respons och hög kvalitet på enhetstester.",
+                "task_type": task_type
+            }
+        if omni_ok:
+            return {
+                "model": "omniroute:auto/fast",
+                "reason": "OmniRoute Auto Fast valdes för snabb generering av enhetstester.",
                 "task_type": task_type
             }
         return {
@@ -194,6 +228,12 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "reason": "Gemini 3.8 Flash valdes för snabb och minimalistisk kodförenkling.",
                 "task_type": task_type
             }
+        if omni_ok:
+            return {
+                "model": "omniroute:auto/coding",
+                "reason": "OmniRoute Auto Coding valdes för minimalistisk kodförenkling.",
+                "task_type": task_type
+            }
         return {
             "model": local_candidate or "llama3.2",
             "reason": "Lokal modell valdes för förenklingsgranskning.",
@@ -208,6 +248,12 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "reason": "Gemini 3.8 Flash valdes för snabb syntax- och linterfix.",
                 "task_type": task_type
             }
+        if omni_ok:
+            return {
+                "model": "omniroute:auto/fast",
+                "reason": "OmniRoute Auto Fast valdes för snabb syntax- och formateringsfix.",
+                "task_type": task_type
+            }
         return {
             "model": local_candidate or "qwen2.5-coder",
             "reason": "Lokal modell valdes för formateringsfix.",
@@ -219,6 +265,12 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
         return {
             "model": "antigravity:claude-sonnet-5-5-medium",
             "reason": "Claude Sonnet 5.5 valdes som standard för högsta kodkvalitet.",
+            "task_type": task_type
+        }
+    if omni_ok:
+        return {
+            "model": "omniroute:auto/coding",
+            "reason": "OmniRoute Auto Coding valdes med multi-provider fallback.",
             "task_type": task_type
         }
 

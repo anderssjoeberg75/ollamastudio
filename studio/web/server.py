@@ -261,6 +261,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             if path == "/api/antigravity/status":
                 from studio.antigravity_bridge import antigravity_status
                 return self._send_json(antigravity_status())
+            if path == "/api/omniroute/status":
+                from studio.omniroute_bridge import omniroute_status
+                return self._send_json(omniroute_status())
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:
@@ -270,6 +273,10 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                         extra = antigravity_models()
                         if extra:
                             data["models"] = extra + (data.get("models") or [])
+                        from studio.omniroute_bridge import omniroute_models
+                        omni_mods = omniroute_models()
+                        if omni_mods:
+                            data["models"] = (data.get("models") or []) + omni_mods
                     return self._send_json(data)
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 502)
@@ -388,6 +395,10 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         if path == "/api/antigravity/ping":
             from studio.antigravity_bridge import antigravity_ping
             return self._send_json(antigravity_ping())
+
+        if path == "/api/omniroute/ping":
+            from studio.omniroute_bridge import omniroute_ping
+            return self._send_json(omniroute_ping())
 
         if path == "/api/self-update":
             # Hämta senaste kod (git pull) och starta om servern om något nytt hämtades.
