@@ -95,9 +95,10 @@ def scheduler_db_init():
                 "prod_token TEXT DEFAULT '', "
                 "run_time TEXT DEFAULT '', "
                 "run_pentest INTEGER DEFAULT 1, "
-                "sec_mode TEXT DEFAULT 'safe')"
+                "sec_mode TEXT DEFAULT 'safe', "
+                "run_resolve INTEGER DEFAULT 0)"
             )
-            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_pentest/sec_mode
+            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_pentest/sec_mode/run_resolve
             cur = conn.execute("PRAGMA table_info(schedules)")
             existing_cols = {row[1] for row in cur.fetchall()}
             if "prod_server" not in existing_cols:
@@ -110,6 +111,8 @@ def scheduler_db_init():
                 conn.execute("ALTER TABLE schedules ADD COLUMN run_pentest INTEGER DEFAULT 1")
             if "sec_mode" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN sec_mode TEXT DEFAULT 'safe'")
+            if "run_resolve" not in existing_cols:
+                conn.execute("ALTER TABLE schedules ADD COLUMN run_resolve INTEGER DEFAULT 0")
             conn.commit()
         finally:
             conn.close()
@@ -125,7 +128,7 @@ def schedule_list():
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve "
                 "FROM schedules ORDER BY project ASC"
             )
             for row in cur.fetchall():
@@ -148,6 +151,7 @@ def schedule_list():
                     "run_time": row[12] or "",
                     "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
                     "sec_mode": (row[14] if len(row) > 14 and row[14] else "safe") or "safe",
+                    "run_resolve": bool(row[15]) if (len(row) > 15 and row[15] is not None) else False,
                     "running": is_running,
                 })
         finally:
@@ -163,7 +167,7 @@ def schedule_get(job_id):
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve "
                 "FROM schedules WHERE id = ?", (job_id,)
             )
             row = cur.fetchone()
@@ -187,6 +191,7 @@ def schedule_get(job_id):
                 "run_time": row[12] or "",
                 "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
                 "sec_mode": (row[14] if len(row) > 14 and row[14] else "safe") or "safe",
+                "run_resolve": bool(row[15]) if (len(row) > 15 and row[15] is not None) else False,
                 "running": is_running,
             }
         finally:
@@ -202,6 +207,7 @@ def schedule_save(job_data):
     run_security = 1 if job_data.get("run_security", True) else 0
     run_ponytail = 1 if job_data.get("run_ponytail", True) else 0
     run_pentest = 1 if job_data.get("run_pentest", True) else 0
+    run_resolve = 1 if job_data.get("run_resolve", False) else 0
     interval_hours = max(1, int(job_data.get("interval_hours") or 24))
     enabled = 1 if job_data.get("enabled", True) else 0
     run_time = (job_data.get("run_time") or "").strip()
@@ -233,6 +239,8 @@ def schedule_save(job_data):
             run_ponytail = 1 if existing.get("run_ponytail") else 0
         if "run_pentest" not in job_data:
             run_pentest = 1 if existing.get("run_pentest", True) else 0
+        if "run_resolve" not in job_data:
+            run_resolve = 1 if existing.get("run_resolve") else 0
         if "interval_hours" not in job_data:
             interval_hours = existing.get("interval_hours", 24)
         if "enabled" not in job_data:
@@ -287,18 +295,18 @@ def schedule_save(job_data):
         try:
             conn.execute(
                 "INSERT INTO schedules(id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "project=excluded.project, branch=excluded.branch, "
                 "run_security=excluded.run_security, run_ponytail=excluded.run_ponytail, "
-                "run_pentest=excluded.run_pentest, "
+                "run_pentest=excluded.run_pentest, run_resolve=excluded.run_resolve, "
                 "interval_hours=excluded.interval_hours, next_run=excluded.next_run, "
                 "enabled=excluded.enabled, last_status=excluded.last_status, "
                 "prod_server=excluded.prod_server, prod_token=excluded.prod_token, "
                 "run_time=excluded.run_time, sec_mode=excluded.sec_mode",
                 (job_id, project, branch, run_security, run_ponytail,
-                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode)
+                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve)
             )
             conn.commit()
         finally:
@@ -452,30 +460,48 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
     while step < max_steps:
         step += 1
         sent = prune_convo(convo, code_char_budget())
-        payload = {
-            "model": model,
-            "messages": sent,
-            "stream": False,
-            "options": code_options()
-        }
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            base.rstrip("/") + "/api/chat",
-            data=body,
-            method="POST",
-            headers={"Content-Type": "application/json"}
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                resp_obj = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
-        except urllib.error.URLError as e:
-            setattr(ctx, "last_error", "Nätverks-/timeoutfel mot %s: %s" % (base, e))
-            break
-        except Exception as e:
-            setattr(ctx, "last_error", "Anropsfel mot %s: %s" % (base, e))
-            break
+        if model.startswith("antigravity:") or model.startswith("gemini:") or model.startswith("claude:"):
+            from .antigravity_bridge import AntigravityStream
+            try:
+                stream = AntigravityStream(sent, model)
+                chunks = []
+                for line in stream:
+                    try:
+                        obj = json.loads(line.decode("utf-8"))
+                        delta = (obj.get("message") or {}).get("content") or ""
+                        if delta:
+                            chunks.append(delta)
+                    except Exception:
+                        continue
+                full = "".join(chunks)
+            except Exception as e:
+                setattr(ctx, "last_error", "Antigravity-fel (%s): %s" % (model, e))
+                break
+        else:
+            payload = {
+                "model": model,
+                "messages": sent,
+                "stream": False,
+                "options": code_options()
+            }
+            body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                base.rstrip("/") + "/api/chat",
+                data=body,
+                method="POST",
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    resp_obj = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+            except urllib.error.URLError as e:
+                setattr(ctx, "last_error", "Nätverks-/timeoutfel mot %s: %s" % (base, e))
+                break
+            except Exception as e:
+                setattr(ctx, "last_error", "Anropsfel mot %s: %s" % (base, e))
+                break
 
-        full = (resp_obj.get("message") or {}).get("content") or ""
+            full = (resp_obj.get("message") or {}).get("content") or ""
         if not full:
             break
 
@@ -518,8 +544,88 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
     return getattr(ctx, "issues_created", 0), getattr(ctx, "last_error", None)
 
 
+def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
+    """Hämtar öppna GitLab-issues (fynd) för projektet, väljer optimal modell och åtgärdar dem."""
+    from .codex.router import select_best_model_for_task
+    from .codex.gitlab import gitlab_list_issues, gitlab_close_issue
+    from .codex.gitops import git_commit_all, git_diff_text
+
+    issues = gitlab_list_issues(project_slug=project_slug, state="opened")
+    if not issues:
+        return 0, []
+
+    # Hämta installerade lokala modeller för att ge till routern
+    installed_local = []
+    base = base_url or backends.select_optimal_backend()
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            for m in data.get("models") or []:
+                nm = m.get("name") or m.get("model") or ""
+                if nm:
+                    installed_local.append(nm)
+    except Exception:
+        pass
+
+    resolved_count = 0
+    errors = []
+
+    for issue in issues:
+        iid = issue.get("iid") or issue.get("id")
+        title = issue.get("title") or ""
+        desc = issue.get("description") or ""
+        raw_labels = issue.get("labels") or []
+        labels = [str(l) for l in raw_labels] if isinstance(raw_labels, list) else [str(raw_labels)]
+
+        full_text = f"{title}\n{desc}"
+        route_info = select_best_model_for_task(
+            full_text,
+            labels=labels,
+            installed_models=installed_local
+        )
+        chosen_model = route_info.get("model") if isinstance(route_info, dict) else route_info
+
+        if status_cb:
+            status_cb("Åtgärdar fynd #%s ('%s') med modell %s..." % (iid, title[:35], chosen_model))
+
+        fix_prompt = (
+            "Du har i uppgift att åtgärda följande fynd i källkoden:\n\n"
+            "TITEL: %s\n"
+            "LABELS: %s\n\n"
+            "BESKRIVNING & ÅTGÄRDSPLAN:\n%s\n\n"
+            "ARBETSSÄTT & KRAV:\n"
+            "1. Undersök berörd kod med TOOL read_file eller TOOL search.\n"
+            "2. Gör nödvändiga korrigeringar med TOOL replace_file eller TOOL write_file.\n"
+            "3. Rör inte orelaterad kod. Följ YAGNI och Ponytail-principerna.\n"
+            "4. Avsluta med en kort sammanfattning av vad som åtgärdats."
+            % (title, ", ".join(labels), desc)
+        )
+
+        _, fix_err = _run_single_headless_pass(fix_prompt, chosen_model, project_slug, base_url=base)
+        if fix_err:
+            errors.append("Issue #%s: %s" % (iid, fix_err))
+            continue
+
+        diff = git_diff_text()
+        if diff and not diff.startswith("FEL:") and len(diff.strip()) > 0:
+            commit_msg = (
+                "fix: resolve %s (issue #%s)\n\n"
+                "Auto-resolved by Ollama Studio Codex using model %s."
+                % (title, iid, chosen_model)
+            )
+            ok_commit, _ = git_commit_all(commit_msg)
+            if ok_commit:
+                gitlab_close_issue(iid, project_slug=project_slug)
+                resolved_count += 1
+                if status_cb:
+                    status_cb("Fynd #%s åtgärdat, commitat och stängt i GitLab!" % iid)
+
+    return resolved_count, errors
+
+
 def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_pentest=True,
-                       status_cb=None, prod_server="", prod_token="", sec_mode="safe"):
+                       status_cb=None, prod_server="", prod_token="", sec_mode="safe", run_resolve=False):
     """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
 
     Väljer automatiskt den mest optimala hårdvaran (snabbaste GPU-instansen) och
@@ -578,6 +684,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     sec_count = 0
     pen_count = 0
     pny_count = 0
+    res_count = 0
     errors = []
 
     try:
@@ -615,11 +722,18 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
             if pny_err:
                 errors.append("Ponytail-audit: " + pny_err)
 
+        if run_resolve:
+            if status_cb:
+                status_cb("Hämtar öppna fynd och kör automatisk åtgärd (Auto-Fix)...")
+            res_count, res_errs = _run_resolve_findings_pass(project, status_cb=status_cb, base_url=base_url)
+            if res_errs:
+                errors.append("Åtgärda fynd: " + "; ".join(res_errs))
+
     finally:
         if prev_workspace and prev_workspace != target_dir:
             settings_set({"code_workspace": prev_workspace})
 
-    total = sec_count + pen_count + pny_count
+    total = sec_count + pen_count + pny_count + res_count
     if errors and total == 0:
         summary = "Fel under körning (%s på %s): %s" % (model, base_url, "; ".join(errors))
         return False, summary, sec_count + pen_count, pny_count
@@ -631,8 +745,10 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
         parts.append("%d pentest-" % pen_count)
     if run_ponytail:
         parts.append("%d ponytail-" % pny_count)
+    if run_resolve:
+        parts.append("%d åtgärdade fynd" % res_count)
     parts_str = " och ".join(parts) if len(parts) <= 2 else (", ".join(parts[:-1]) + " och " + parts[-1])
-    summary = ("Klar (%s på %s): %s punkter sparade som GitLab Work Items." % (model, base_url, parts_str)) if parts else "Klar: Inga moment valda."
+    summary = ("Klar (%s på %s): %s punkter behandlade." % (model, base_url, parts_str)) if parts else "Klar: Inga moment valda."
     return True, summary, sec_count + pen_count, pny_count
 
 
@@ -682,6 +798,7 @@ def _execute_job(job_id):
             prod_server=target_server,
             prod_token=target_token,
             sec_mode=target_mode,
+            run_resolve=job.get("run_resolve", False),
         )
         finish_str = time.strftime("%Y-%m-%d %H:%M")
         status_text = ("%s (%s)" % (summary, finish_str)) if ok else ("Fel: %s (%s)" % (summary, finish_str))

@@ -3430,11 +3430,13 @@ async function populateScheduleProjects(){
           const secEl = document.getElementById('schRunSecurity');
           const penEl = document.getElementById('schRunPentest');
           const pnyEl = document.getElementById('schRunPonytail');
+          const resEl = document.getElementById('schRunResolve');
           if(intEl && existing.interval_hours) intEl.value = existing.interval_hours;
           if(timeEl && existing.run_time) timeEl.value = existing.run_time;
           if(secEl) secEl.checked = !!existing.run_security;
           if(penEl) penEl.checked = existing.run_pentest !== undefined ? !!existing.run_pentest : true;
           if(pnyEl) pnyEl.checked = !!existing.run_ponytail;
+          if(resEl) resEl.checked = !!existing.run_resolve;
           if(secModeEl && existing.sec_mode) secModeEl.value = existing.sec_mode;
         }
       }
@@ -3489,6 +3491,13 @@ async function loadScheduleJobs(){
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
       const pnyBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_ponytail', ${!pnyOn})" title="${pnyOn ? 'Ponytail audit active — click to disable' : 'Ponytail audit inactive — click to enable'}" style="${pnyStyle}"><span>✂</span><span>Ponytail</span></button>`;
 
+      // Auto-Fix toggle-knapp
+      const resOn = !!job.run_resolve;
+      const resStyle = resOn
+        ? 'background:rgba(59,130,246,0.12);border:1px solid var(--accent);color:var(--accent);font-weight:600'
+        : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
+      const resBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_resolve', ${!resOn})" title="${resOn ? 'Auto-fix findings active — click to disable' : 'Auto-fix findings inactive — click to enable'}" style="${resStyle}"><span>🛠️</span><span>Auto-Fix</span></button>`;
+
       // Säkerhetsläge / Testläge väljare
       let modeBorder = 'var(--accent)';
       let modeColor = 'var(--accent-hov)';
@@ -3531,7 +3540,7 @@ async function loadScheduleJobs(){
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;max-width:100%">
               <span style="font-weight:600;font-size:14px;color:var(--text);white-space:nowrap">🦊 ${escSch(job.project)}</span>
-              ${secBadge} ${penBadge} ${pnyBadge} ${secModeBadge} ${prodBadge}
+              ${secBadge} ${penBadge} ${pnyBadge} ${resBadge} ${secModeBadge} ${prodBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
               <button class="btn accent small" onclick="runScheduleJobNow('${escSch(job.id)}')" ${job.running ? 'disabled' : ''} title="Run audit now">
@@ -3660,12 +3669,13 @@ async function addScheduleJob(){
   const runSecurity = document.getElementById('schRunSecurity') ? document.getElementById('schRunSecurity').checked : true;
   const runPentest = document.getElementById('schRunPentest') ? document.getElementById('schRunPentest').checked : true;
   const runPonytail = document.getElementById('schRunPonytail') ? document.getElementById('schRunPonytail').checked : true;
+  const runResolve = document.getElementById('schRunResolve') ? document.getElementById('schRunResolve').checked : false;
   const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
   const prodToken = (document.getElementById('schProdToken') ? document.getElementById('schProdToken').value : '').trim();
   const secMode = (document.getElementById('schSecMode') ? document.getElementById('schSecMode').value : 'safe').trim() || 'safe';
 
-  if(!runSecurity && !runPentest && !runPonytail){
-    toast('Select at least one audit type (security, pentest, or ponytail)', true);
+  if(!runSecurity && !runPentest && !runPonytail && !runResolve){
+    toast('Select at least one action (security, pentest, ponytail, or auto-fix)', true);
     return;
   }
 
@@ -3680,6 +3690,7 @@ async function addScheduleJob(){
         run_security: runSecurity,
         run_pentest: runPentest,
         run_ponytail: runPonytail,
+        run_resolve: runResolve,
         prod_server: prodServer,
         prod_token: prodToken,
         sec_mode: secMode,

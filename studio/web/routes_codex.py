@@ -34,6 +34,15 @@ class CodexRoutes(BaseHandler):
         verktygsåtkomst – bara kod-chatt."""
         scratch = code_workspace_root() is None
         mode = code_mode()
+
+        # Om användaren valt "auto" eller ingen modell angetts: välj optimal modell med smart router
+        if not model or str(model).strip().lower() == "auto":
+            from studio.codex.router import select_best_model_for_task
+            user_texts = [str(m.get("content") or "") for m in (messages or []) if m.get("role") == "user"]
+            last_prompt = user_texts[-1] if user_texts else ""
+            routed = select_best_model_for_task(last_prompt)
+            model = routed["model"]
+
         sys_prompt = AGENT_SYSTEM_SCRATCH if scratch else agent_system_prompt(mode)
         convo = [{"role": "system", "content": sys_prompt}] + list(messages)
         try:

@@ -399,4 +399,64 @@ def extract_findings_from_text(text):
     return findings
 
 
+def gitlab_list_issues(project_slug=None, state="opened"):
+    """Lista issues från GitLab för ett projekt."""
+    token = (setting_str("gitlab_token") or os.environ.get("GITLAB_TOKEN") or "").strip()
+    if not token:
+        return []
+    slug = (project_slug or "").strip()
+    if not slug:
+        info = git_remote_info()
+        slug = info.get("slug") if info else ""
+    if not slug:
+        return []
+    encoded_project = urllib.parse.quote(slug, safe="")
+    url = f"{gitlab_api_url()}/projects/{encoded_project}/issues?state={state}&per_page=50"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "PRIVATE-TOKEN": token,
+            "Accept": "application/json",
+            "User-Agent": "OllamaStudio"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def gitlab_close_issue(issue_iid, project_slug=None):
+    """Stäng ett issue i GitLab när det har åtgärdats."""
+    token = (setting_str("gitlab_token") or os.environ.get("GITLAB_TOKEN") or "").strip()
+    if not token:
+        return False, "Ingen GitLab-token"
+    slug = (project_slug or "").strip()
+    if not slug:
+        info = git_remote_info()
+        slug = info.get("slug") if info else ""
+    if not slug:
+        return False, "Inget repo-slug"
+    encoded_project = urllib.parse.quote(slug, safe="")
+    url = f"{gitlab_api_url()}/projects/{encoded_project}/issues/{issue_iid}?state_event=close"
+    req = urllib.request.Request(
+        url,
+        data=b"",
+        method="PUT",
+        headers={
+            "PRIVATE-TOKEN": token,
+            "Accept": "application/json",
+            "User-Agent": "OllamaStudio"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status in (200, 201), "Stängd"
+    except Exception as e:
+        return False, str(e)
+
+
+
 
