@@ -234,8 +234,17 @@ def git_push(branch=None):
 
     rc, out, err = _git(["push", "-u", "origin", "HEAD:refs/heads/" + branch],
                         timeout=120, extra_env=extra_env)
-    if token:
-        err = (err or "").replace(token, "***")
-        out = (out or "").replace(token, "***")
+    import re
+    # Maskera känd token och generiska embedded credentials i URL:er (user:pass@host)
+    def _sanitize(text):
+        if not text:
+            return ""
+        if token:
+            text = text.replace(token, "***")
+        text = re.sub(r'://([^:@\s]+):([^@\s]+)@', r'://\1:***@', text)
+        return text
+
+    err = _sanitize(err)
+    out = _sanitize(out)
     return (rc == 0), (err or out or ("pushade " + branch))
 

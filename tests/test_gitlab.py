@@ -127,9 +127,9 @@ class TestGitLabIntegration(unittest.TestCase):
         text = """
 Här är resultatet av granskningen:
 
-### [SEC-01] SQL Injection i auth.py
-Plats: backend/auth.py rad 45
-Problem: Rå sql-sträng används.
+### [SEC-01] Dummy säkerhetsfynd för enhetstest
+Plats: dummy_mock_module.py rad 45
+Problem: Testbeskrivning av mockfynd.
 Lösning: Använd parametriserade frågor.
 
 ### [PONYTAIL-01] Ta bort oanvänd helper i utils.py
@@ -142,7 +142,7 @@ Granskningen klar.
 """
         findings = extract_findings_from_text(text)
         self.assertEqual(len(findings), 2)
-        self.assertEqual(findings[0]["title"], "[SEC-01] SQL Injection i auth.py")
+        self.assertEqual(findings[0]["title"], "[SEC-01] Dummy säkerhetsfynd för enhetstest")
         self.assertIn("security", findings[0]["labels"])
         self.assertEqual(findings[1]["title"], "[PONYTAIL-01] Ta bort oanvänd helper i utils.py")
         self.assertIn("ponytail", findings[1]["labels"])

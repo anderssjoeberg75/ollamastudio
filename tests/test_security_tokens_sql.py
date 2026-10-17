@@ -84,6 +84,21 @@ class TestSecurityTokensAndSql(unittest.TestCase):
             handler.headers = {"Authorization": "Bearer wrong_tok"}
             self.assertFalse(BaseHandler._auth_ok(handler))
 
+    def test_base_handler_csrf_ok(self):
+        handler = MagicMock()
+        with patch("studio.web.base.TOKEN", ""):
+            # Samma origin och host -> OK
+            handler.headers = {"Host": "localhost:8080", "Origin": "http://localhost:8080"}
+            self.assertTrue(BaseHandler._csrf_ok(handler))
+            # Cross-origin -> blockeras
+            handler.headers = {"Host": "localhost:8080", "Origin": "http://attacker.com"}
+            self.assertFalse(BaseHandler._csrf_ok(handler))
+            # Ingen origin men Referer -> kontrolleras mot host
+            handler.headers = {"Host": "localhost:8080", "Referer": "http://attacker.com/page"}
+            self.assertFalse(BaseHandler._csrf_ok(handler))
+            handler.headers = {"Host": "localhost:8080", "Referer": "http://localhost:8080/page"}
+            self.assertTrue(BaseHandler._csrf_ok(handler))
+
     # ---- 4. SQL Injection Resistance ----
     def test_sql_injection_resistance_in_scheduler(self):
         malicious_project = "proj'; DROP TABLE schedules; --"
@@ -131,7 +146,7 @@ Här är rapporten:
 
 ### [SEC-01] Felaktig token-hantering
 ### Plats & Berörd kod
-Filnamn: auth.py, rad 45
+Filnamn: dummy_sample_service.py, rad 45
 
 ### Problem & Säkerhetsrisk
 Token exponeras i felmeddelande.

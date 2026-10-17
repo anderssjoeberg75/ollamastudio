@@ -47,14 +47,23 @@ class BaseHandler(BaseHTTPRequestHandler):
             return False
 
         origin = self.headers.get("Origin")
+        req_host = (self.headers.get("Host") or "").lower()
         if origin:
             try:
                 origin_host = urllib.parse.urlparse(origin).netloc.lower()
-                req_host = (self.headers.get("Host") or "").lower()
                 if origin_host and req_host and origin_host != req_host:
                     return False
             except Exception:
                 return False
+        else:
+            referer = self.headers.get("Referer")
+            if referer:
+                try:
+                    ref_host = urllib.parse.urlparse(referer).netloc.lower()
+                    if ref_host and req_host and ref_host != req_host:
+                        return False
+                except Exception:
+                    return False
         return True
 
     def _send_json(self, obj, status=200):

@@ -57,7 +57,7 @@ from studio.codex.workspace import _ws_rel                             # noqa: F
 from studio.codex.permissions import *                                 # noqa: F401,F403,E402
 from studio.codex.context import *                                     # noqa: F401,F403,E402
 from studio.codex.protocol import *                                    # noqa: F401,F403,E402
-from studio.codex.protocol import _json_object_at, _norm_todo, _denied, _tools_help  # noqa: F401,E402
+from studio.codex.protocol import _json_object_at, _denied, _tools_help  # noqa: F401,E402
 from studio.codex.commands import *                                    # noqa: F401,F403,E402
 from studio.codex.gitops import *                                      # noqa: F401,F403,E402
 from studio.codex.gitops import _git, _authed_push_url                 # noqa: F401,E402
