@@ -105,10 +105,15 @@ def run_command(cmd, force=False):
                   "OLLAMA_STUDIO_TOKEN", "TOKEN", "AWS_SECRET_ACCESS_KEY")
                 or any(sub in kl for sub in ("token", "secret", "password", "api_key"))):
             del env[k]
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    from .sandbox import run_in_sandbox, sandbox_enabled
+    if sandbox_enabled():
+        return run_in_sandbox(toks, cwd=root, timeout=code_run_timeout(), env=env,
+                              output_cap=CODE_RUN_OUTPUT_CAP)
+
     try:
         p = subprocess.run(toks, cwd=root, capture_output=True, text=True,
-                           timeout=code_run_timeout(), env=env)
+                           timeout=code_run_timeout(), env=env,
+                           stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return False, "Kommandot avbröts (timeout efter %ds)" % code_run_timeout()
     except FileNotFoundError:

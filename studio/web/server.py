@@ -42,8 +42,10 @@ from studio.codex.gitops import (
     git_available, git_commit_all, git_create_branch, git_is_repo, git_push,
     git_status_info)
 from studio.codex.permissions import approval_answer
+from studio.codex.sandbox import sandbox_info
 from studio.codex.workspace import (
     undo_available, undo_file, ws_current, ws_tree, ws_write_file)
+from studio.mcp import MCP_TOOLS, process_mcp_request
 from studio.config import (
     APP_TITLE, APP_VERSION, CODE_MODES, CODE_MODE_LABELS, DB_PATH,
     LISTEN_HOST, LISTEN_PORT, OLLAMA_URL, TOKEN, chat_time_enabled,
@@ -85,6 +87,14 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             self.end_headers()
             return
 
+        if path in ("/mcp", "/api/mcp"):
+            return self._send_json({
+                "name": "ollama-studio",
+                "mcp": setting_bool("mcp_enabled"),
+                "protocolVersion": "2024-11-05",
+                "tools": MCP_TOOLS
+            })
+
         if path.startswith("/api/"):
             if not self._auth_ok():
                 return self._send_json({"error": "unauthorized"}, 401)
@@ -107,12 +117,16 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     "code_run": code_run_enabled(),
                     "code_mode": code_mode(),
                     "code_steps": code_max_steps(),
+                    "sandbox": sandbox_info(),
+                    "mcp": setting_bool("mcp_enabled"),
                     "train_menu": train_menu_on(),
                     "hf": hf_enabled(),
                     "hf_auto": hf_auto_enabled(),
                     "train": train_toggle_on(),
                     "train_module": TRAIN is not None,
                 })
+            if path == "/api/codex/sandbox":
+                return self._send_json(sandbox_info())
             if path == "/api/settings":
                 return self._send_json(settings_public())
             if path == "/api/prefs":
@@ -265,11 +279,26 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         if length > MAX_BODY_BYTES:
             return self._send_json({"error": "body för stor"}, 413)
         raw = self.rfile.read(length) if length else b"{}"
+        if path in ("/mcp", "/api/mcp"):
+            res = process_mcp_request(raw)
+            if res is None:
+                self.send_response(204)
+                self.end_headers()
+                return
+            return self._send_json(res)
+
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
         except Exception:
             data = {}
         name = (data.get("name") or "").strip()
+
+        if path == "/api/codex/terminal/run":
+            cmd = (data.get("cmd") or "").strip()
+            if not cmd:
+                return self._send_json({"error": "cmd saknas"}, 400)
+            ok, out = run_command(cmd, force=True)
+            return self._send_json({"ok": ok, "output": out})
 
         if path == "/api/delete":
             if not name:

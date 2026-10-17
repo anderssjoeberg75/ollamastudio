@@ -97,6 +97,11 @@ SETTINGS_SPEC = {
     "sec_target_url":   ("OLLAMA_STUDIO_SEC_TARGET", "", "str", False),
     "sec_target_token": ("OLLAMA_STUDIO_SEC_TOKEN", "", "str", True),
     "sec_test_mode":    ("OLLAMA_STUDIO_SEC_MODE", "safe", "str", False),
+    # Docker Sandbox för Codex (Agentor-arkitektur)
+    "code_sandbox_enabled": ("OLLAMA_STUDIO_CODE_SANDBOX", "0", "bool", False),
+    "code_sandbox_image":   ("OLLAMA_STUDIO_CODE_SANDBOX_IMAGE", "python:3.12-slim", "str", False),
+    # MCP-server för att styra Ollama Studio via Model Context Protocol
+    "mcp_enabled":          ("OLLAMA_STUDIO_MCP", "1", "bool", False),
 }
 
 _settings_lock = threading.Lock()

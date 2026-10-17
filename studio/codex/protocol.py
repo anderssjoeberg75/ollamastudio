@@ -158,13 +158,57 @@ def _json_object_at(text, i):
     return None, i
 
 
+def strip_think_tags(text):
+    """Ta bort resonemangstankar (<think>...</think> eller <|channel>thought...<channel|>)."""
+    if not text:
+        return ""
+    cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    cleaned = re.sub(r'</think>', '', cleaned)
+    cleaned = re.sub(r'<\|channel>thought\n.*?<channel\|>', '', cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
+def recover_garbled_tool_args(name, snippet):
+    """Försök rädda argument om modellen skrev trasig JSON eller hybrid-format."""
+    if not snippet:
+        return None
+    # 1. Om snippet saknar slutklammer: prova att lägga till }
+    trimmed = snippet.strip()
+    if trimmed.startswith("{") and not trimmed.endswith("}"):
+        try:
+            return json.loads(trimmed + "}")
+        except Exception:
+            pass
+    # 2. Heuristisk extraktion av nyckel-värde
+    args = {}
+    for m in re.finditer(r'["\']?(\w+)["\']?\s*[:=]\s*["\']([^"\']+)["\']', snippet):
+        args[m.group(1)] = m.group(2)
+    primary_arg = {
+        "read_file": "path", "list_dir": "path", "git_diff": "path",
+        "run_command": "cmd", "search": "query", "find_symbol": "name",
+        "git_branch": "name", "git_commit": "message"
+    }.get(name)
+
+    # 3. Om nyckeln är generisk (t.ex. parameter=..., arg=...) och verktyget har ett primärt argument
+    for generic in ("parameter", "param", "arguments", "arg", "value"):
+        if generic in args and primary_arg and primary_arg not in args:
+            args[primary_arg] = args.pop(generic)
+
+    # 4. Fallback: single-argument verktyg från ren sträng
+    if not args and primary_arg:
+        val_m = re.search(r'["\']([^"\']+)["\']', snippet)
+        if val_m:
+            args[primary_arg] = val_m.group(1)
+    return args if args else None
+
+
 def parse_tool_call(text):
     """Första verktygsanropet i modellens svar, eller None.
 
     Tål mer än den gamla enradsregeln: JSON över flera rader, ```-block, punktlistor
     och `TOOL: namn`. Små lokala modeller formaterar sällan perfekt – att vara strikt
     här var en av de största bristerna."""
-    text = text or ""
+    text = strip_think_tags(text or "")
     for m in _TOOL_HEAD_RE.finditer(text):
         name = m.group(1)
         if name not in AGENT_TOOL_NAMES:
@@ -184,6 +228,10 @@ def parse_tool_call(text):
             return {"name": name, "args": args}
         if name in ("git_status", "tree"):      # verktyg utan argument
             return {"name": name, "args": {}}
+        # Försök rädda ofullständig JSON / avklippt klammer
+        rec_args = recover_garbled_tool_args(name, text[k:k + 400])
+        if rec_args:
+            return {"name": name, "args": rec_args}
     # Sista chansen: ett rent JSON-objekt av typen {"tool": "...", "args": {...}}
     i = text.find("{")
     while i >= 0:
