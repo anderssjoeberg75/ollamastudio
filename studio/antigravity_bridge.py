@@ -12,16 +12,34 @@ import time
 
 
 def find_agy_bin():
-    """Hitta sökvägen till agy.exe."""
+    """Hitta sökvägen till agy CLI (på Windows eller Linux)."""
+    try:
+        from .config import setting_str
+        cfg_path = setting_str("agy_path")
+        if cfg_path and os.path.isfile(cfg_path):
+            return cfg_path
+    except Exception:
+        pass
+
     env_path = os.environ.get("AGY_PATH")
     if env_path and os.path.isfile(env_path):
         return env_path
 
-    # Standardplats på Windows för Antigravity
     user_home = os.path.expanduser("~")
-    win_path = os.path.join(user_home, ".gemini", "bin", "agy.exe")
-    if os.path.isfile(win_path):
-        return win_path
+    candidates = [
+        # Windows
+        os.path.join(user_home, ".gemini", "bin", "agy.exe"),
+        # Linux / Unix
+        os.path.join(user_home, ".gemini", "bin", "agy"),
+        os.path.join(user_home, ".antigravity", "bin", "agy"),
+        os.path.join(user_home, ".local", "bin", "agy"),
+        "/usr/local/bin/agy",
+        "/usr/bin/agy",
+        "/opt/gemini/bin/agy",
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK if hasattr(os, "X_OK") else os.R_OK):
+            return c
 
     # Sök i systemets PATH
     which = shutil.which("agy") or shutil.which("agy.exe")
