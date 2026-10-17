@@ -220,3 +220,77 @@ class AntigravityStream:
                 self.proc.wait(timeout=2)
             except Exception:
                 pass
+
+
+def antigravity_status():
+    """Undersöker status för Antigravity och dess inloggning."""
+    bin_path = find_agy_bin()
+    if not bin_path:
+        return {
+            "available": False,
+            "signed_in": False,
+            "error": "Antigravity CLI (agy) hittades inte.",
+            "bin": None,
+            "models": []
+        }
+
+    try:
+        res = subprocess.run([bin_path, "models"], capture_output=True, text=True, timeout=8)
+        if res.returncode == 0:
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip() and not l.startswith("Fetching")]
+            model_names = [l.split()[0] for l in lines if l]
+            return {
+                "available": True,
+                "signed_in": True,
+                "bin": bin_path,
+                "models": model_names,
+                "error": None
+            }
+        else:
+            err = res.stderr or res.stdout or "Inte inloggad"
+            return {
+                "available": True,
+                "signed_in": False,
+                "bin": bin_path,
+                "models": [],
+                "error": err.strip()
+            }
+    except Exception as e:
+        return {
+            "available": True,
+            "signed_in": False,
+            "bin": bin_path,
+            "models": [],
+            "error": str(e)
+        }
+
+
+def antigravity_ping():
+    """Gör ett blixtsnabbt testanrop för att verifiera anslutning och mäta svarstid."""
+    st = antigravity_status()
+    if not st.get("signed_in"):
+        return {"ok": False, "error": st.get("error") or "Inte inloggad i Antigravity"}
+
+    bin_path = st.get("bin")
+    t0 = time.time()
+    try:
+        cmd = [
+            bin_path,
+            "-p", "ping",
+            "--model", "gemini-3.8-flash-medium",
+            "--output-format", "stream-json",
+            "--disable-slash-commands"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        dt = round((time.time() - t0) * 1000)
+        if res.returncode == 0:
+            return {
+                "ok": True,
+                "model": "gemini-3.8-flash-medium",
+                "latency_ms": dt,
+                "message": f"Anslutning OK (svarstid {dt} ms)"
+            }
+        return {"ok": False, "error": res.stderr.strip() or f"Felkod {res.returncode}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+

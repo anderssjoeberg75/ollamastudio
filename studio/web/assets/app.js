@@ -1788,7 +1788,79 @@ async function loadSettingsForm(){
   renderProjectTargets(s.project_targets || {});
   populateSecProjectSelect();
   document.getElementById('stDbPath').textContent = s.db_path ? ('Saved in: '+s.db_path) : '';
+  loadAntigravityStatus();
 }
+
+async function loadAntigravityStatus(){
+  const badge = document.getElementById('agyStatusBadge');
+  const details = document.getElementById('agyStatusDetails');
+  if(!badge || !details) return;
+  badge.textContent = 'Kontrollerar…';
+  badge.style.background = 'rgba(124,92,255,0.15)';
+  badge.style.color = 'var(--accent)';
+
+  try {
+    const r = await api('/api/antigravity/status');
+    const d = await r.json();
+    if(d.signed_in){
+      badge.textContent = '● Aktiv & Ansluten';
+      badge.style.background = 'rgba(57,214,127,0.15)';
+      badge.style.color = 'var(--green)';
+
+      const modelsHtml = (d.models || []).map(m => `<span style="display:inline-block;padding:2px 8px;border-radius:6px;background:var(--card);border:1px solid var(--border);margin:2px 4px 2px 0;font-size:12px">✨ <b>${esc(m)}</b></span>`).join('');
+
+      details.innerHTML = `
+        <div style="color:var(--green);font-weight:600;margin-bottom:6px">✓ Google Antigravity &amp; Claude är anslutet och redo!</div>
+        <div style="color:var(--subtle);font-size:12px;margin-bottom:6px">Motor: <code>${esc(d.bin || 'agy')}</code></div>
+        <div style="margin-top:6px">${modelsHtml || 'Inga modeller hittades'}</div>
+      `;
+    } else if(d.available){
+      badge.textContent = '● Kräver inloggning';
+      badge.style.background = 'rgba(255,180,84,0.15)';
+      badge.style.color = 'var(--amber)';
+      details.innerHTML = `
+        <div style="color:var(--amber);font-weight:600;margin-bottom:6px">⚠️ Antigravity är installerad men inte inloggad</div>
+        <div style="color:var(--subtle);font-size:12px;margin-bottom:8px">Status: <i>${esc(d.error || 'Logga in för att se modeller')}</i></div>
+        <div style="font-size:12px">Kör <code>agy</code> i en SSH-terminal på servern en gång för att länka ditt Google-konto.</div>
+      `;
+    } else {
+      badge.textContent = '● Ej installerad';
+      badge.style.background = 'rgba(255,92,108,0.15)';
+      badge.style.color = 'var(--danger)';
+      details.innerHTML = `
+        <div style="color:var(--danger);font-weight:600;margin-bottom:6px">✗ Antigravity CLI hittades inte</div>
+        <div style="color:var(--subtle);font-size:12px">Kunde inte hitta 'agy' i systemets sökvägar på servern.</div>
+      `;
+    }
+  } catch(e) {
+    badge.textContent = 'Fel';
+    badge.style.color = 'var(--danger)';
+    details.textContent = 'Kunde inte hämta status: ' + e.message;
+  }
+}
+
+async function pingAntigravity(){
+  const resEl = document.getElementById('agyPingResult');
+  const btn = document.getElementById('btnAgyPing');
+  if(!resEl) return;
+  resEl.textContent = '⏳ Testar Gemini & Claude…';
+  if(btn) btn.disabled = true;
+
+  try {
+    const r = await api('/api/antigravity/ping', {method: 'POST', headers: headers(true)});
+    const d = await r.json();
+    if(d.ok){
+      resEl.innerHTML = `<span style="color:var(--green);font-weight:600">✓ ${esc(d.message)}</span>`;
+    } else {
+      resEl.innerHTML = `<span style="color:var(--danger)">✗ Test misslyckades: ${esc(d.error || 'okänt fel')}</span>`;
+    }
+  } catch(e){
+    resEl.innerHTML = `<span style="color:var(--danger)">✗ Nätverksfel: ${esc(e.message)}</span>`;
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 let currentProjectTargets = {};
 function renderProjectTargets(targets){
   currentProjectTargets = targets || {};

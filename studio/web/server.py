@@ -258,6 +258,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"jobs": schedule_list()})
             if path == "/api/gitlab/targets":
                 return self._send_json({"ok": True, "targets": project_targets_list()})
+            if path == "/api/antigravity/status":
+                from studio.antigravity_bridge import antigravity_status
+                return self._send_json(antigravity_status())
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:
@@ -381,6 +384,10 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"error": "jobbet hittades inte"}, 404)
             schedule_run_job_async(jid)
             return self._send_json({"ok": True, "message": "Granskning startad i bakgrunden"})
+
+        if path == "/api/antigravity/ping":
+            from studio.antigravity_bridge import antigravity_ping
+            return self._send_json(antigravity_ping())
 
         if path == "/api/self-update":
             # Hämta senaste kod (git pull) och starta om servern om något nytt hämtades.
