@@ -474,3 +474,165 @@
     text-overflow:ellipsis;
     white-space:nowrap;
   }
+
+  /* =========================================================================
+     Aurora Flow – animerat tema (2026). Levande aurora-bakgrund, inglidande
+     kort, ljussvep pa knappar, skimrande matare och pulsande status. Ligger
+     sist i filen sa den vinner i kaskaden; originalreglerna ovan ar fallback.
+     Allt stangs av under prefers-reduced-motion langst ned.
+     ========================================================================= */
+  :root{
+    --bg:#0a0d14; --sidebar:#10141e; --card:#141926; --card-hover:#1c2334;
+    --border:#283043; --text:#f0f2f8; --subtle:#9aa6bd; --faint:#64708a;
+    --accent:#8a6bff; --accent-hov:#a088ff; --accent-dim:rgba(138,107,255,.16);
+    --accent-2:#5b7cfa; --accent-3:#22d3ee; --danger:#ff5c6c; --danger-dim:#3a2129;
+    --green:#3ddc84; --amber:#ffb454; --chip:#1b2233;
+    --radius:14px; --radius-lg:18px;
+    --accent-grad:linear-gradient(135deg,#8a6bff,#5b7cfa 60%,#22d3ee);
+    --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+    --shadow-md:0 10px 30px -10px rgba(0,0,0,.55);
+    --shadow-lg:0 18px 50px -12px rgba(0,0,0,.62);
+    --ring:0 0 0 3px rgba(138,107,255,.3);
+    --glow:0 0 22px -4px rgba(138,107,255,.55);
+    --ease:cubic-bezier(.4,0,.2,1); --spring:cubic-bezier(.34,1.56,.64,1);
+  }
+
+  /* Levande aurora-bakgrund bakom hela appen */
+  body{background:var(--bg)}
+  body::before{content:"";position:fixed;inset:-20%;z-index:-2;pointer-events:none;
+    background:
+      radial-gradient(40% 50% at 15% 10%,rgba(138,107,255,.22),transparent 60%),
+      radial-gradient(45% 55% at 85% 20%,rgba(34,211,238,.13),transparent 60%),
+      radial-gradient(50% 50% at 60% 95%,rgba(91,124,250,.18),transparent 60%);
+    filter:blur(12px);animation:aurora 22s ease-in-out infinite alternate}
+  body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:linear-gradient(180deg,rgba(10,13,20,.5),rgba(10,13,20,.82))}
+
+  /* Egna, smala scrollbars */
+  *{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  ::-webkit-scrollbar-thumb:hover{background:#39425a;background-clip:content-box}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* Sidomeny - glasig panel ovanpa auroran */
+  .sidebar{background:linear-gradient(180deg,rgba(20,25,38,.72),rgba(12,15,24,.9));
+    backdrop-filter:blur(14px);border-right:1px solid var(--border);box-shadow:var(--shadow-md)}
+  .logo .diamond{display:inline-block;filter:drop-shadow(0 0 10px rgba(138,107,255,.7));animation:spin 9s linear infinite}
+  .logo .sub{background:var(--accent-grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .nav a{position:relative;overflow:hidden;
+    transition:background .22s var(--ease),color .22s var(--ease),transform .2s var(--spring)}
+  .nav a .dot{transition:color .22s var(--ease),transform .3s var(--spring)}
+  .nav a:hover{transform:translateX(4px)}
+  .nav a:hover .dot{color:var(--accent-hov);transform:scale(1.3)}
+  .nav a.active{background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgba(138,107,255,.25)}
+  .nav a.active .dot{color:var(--accent)}
+  .nav a.active::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:3px;
+    background:var(--accent-grad);box-shadow:var(--glow);animation:barIn .4s var(--spring)}
+  .nav a.active::after{content:"";position:absolute;inset:0;opacity:0;pointer-events:none;
+    background:var(--accent-grad);animation:flash .5s var(--ease)}
+  .status .dot{position:relative}
+  .status .dot::after{content:"";position:absolute;left:50%;top:50%;width:10px;height:10px;border-radius:50%;
+    transform:translate(-50%,-50%);border:1.5px solid currentColor;animation:ripple 2s ease-out infinite}
+
+  .header{backdrop-filter:blur(4px)}
+  .header h1{letter-spacing:-.4px;animation:slideDown .5s var(--ease)}
+
+  /* Vyer tonar in; kort och matare glider in i tur och ordning */
+  .view:not(.hidden){animation:viewIn .34s var(--ease)}
+  .view:not(.hidden) .card,.view:not(.hidden) .hf-card,.view:not(.hidden) .metric,
+  .view:not(.hidden) .gpu-card,.view:not(.hidden) .set-card,.view:not(.hidden) .tr-step{
+    animation:cardIn .5s var(--ease) both}
+  .view:not(.hidden) :nth-child(2){animation-delay:.05s}
+  .view:not(.hidden) :nth-child(3){animation-delay:.1s}
+  .view:not(.hidden) :nth-child(4){animation-delay:.16s}
+  .view:not(.hidden) :nth-child(5){animation-delay:.22s}
+  .view:not(.hidden) :nth-child(6){animation-delay:.28s}
+  .view:not(.hidden) :nth-child(n+7){animation-delay:.32s}
+
+  /* Knappar - animerad gradient, ljussvep, lyft och tryck */
+  .btn{position:relative;overflow:hidden;
+    transition:transform .14s var(--spring),box-shadow .22s var(--ease),filter .22s var(--ease),background .22s var(--ease)}
+  .btn:active{transform:translateY(1px) scale(.97)}
+  .btn.accent{background:var(--accent-grad);background-size:160% 160%;
+    box-shadow:0 6px 18px -6px rgba(138,107,255,.7);animation:gradShift 6s ease infinite}
+  .btn.accent:hover{filter:brightness(1.1);transform:translateY(-2px);box-shadow:0 12px 26px -8px rgba(138,107,255,.85)}
+  .btn.accent::after{content:"";position:absolute;inset:0;pointer-events:none;transform:translateX(-130%);
+    background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.4) 50%,transparent 70%);
+    transition:transform .7s var(--ease)}
+  .btn.accent:hover::after{transform:translateX(130%)}
+  .btn.ghost:hover{transform:translateY(-2px);box-shadow:var(--shadow-sm);border-color:var(--accent)}
+  .btn.danger:hover{box-shadow:0 6px 18px -6px rgba(255,92,108,.6)}
+
+  /* Kort - skarpare kant och lyft med glod */
+  .card,.set-card,.metric,.gpu-card,.hf-card,.install-box,.tr-body,.chat-settings{
+    border-radius:var(--radius);box-shadow:var(--shadow-sm);
+    transition:transform .22s var(--spring),box-shadow .25s var(--ease),border-color .25s var(--ease),background .25s var(--ease)}
+  .card.hoverable:hover,.hf-card:hover{transform:translateY(-4px) scale(1.008);
+    border-color:var(--accent);background:var(--card-hover);box-shadow:var(--shadow-md),var(--glow)}
+  .metric:hover{transform:translateY(-3px);box-shadow:var(--shadow-md)}
+
+  /* Enhetliga, krispiga fokus-ringar */
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)!important;box-shadow:var(--ring)}
+  input,select,textarea{transition:border-color .18s var(--ease),box-shadow .18s var(--ease)}
+
+  /* Chattbubblor glider in fran sidan; anvandarbubbla far gradient */
+  .msg{box-shadow:var(--shadow-sm)}
+  .msg.user,.code-user{background:var(--accent-grad);animation:msgRight .45s var(--spring) both}
+  .msg.assistant,.code-msg{animation:msgLeft .45s var(--spring) both}
+  .code-edit,.code-ask,.code-plan,.code-tool{animation:cardIn .4s var(--ease) both}
+
+  /* Progress- och anvandningsstaplar - animerad gradient + skimmer */
+  .usebar>div,.bar>div,.tr-progress>div{background:var(--accent-grad);background-size:200% 100%;
+    position:relative;overflow:hidden;animation:gradShift 4s linear infinite}
+  .usebar>div,.tr-progress>div{transition:width .8s var(--ease)}
+  .usebar>div::after,.bar>div::after,.tr-progress>div::after{content:"";position:absolute;inset:0;
+    transform:translateX(-100%);animation:shimmer 1.8s infinite;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.3),transparent)}
+
+  /* Nedladdningspanel */
+  .dl.show{animation:viewIn .3s var(--ease);box-shadow:0 -10px 30px -12px rgba(0,0,0,.6)}
+
+  /* Pills och val i traning/schema */
+  .tr-pill{transition:border-color .18s var(--ease),color .18s var(--ease),background .18s var(--ease)}
+  .tr-pick{transition:border-color .18s var(--ease),background .18s var(--ease),transform .18s var(--spring)}
+  .tr-pick:hover{transform:translateY(-3px)}
+  .tr-pick.sel{box-shadow:inset 0 0 0 1px var(--accent),0 8px 20px -8px rgba(138,107,255,.55)}
+
+  /* Overlay/modal - fade + scale-in */
+  .overlay{background:rgba(6,8,13,.64);backdrop-filter:blur(5px)}
+  .overlay.show{animation:fade .2s var(--ease)}
+  .overlay.show .modal{animation:modalIn .3s var(--spring);box-shadow:var(--shadow-lg);border-radius:var(--radius-lg)}
+
+  /* Toast */
+  .toast{border-radius:10px;box-shadow:var(--shadow-lg)}
+
+  /* Kodassistentens trad och logg */
+  .code-tree,.code-log,.code-repobar,.code-git,.code-modebar{border-radius:var(--radius)}
+  .code-files .f{transition:background .14s var(--ease),color .14s var(--ease),transform .14s var(--ease)}
+  .code-files .f:hover{transform:translateX(3px)}
+
+  /* "running"-chip pulsar */
+  .chip.live{animation:livePulse 1.8s ease-in-out infinite}
+
+  @keyframes aurora{0%{transform:translate(0,0) scale(1)}50%{transform:translate(2%,-2%) scale(1.08)}100%{transform:translate(-2%,2%) scale(1.04)}}
+  @keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes cardIn{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
+  @keyframes msgLeft{from{opacity:0;transform:translateX(-14px) translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes msgRight{from{opacity:0;transform:translateX(14px) translateY(6px)}to{opacity:1;transform:none}}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+  @keyframes modalIn{from{opacity:0;transform:translateY(10px) scale(.96)}to{opacity:1;transform:none}}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  @keyframes barIn{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  @keyframes flash{from{opacity:.25}to{opacity:0}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes gradShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+  @keyframes shimmer{0%{transform:translateX(-100%)}60%,100%{transform:translateX(220%)}}
+  @keyframes ripple{0%{width:10px;height:10px;opacity:.9}100%{width:30px;height:30px;opacity:0}}
+  @keyframes livePulse{0%,100%{opacity:1}50%{opacity:.45}}
+
+  /* Tillganglighet: stang av rorelse for den som valt bort det */
+  @media(prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+      transition-duration:.001ms!important;scroll-behavior:auto!important}
+  }
