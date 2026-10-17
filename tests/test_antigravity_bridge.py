@@ -54,6 +54,24 @@ class TestAntigravityBridge(unittest.TestCase):
         parsed1 = json.loads(chunks[1].decode("utf-8"))
         self.assertEqual(parsed0["message"]["content"], "Hej ")
         self.assertEqual(parsed1["message"]["content"], "världen!")
+        # Kontrollera att --dangerously-skip-permissions finns med i Popen-anropet
+        cmd_args = mock_popen.call_args[0][0]
+        self.assertIn("--dangerously-skip-permissions", cmd_args)
+
+    @patch("studio.antigravity_bridge.find_agy_bin", return_value="fake_agy.exe")
+    @patch("os.path.isdir", return_value=True)
+    @patch("subprocess.Popen")
+    def test_antigravity_stream_workspace(self, mock_popen, mock_isdir, mock_bin):
+        mock_proc = MagicMock()
+        mock_proc.stdout = []
+        mock_popen.return_value = mock_proc
+
+        stream = AntigravityStream([{"role": "user", "content": "test"}], "gemini-3.8-flash-medium", workspace="/fake/ws")
+        cmd_args = mock_popen.call_args[0][0]
+        cwd_arg = mock_popen.call_args[1].get("cwd")
+        self.assertIn("--add-dir", cmd_args)
+        self.assertIn("/fake/ws", cmd_args)
+        self.assertEqual(cwd_arg, "/fake/ws")
 
 
 if __name__ == "__main__":

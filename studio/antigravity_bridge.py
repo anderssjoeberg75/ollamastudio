@@ -138,7 +138,7 @@ class AntigravityStream:
     b'{"message": {"role": "assistant", "content": "..."}}\\n'
     """
 
-    def __init__(self, messages, model_tag):
+    def __init__(self, messages, model_tag, workspace=None):
         self.bin_path = find_agy_bin()
         if not self.bin_path:
             raise FileNotFoundError(
@@ -155,8 +155,22 @@ class AntigravityStream:
             "-p", prompt,
             "--model", raw_model,
             "--output-format", "stream-json",
-            "--disable-slash-commands"
+            "--disable-slash-commands",
+            "--dangerously-skip-permissions"
         ]
+
+        ws = workspace
+        if not ws:
+            try:
+                from .config import code_workspace_root
+                ws = code_workspace_root()
+            except Exception:
+                ws = None
+
+        cwd = None
+        if ws and os.path.isdir(ws):
+            cwd = ws
+            cmd.extend(["--add-dir", ws])
 
         self.proc = subprocess.Popen(
             cmd,
@@ -165,7 +179,8 @@ class AntigravityStream:
             stdin=subprocess.DEVNULL,
             encoding="utf-8",
             errors="replace",
-            bufsize=1
+            bufsize=1,
+            cwd=cwd
         )
         self._closed = False
 
@@ -190,6 +205,13 @@ class AntigravityStream:
                     chunk = json.dumps({"message": {"role": "assistant", "content": delta}}, ensure_ascii=False)
                     yield chunk.encode("utf-8") + b"\n"
 
+                res = data.get("result") or {}
+                resp_text = res.get("response")
+                if resp_text and not emitted_any:
+                    emitted_any = True
+                    chunk = json.dumps({"message": {"role": "assistant", "content": resp_text}}, ensure_ascii=False)
+                    yield chunk.encode("utf-8") + b"\n"
+
             if not emitted_any and not self._closed:
                 # Processen avslutades utan output på stdout – kontrollera stderr
                 err_text = ""
@@ -202,8 +224,9 @@ class AntigravityStream:
                     if rc not in (None, 0):
                         err_text = f"Processen agy avslutades med felkod {rc}."
                 if err_text:
+                    login_hint = "\n\n*Kör `agy auth login` på servern för att logga in.*" if ("login" in err_text.lower() or "auth" in err_text.lower()) else ""
                     chunk = json.dumps({
-                        "message": {"role": "assistant", "content": f"\n⚠️ **Antigravity-fel:** {err_text.strip()}\n\n*Kör `agy auth login` på servern för att logga in.*"}
+                        "message": {"role": "assistant", "content": f"\n⚠️ **Antigravity-fel:** {err_text.strip()}{login_hint}"}
                     }, ensure_ascii=False)
                     yield chunk.encode("utf-8") + b"\n"
         finally:
