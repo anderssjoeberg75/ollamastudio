@@ -118,6 +118,9 @@ class CodexRoutes(BaseHandler):
                             obj = json.loads(raw.decode("utf-8", "replace"))
                         except Exception:
                             continue
+                        if obj.get("ping"):
+                            self._emit({"type": "ping"})
+                            continue
                         chunk = (obj.get("message") or {}).get("content") or ""
                         if chunk:
                             full += chunk

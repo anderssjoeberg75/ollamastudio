@@ -186,6 +186,7 @@ class AntigravityStream:
 
     def __iter__(self):
         emitted_any = False
+        last_heartbeat = time.time()
         try:
             for line in self.proc.stdout:
                 if self._closed:
@@ -204,6 +205,7 @@ class AntigravityStream:
                     emitted_any = True
                     chunk = json.dumps({"message": {"role": "assistant", "content": delta}}, ensure_ascii=False)
                     yield chunk.encode("utf-8") + b"\n"
+                    last_heartbeat = time.time()
 
                 res = data.get("result") or {}
                 resp_text = res.get("response")
@@ -211,6 +213,14 @@ class AntigravityStream:
                     emitted_any = True
                     chunk = json.dumps({"message": {"role": "assistant", "content": resp_text}}, ensure_ascii=False)
                     yield chunk.encode("utf-8") + b"\n"
+                    last_heartbeat = time.time()
+
+                # Skicka hjärtslag/ping minst var 4:e sekund medan agy kör verktyg internt
+                # så att HTTP-strömmen till webbläsaren hålls vid liv och inte kopplas ner
+                now = time.time()
+                if not delta and (now - last_heartbeat) >= 4.0:
+                    last_heartbeat = now
+                    yield b'{"ping": true, "message": {"role": "assistant", "content": ""}}\n'
 
             if not emitted_any and not self._closed:
                 # Processen avslutades utan output på stdout – kontrollera stderr
