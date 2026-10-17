@@ -1276,7 +1276,14 @@ async function sendChat(){
     const r = await api('/api/chat', {method:'POST', headers:headers(true),
       body: JSON.stringify({model, backend, messages: msgs, options: chatOptions(), websearch, memory}),
       signal: chatController.signal});
-    if(!r.ok){ throw new Error('HTTP '+r.status); }
+    if(!r.ok){
+      let errDetail = 'HTTP ' + r.status;
+      try {
+        const errJson = await r.json();
+        if(errJson && errJson.error) errDetail = errJson.error;
+      }catch(_){}
+      throw new Error(errDetail);
+    }
     const reader = r.body.getReader(); const dec = new TextDecoder(); let buf='';
     while(true){
       const {done, value} = await reader.read();

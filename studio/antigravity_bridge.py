@@ -141,7 +141,10 @@ class AntigravityStream:
     def __init__(self, messages, model_tag):
         self.bin_path = find_agy_bin()
         if not self.bin_path:
-            raise FileNotFoundError("Antigravity CLI (agy.exe) hittades inte.")
+            raise FileNotFoundError(
+                "Antigravity CLI (agy) hittades inte på servern. "
+                "Säkerställ att 'agy' är installerat i PATH eller sätt miljövariabeln AGY_PATH."
+            )
 
         # Plocka ut det råa modellnamnet, t.ex. 'gemini-3.8-flash-medium' ur 'antigravity:gemini-3.8-flash-medium'
         raw_model = model_tag.split(":", 1)[1] if ":" in model_tag else model_tag
@@ -167,6 +170,7 @@ class AntigravityStream:
         self._closed = False
 
     def __iter__(self):
+        emitted_any = False
         try:
             for line in self.proc.stdout:
                 if self._closed:
@@ -182,7 +186,25 @@ class AntigravityStream:
                 step = data.get("step_update") or {}
                 delta = step.get("text_delta")
                 if delta:
+                    emitted_any = True
                     chunk = json.dumps({"message": {"role": "assistant", "content": delta}}, ensure_ascii=False)
+                    yield chunk.encode("utf-8") + b"\n"
+
+            if not emitted_any and not self._closed:
+                # Processen avslutades utan output på stdout – kontrollera stderr
+                err_text = ""
+                try:
+                    err_text = self.proc.stderr.read() or ""
+                except Exception:
+                    pass
+                if not err_text:
+                    rc = self.proc.poll()
+                    if rc not in (None, 0):
+                        err_text = f"Processen agy avslutades med felkod {rc}."
+                if err_text:
+                    chunk = json.dumps({
+                        "message": {"role": "assistant", "content": f"\n⚠️ **Antigravity-fel:** {err_text.strip()}\n\n*Kör `agy auth login` på servern för att logga in.*"}
+                    }, ensure_ascii=False)
                     yield chunk.encode("utf-8") + b"\n"
         finally:
             self.close()
