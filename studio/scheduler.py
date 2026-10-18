@@ -739,6 +739,19 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
 
     if resolved_count > 0:
         git_push()
+        try:
+            from .codex.testing import run_project_tests
+            if status_cb:
+                status_cb("Kör projektets tester för att bekräfta att åtgärderna fungerar och inga regressioner uppstått...")
+            passed, test_summary, _ = run_project_tests()
+            test_icon = "✅" if passed else "⚠"
+            if status_cb:
+                status_cb("%s Testverifiering: %s" % (test_icon, test_summary))
+            if not passed and test_summary:
+                errors.append("Testverifiering: %s" % test_summary)
+        except Exception as e:
+            if status_cb:
+                status_cb("Testverifiering kunde inte slutföras: %s" % e)
 
     return resolved_count, errors
 

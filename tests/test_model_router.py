@@ -131,13 +131,14 @@ class TestSchedulerAutoFix(unittest.TestCase):
         all_jobs = schedule_list()
         self.assertTrue(any(j["id"] == saved["id"] and j["run_resolve"] for j in all_jobs))
 
+    @patch("studio.codex.testing.run_project_tests", return_value=(True, "312 passed", ""))
     @patch("studio.scheduler._run_single_headless_pass")
     @patch("studio.codex.gitlab.gitlab_list_issues")
     @patch("studio.codex.gitlab.gitlab_close_issue")
     @patch("studio.codex.gitops.git_diff_text")
     @patch("studio.codex.gitops.git_commit_all")
     @patch("studio.codex.gitops.git_push")
-    def test_run_resolve_findings_pass(self, mock_push, mock_commit, mock_diff, mock_close, mock_list, mock_pass):
+    def test_run_resolve_findings_pass(self, mock_push, mock_commit, mock_diff, mock_close, mock_list, mock_pass, mock_tests):
         mock_list.return_value = [
             {
                 "iid": 42,
