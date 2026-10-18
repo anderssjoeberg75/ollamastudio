@@ -399,8 +399,8 @@ def extract_findings_from_text(text):
     return findings
 
 
-def gitlab_list_issues(project_slug=None, state="opened"):
-    """Lista issues från GitLab för ett projekt."""
+def gitlab_list_issues(project_slug=None, state="opened", max_items=200):
+    """Lista issues från GitLab för ett projekt med fullt stöd för paginering."""
     token = (setting_str("gitlab_token") or os.environ.get("GITLAB_TOKEN") or "").strip()
     if not token:
         return []
@@ -411,21 +411,65 @@ def gitlab_list_issues(project_slug=None, state="opened"):
     if not slug:
         return []
     encoded_project = urllib.parse.quote(slug, safe="")
-    url = f"{gitlab_api_url()}/projects/{encoded_project}/issues?state={state}&per_page=50"
+    api = gitlab_api_url()
+    all_issues = []
+    page = 1
+    while len(all_issues) < max_items:
+        per_page = min(100, max_items - len(all_issues))
+        url = f"{api}/projects/{encoded_project}/issues?state={state}&per_page={per_page}&page={page}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "PRIVATE-TOKEN": token,
+                "Accept": "application/json",
+                "User-Agent": "OllamaStudio"
+            }
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if not data or not isinstance(data, list):
+                    break
+                all_issues.extend(data)
+                next_page = resp.headers.get("X-Next-Page")
+                if not next_page:
+                    break
+                page = int(next_page)
+        except Exception:
+            break
+    return all_issues
+
+
+def gitlab_comment_issue(issue_iid, note, project_slug=None):
+    """Lägg till en kommentar/anteckning på ett issue i GitLab."""
+    token = (setting_str("gitlab_token") or os.environ.get("GITLAB_TOKEN") or "").strip()
+    if not token or not note:
+        return False, "Ingen token eller anteckning"
+    slug = (project_slug or "").strip()
+    if not slug:
+        info = git_remote_info()
+        slug = info.get("slug") if info else ""
+    if not slug:
+        return False, "Inget repo-slug"
+    encoded_project = urllib.parse.quote(slug, safe="")
+    url = f"{gitlab_api_url()}/projects/{encoded_project}/issues/{issue_iid}/notes"
+    payload = json.dumps({"body": note}).encode("utf-8")
     req = urllib.request.Request(
         url,
+        data=payload,
+        method="POST",
         headers={
             "PRIVATE-TOKEN": token,
             "Accept": "application/json",
+            "Content-Type": "application/json",
             "User-Agent": "OllamaStudio"
         }
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data if isinstance(data, list) else []
-    except Exception:
-        return []
+            return resp.status in (200, 201), "Kommentar sparad"
+    except Exception as e:
+        return False, str(e)
 
 
 def gitlab_close_issue(issue_iid, project_slug=None):

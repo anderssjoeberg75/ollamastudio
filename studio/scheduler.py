@@ -512,7 +512,7 @@ PONYTAIL_AUDIT_PROMPT = (
 )
 
 
-def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
+def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return_full_text=False):
     """Kör ett granskningsvarv i bakgrunden och returnerar (antal_issues, felmeddelande)."""
     mode = "auto_edit"
     sys_prompt = agent_system_prompt(mode)
@@ -526,6 +526,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
     base = base_url or backends.select_optimal_backend()
 
     step = 0
+    full = ""
     while step < max_steps:
         step += 1
         sent = prune_convo(convo, code_char_budget())
@@ -621,13 +622,15 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
                     ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
         break
 
+    if return_full_text:
+        return getattr(ctx, "issues_created", 0), getattr(ctx, "last_error", None), full
     return getattr(ctx, "issues_created", 0), getattr(ctx, "last_error", None)
 
 
 def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
     """Hämtar öppna GitLab-issues (fynd) för projektet, väljer optimal modell och åtgärdar dem."""
     from .codex.router import select_best_model_for_task
-    from .codex.gitlab import gitlab_list_issues, gitlab_close_issue
+    from .codex.gitlab import gitlab_list_issues, gitlab_close_issue, gitlab_comment_issue
     from .codex.gitops import git_commit_all, git_diff_text, git_push
 
     issues = gitlab_list_issues(project_slug=project_slug, state="opened")
@@ -689,11 +692,19 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             "1. Undersök berörd kod med TOOL read_file eller TOOL search.\n"
             "2. Gör nödvändiga korrigeringar med TOOL edit_file eller TOOL write_file (eller *** FIL: sökväg ... *** SLUT).\n"
             "3. Rör inte orelaterad kod. Följ YAGNI och Ponytail-principerna.\n"
-            "4. Avsluta med en kort sammanfattning av vad som åtgärdats."
+            "4. Om problemet REDAN är åtgärdat i källkoden, svara 'REDAN_ÅTGÄRDAD' och motivera kort varför ingen ändring behövs.\n"
+            "5. Avsluta med en kort sammanfattning av vad som åtgärdats."
             % (title, ", ".join(labels), desc, agent_guidance)
         )
 
-        _, fix_err = _run_single_headless_pass(fix_prompt, chosen_model, project_slug, base_url=base)
+        pass_res = _run_single_headless_pass(
+            fix_prompt, chosen_model, project_slug, base_url=base, return_full_text=True
+        )
+        if len(pass_res) >= 3:
+            _, fix_err, resp_text = pass_res[0], pass_res[1], pass_res[2]
+        else:
+            _, fix_err = pass_res[0], pass_res[1]
+            resp_text = ""
         if fix_err:
             errors.append("Issue #%s: %s" % (iid, fix_err))
             continue
@@ -713,6 +724,18 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
                 if status_cb:
                     push_msg = " och pushad" if ok_push else (" (push: %s)" % push_err)
                     status_cb("Fynd #%s åtgärdat, commitat%s och stängt i GitLab!" % (iid, push_msg))
+        else:
+            low_resp = (resp_text or "").lower()
+            if any(k in low_resp for k in ("redan_åtgärdad", "already_resolved", "redan åtgärdat", "redan löst", "redan implementerats", "inte längre ett problem")):
+                gitlab_comment_issue(
+                    iid,
+                    f"Automatisk verifiering (modell {chosen_model}): Detta fynd är redan åtgärdat eller överflödigt i källkoden. Stänger issue.",
+                    project_slug=project_slug
+                )
+                gitlab_close_issue(iid, project_slug=project_slug)
+                resolved_count += 1
+                if status_cb:
+                    status_cb("Fynd #%s redan åtgärdat i koden – stängt i GitLab." % iid)
 
     if resolved_count > 0:
         git_push()
