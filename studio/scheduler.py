@@ -544,6 +544,26 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                     except Exception:
                         continue
                 full = "".join(chunks)
+                if any(err_sig in full for err_sig in ("AGY_ERROR:", "Individual quota reached", "RESOURCE_EXHAUSTED", "quota exceeded")):
+                    # Modellen har nått kvotgräns. Gör automatisk fallback till nästa tillgängliga modell
+                    fallback_model = "antigravity:gemini-4-argon-medium" if "claude" in model else "antigravity:gemini-3.8-flash-medium"
+                    try:
+                        stream = AntigravityStream(sent, fallback_model)
+                        fallback_chunks = []
+                        for line in stream:
+                            try:
+                                obj = json.loads(line.decode("utf-8"))
+                                delta = (obj.get("message") or {}).get("content") or ""
+                                if delta:
+                                    fallback_chunks.append(delta)
+                            except Exception:
+                                continue
+                        fallback_full = "".join(fallback_chunks)
+                        if fallback_full and "AGY_ERROR:" not in fallback_full:
+                            full = fallback_full
+                            model = fallback_model
+                    except Exception:
+                        pass
             except Exception as e:
                 setattr(ctx, "last_error", "Antigravity-fel (%s): %s" % (model, e))
                 break
