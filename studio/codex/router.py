@@ -32,7 +32,7 @@ MODEL_MATRIX = {
         "provider": "anthropic_subscription",
         "tier": "flagship",
         "strengths": ["säkerhetsfixar", "komplex logik", "flerfilsändringar", "arkitektur"],
-        "best_for": ["security", "pentest", "vulnerability", "auth", "crypto", "complex_refactor"]
+        "best_for": ["security", "vulnerability", "auth", "crypto", "complex_refactor"]
     },
     "antigravity:claude-opus-5-5-medium": {
         "name": "Claude Opus 5.5",
@@ -59,15 +59,15 @@ MODEL_MATRIX = {
         "name": "Qwen 2.5 Coder (Lokal)",
         "provider": "ollama",
         "tier": "local_coding",
-        "strengths": ["lokal integritet", "syntax", "funktioner", "linters", "offline"],
-        "best_for": ["offline", "local_coding", "syntax", "ponytail_cleanup"]
+        "strengths": ["lokal integritet", "syntax", "funktioner", "linters", "offline", "pentest"],
+        "best_for": ["offline", "local_coding", "syntax", "ponytail_cleanup", "pentest"]
     },
     "deepseek-r1": {
         "name": "DeepSeek-R1 (Lokal)",
         "provider": "ollama",
         "tier": "local_reasoning",
-        "strengths": ["algoritmer", "matematik", "logiska felresonemang"],
-        "best_for": ["algorithms", "math", "logical_bug"]
+        "strengths": ["algoritmer", "matematik", "logiska felresonemang", "pentest"],
+        "best_for": ["algorithms", "math", "logical_bug", "pentest"]
     },
     "llama3.2": {
         "name": "Llama 3.2 (Lokal)",
@@ -83,6 +83,7 @@ def classify_task(text="", labels=""):
     """Klassificerar en uppgift eller ett fynd till en uppgiftstyp.
 
     Typer:
+    - 'pentest': Nätverksskanning, endpoints, API-pentest (alltid lokal Ollama)
     - 'security': Sårbarheter, CVE, auth, tokens, injektioner, säkerhetsgranskning
     - 'refactor_complex': Större arkitektoniska förändringar, omstrukturering
     - 'ponytail': Förenkling, död kod, ta bort överarbetning, YAGNI
@@ -92,23 +93,27 @@ def classify_task(text="", labels=""):
     """
     combined = f"{labels} {text}".lower()
 
-    # 1. Säkerhet & Pentest
-    if re.search(r'\b(sec|security|pentest|sårbarhet|vulnerability|cve|cwe|owasp|injection|sql|xss|ssrf|csrf|auth|token|jwt|leak|crypto|password|secret)\b', combined):
+    # 1. Pentest (Penetrationstestning mot nätverk och API:er)
+    if re.search(r'\b(pentest|penetrationstest|redteam|nmap|nuclei|ffuf|sqlmap|nikto|active_scan)\b', combined):
+        return "pentest"
+
+    # 2. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)
+    if re.search(r'\b(sec|security|sårbarhet|vulnerability|cve|cwe|owasp|injection|sql|xss|ssrf|csrf|auth|token|jwt|leak|crypto|password|secret)\b', combined):
         return "security"
 
-    # 2. Förenkling & Ponytail
+    # 3. Förenkling & Ponytail
     if re.search(r'\b(ponytail|yagni|död kod|dead code|överarbet|komplexitet|simplify|förenkla|clean|ta bort onödig|duplicer)\b', combined):
         return "ponytail"
 
-    # 3. Testning
+    # 4. Testning
     if re.search(r'\b(test|pytest|unittest|testfall|assert|mock|coverage|verifiera|testsvit)\b', combined):
         return "testing"
 
-    # 4. Linter & syntax
+    # 5. Linter & syntax
     if re.search(r'\b(lint|flake8|ruff|pep8|format|formatting|syntax|typo|namngivning)\b', combined):
         return "lint"
 
-    # 5. Komplex refaktorisering
+    # 6. Komplex refaktorisering
     if re.search(r'\b(arkitektur|refactor|restructure|migrera|migration|redesign|omstrukturera)\b', combined):
         return "refactor_complex"
 
@@ -116,6 +121,7 @@ def classify_task(text="", labels=""):
 
 
 TASK_RECOMMENDATIONS = {
+    "pentest": {"agent": "openclaw-redteam", "skill": "openclaw-redteam"},
     "security": {"agent": "security-reviewer", "skill": "security-review"},
     "refactor_complex": {"agent": "architect", "skill": "hexagonal-architecture"},
     "testing": {"agent": "tdd-guide", "skill": "tdd-workflow"},
@@ -170,6 +176,16 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
         local_candidate = installed_names[0]
 
     # REGELVERK:
+    # 0. Pentest: HÅRDKODAT TILL LOKAL OLLAMA-MODELL
+    # Molnmodeller (Claude, Gemini etc.) blockerar eller vägrar penetrationstester
+    # p.g.a. leverantörernas policyer. Därför körs pentest ALLTID på lokal Ollama-modell.
+    if task_type == "pentest":
+        return _decorate({
+            "model": local_candidate or "qwen2.5-coder",
+            "reason": "Lokal Ollama-modell hårdkodad för penetrationstest (molnmodeller blockerar pentester p.g.a. policy).",
+            "task_type": task_type
+        }, task_type)
+
     # 1. Säkerhetsfixar (P1/P2, sårbarheter, auth)
     # -> Claude Sonnet 5.5 är bäst i världen på att åtgärda sårbarheter utan regressioner
     if task_type == "security":

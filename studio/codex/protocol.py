@@ -131,7 +131,7 @@ _TOOL_HEAD_RE = re.compile(r'(?:^|\n)[ \t>*-]*TOOL[:\s]+([A-Za-z_]\w*)[ \t]*')
 _EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)',
                       re.MULTILINE | re.DOTALL)
 AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "find_symbol",
-                    "edit_file", "write_file",
+                    "edit_file", "write_file", "replace_file_content", "replace_file", "write_to_file",
                     "run_command", "git_status", "git_diff", "git_branch", "git_commit",
                     "create_issue", "todo", "agent", "skill", "workflow"}
 
@@ -476,14 +476,14 @@ def agent_tool_exec(name, args, ctx=None):
                     {"summary": "workflow: " + wf_name})
 
         # ---- Skrivande verktyg: kräver en körning (och oftast ett godkännande) ----
-        if name in ("write_file", "edit_file", "run_command", "git_branch", "git_commit", "create_issue"):
+        if name in ("write_file", "write_to_file", "edit_file", "replace_file_content", "replace_file", "run_command", "git_branch", "git_commit", "create_issue"):
             if ctx is None:
                 return ("FEL: %s kan bara användas i en Codex-körning." % name,
                         {"summary": "ingen körning"})
 
-        if name == "write_file":
-            path = (args.get("path") or "").strip()
-            content = args.get("content")
+        if name in ("write_file", "write_to_file"):
+            path = (args.get("path") or args.get("TargetFile") or "").strip()
+            content = args.get("content") if args.get("content") is not None else args.get("CodeContent")
             if not path:
                 return "FEL: path saknas", {"summary": "fel: path saknas"}
             if content is None:
@@ -502,14 +502,18 @@ def agent_tool_exec(name, args, ctx=None):
                     {"summary": ("skapade " if r["created"] else "skrev ") + r["path"],
                      "path": r["path"], "diff": r["diff"], "wrote": True})
 
-        if name == "edit_file":
-            path = (args.get("path") or "").strip()
+        if name in ("edit_file", "replace_file_content", "replace_file"):
+            path = (args.get("path") or args.get("TargetFile") or "").strip()
             old_text = args.get("old_text")
             if old_text is None:
                 old_text = args.get("old")
+            if old_text is None:
+                old_text = args.get("TargetContent")
             new_text = args.get("new_text")
             if new_text is None:
                 new_text = args.get("new")
+            if new_text is None:
+                new_text = args.get("ReplacementContent")
             if not path:
                 return "FEL: path saknas", {"summary": "fel: path saknas"}
             if not old_text:

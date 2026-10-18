@@ -377,6 +377,75 @@ def _get_active_code_model(base_url=None):
     return ""
 
 
+def _get_local_ollama_model(base_url=None):
+    """Hämtar alltid en lokal Ollama-modell (aldrig molnmodeller som Claude/Gemini).
+
+    Krävs för penetrationstestning (pentest) eftersom molnmodeller blockerar eller
+    vägrar utföra pentester p.g.a. sina strikta säkerhets- och användarpolicyer.
+    """
+    base = base_url or backends.select_optimal_backend()
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            models = data.get("models") or []
+            if models:
+                from .models import select_optimal_model
+                optimal = select_optimal_model(models, task="security")
+                if optimal:
+                    return optimal
+                optimal_code = select_optimal_model(models, task="code")
+                if optimal_code:
+                    return optimal_code
+                return models[0].get("name") or models[0].get("model") or ""
+    except Exception:
+        pass
+    return "qwen2.5-coder:latest"
+
+
+def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
+    """Väljer den bäst lämpade modellen för en specifik granskningsuppgift.
+
+    - 'pentest': HÅRDKODAT att alltid köras med en lokal Ollama-modell (eftersom
+      molnmodeller som Claude/Gemini vägrar pentester enligt sina regler).
+    - 'security' / 'ponytail' / 'resolve': Väljer den bästa modellen som finns att
+      tillgå (Claude Sonnet 5.5 för säkerhet, Gemini Flash för snabba tester/förenklingar,
+      OmniRoute, eller bästa lokala Ollama-modell).
+    """
+    if task_type == "pentest":
+        return _get_local_ollama_model(base_url=base_url)
+
+    # Om användaren explicit sparat en specifik Codex-modell som inte är 'auto'
+    try:
+        user_m = (prefs_all().get("code_model") or "").strip()
+        if user_m and user_m.lower() != "auto":
+            return user_m
+    except Exception:
+        pass
+
+    installed_local = []
+    base = base_url or backends.select_optimal_backend()
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            for m in data.get("models") or []:
+                nm = m.get("name") or m.get("model") or ""
+                if nm:
+                    installed_local.append(nm)
+    except Exception:
+        pass
+
+    from .codex.router import select_best_model_for_task
+    route_info = select_best_model_for_task(
+        text or task_type,
+        labels=labels or task_type,
+        installed_models=installed_local
+    )
+    chosen = route_info.get("model") if isinstance(route_info, dict) else route_info
+    return chosen or _get_active_code_model(base_url=base_url)
+
+
 SECURITY_AUDIT_PROMPT = (
     "Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n"
     "ARBETSSÄTT & KRAV:\n"
@@ -529,6 +598,17 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None):
             })
             continue
 
+        # Applicera eventuella filblock (*** FIL: sökväg ... *** SLUT) som modellen returnerat
+        from .codex.protocol import parse_edits
+        edits = parse_edits(full)
+        if edits:
+            for ed in edits:
+                try:
+                    from .codex.workspace import ws_write_file
+                    ws_write_file(ed["path"], ed["content"])
+                except Exception:
+                    pass
+
         msg = strip_edits(full)
         if msg and not getattr(ctx, "issues_created", 0):
             findings = extract_findings_from_text(msg)
@@ -548,7 +628,7 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
     """Hämtar öppna GitLab-issues (fynd) för projektet, väljer optimal modell och åtgärdar dem."""
     from .codex.router import select_best_model_for_task
     from .codex.gitlab import gitlab_list_issues, gitlab_close_issue
-    from .codex.gitops import git_commit_all, git_diff_text
+    from .codex.gitops import git_commit_all, git_diff_text, git_push
 
     issues = gitlab_list_issues(project_slug=project_slug, state="opened")
     if not issues:
@@ -607,7 +687,7 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             "BESKRIVNING & ÅTGÄRDSPLAN:\n%s%s\n\n"
             "ARBETSSÄTT & KRAV:\n"
             "1. Undersök berörd kod med TOOL read_file eller TOOL search.\n"
-            "2. Gör nödvändiga korrigeringar med TOOL edit_file eller TOOL write_file.\n"
+            "2. Gör nödvändiga korrigeringar med TOOL edit_file eller TOOL write_file (eller *** FIL: sökväg ... *** SLUT).\n"
             "3. Rör inte orelaterad kod. Följ YAGNI och Ponytail-principerna.\n"
             "4. Avsluta med en kort sammanfattning av vad som åtgärdats."
             % (title, ", ".join(labels), desc, agent_guidance)
@@ -628,9 +708,14 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             ok_commit, _ = git_commit_all(commit_msg)
             if ok_commit:
                 gitlab_close_issue(iid, project_slug=project_slug)
+                ok_push, push_err = git_push()
                 resolved_count += 1
                 if status_cb:
-                    status_cb("Fynd #%s åtgärdat, commitat och stängt i GitLab!" % iid)
+                    push_msg = " och pushad" if ok_push else (" (push: %s)" % push_err)
+                    status_cb("Fynd #%s åtgärdat, commitat%s och stängt i GitLab!" % (iid, push_msg))
+
+    if resolved_count > 0:
+        git_push()
 
     return resolved_count, errors
 
@@ -639,17 +724,23 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
                        status_cb=None, prod_server="", prod_token="", sec_mode="safe", run_resolve=False):
     """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
 
-    Väljer automatiskt den mest optimala hårdvaran (snabbaste GPU-instansen) och
-    den bäst lämpade kodmodellen (t.ex. qwen2.5-coder) för uppgiften.
+    Modellval:
+    - Pentest: HÅRDKODAT att ALLTID köras med en lokal Ollama-modell (eftersom
+      molnmodeller som Claude/Gemini vägrar pentester enligt sina säkerhetspolicyer).
+    - Övriga moment (säkerhetsgranskning, ponytail, resolve): Körs med bästa
+      modellen som finns att tillgå (Claude Sonnet 5.5, Gemini Flash, OmniRoute eller lokal).
     """
     token = setting_str("gitlab_token")
     if not token:
         return False, "Ingen GitLab-token konfigurerad under ⚙ Inställningar", 0, 0
 
     base_url = backends.select_optimal_backend()
-    model = _get_active_code_model(base_url=base_url)
-    if not model:
-        return False, "Ingen Ollama-modell tillgänglig på %s" % base_url, 0, 0
+    sec_model = _get_best_model_for_task("security", text="Säkerhetsgranskning SAST", labels="security", base_url=base_url)
+    pen_model = _get_local_ollama_model(base_url=base_url)
+    pny_model = _get_best_model_for_task("ponytail", text="Ponytail förenkling", labels="ponytail", base_url=base_url)
+
+    if not pen_model and run_pentest:
+        return False, "Ingen Ollama-modell tillgänglig på %s för penetrationstest" % base_url, 0, 0
 
     mode = (sec_mode or "safe").strip().lower()
     if mode not in ("safe", "full", "passive"):
@@ -678,8 +769,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     is_github = "github.com" in project.lower()
     provider_name = "GitHub" if is_github else "GitLab"
     if status_cb:
-        status_cb("Optimal hårdvara (%s) och modell (%s) valda. Hämtar %s från %s..."
-                  % (base_url, model, project, provider_name))
+        status_cb("Optimal hårdvara (%s) vald. Pentest: lokal Ollama (%s), Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."
+                  % (base_url, pen_model, sec_model, pny_model, project, provider_name))
 
     if is_github:
         from studio.codex.github import github_fetch_repo
@@ -702,8 +793,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
         if run_security:
             sec_prompt = SECURITY_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
             if status_cb:
-                status_cb("Kör säkerhetsgranskning (kod/SAST, läge: %s) mot %s (%s på %s)..." % (mode, project, model, base_url))
-            sec_count, sec_err = _run_single_headless_pass(sec_prompt, model, project, base_url=base_url)
+                status_cb("Kör säkerhetsgranskning (kod/SAST, läge: %s) mot %s (%s på %s)..." % (mode, project, sec_model, base_url))
+            sec_count, sec_err = _run_single_headless_pass(sec_prompt, sec_model, project, base_url=base_url)
             if sec_err:
                 errors.append("Säkerhetsgranskning: " + sec_err)
 
@@ -721,15 +812,15 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
                 )
             if status_cb:
                 srv_msg = (" mot %s" % prod_server) if prod_server else ""
-                status_cb("Kör penetrationstest (pentest, läge: %s)%s (%s på %s)..." % (mode, srv_msg, model, base_url))
-            pen_count, pen_err = _run_single_headless_pass(pen_prompt, model, project, base_url=base_url)
+                status_cb("Kör penetrationstest (pentest, lokal Ollama-modell, läge: %s)%s (%s på %s)..." % (mode, srv_msg, pen_model, base_url))
+            pen_count, pen_err = _run_single_headless_pass(pen_prompt, pen_model, project, base_url=base_url)
             if pen_err:
                 errors.append("Penetrationstest: " + pen_err)
 
         if run_ponytail:
             if status_cb:
-                status_cb("Kör ponytail-audit mot %s (%s på %s)..." % (project, model, base_url))
-            pny_count, pny_err = _run_single_headless_pass(PONYTAIL_AUDIT_PROMPT, model, project, base_url=base_url)
+                status_cb("Kör ponytail-audit mot %s (%s på %s)..." % (project, pny_model, base_url))
+            pny_count, pny_err = _run_single_headless_pass(PONYTAIL_AUDIT_PROMPT, pny_model, project, base_url=base_url)
             if pny_err:
                 errors.append("Ponytail-audit: " + pny_err)
 
@@ -745,8 +836,14 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
             settings_set({"code_workspace": prev_workspace})
 
     total = sec_count + pen_count + pny_count + res_count
+    models_used = []
+    for m in (sec_model if run_security else None, pen_model if run_pentest else None, pny_model if run_ponytail else None):
+        if m and m not in models_used:
+            models_used.append(m)
+    models_str = ", ".join(models_used) if models_used else (sec_model or pen_model)
+
     if errors and total == 0:
-        summary = "Fel under körning (%s på %s): %s" % (model, base_url, "; ".join(errors))
+        summary = "Fel under körning (%s på %s): %s" % (models_str, base_url, "; ".join(errors))
         return False, summary, sec_count + pen_count, pny_count
 
     parts = []
@@ -759,7 +856,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     if run_resolve:
         parts.append("%d åtgärdade fynd" % res_count)
     parts_str = " och ".join(parts) if len(parts) <= 2 else (", ".join(parts[:-1]) + " och " + parts[-1])
-    summary = ("Klar (%s på %s): %s punkter behandlade." % (model, base_url, parts_str)) if parts else "Klar: Inga moment valda."
+    summary = ("Klar (%s på %s): %s punkter behandlade." % (models_str, base_url, parts_str)) if parts else "Klar: Inga moment valda."
     return True, summary, sec_count + pen_count, pny_count
 
 
