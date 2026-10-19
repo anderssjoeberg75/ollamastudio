@@ -88,12 +88,6 @@ class BaseHandler(BaseHTTPRequestHandler):
                 upstream = AntigravityStream(payload.get("messages") or [], m_str)
             except Exception as e:
                 return self._send_json({"error": str(e)}, 502)
-        elif m_str.startswith("omniroute:"):
-            from studio.omniroute_bridge import OmniRouteStream
-            try:
-                upstream = OmniRouteStream(payload.get("messages") or [], m_str, payload.get("options"))
-            except Exception as e:
-                return self._send_json({"error": str(e)}, 502)
         else:
             try:
                 body = json.dumps(payload).encode()
@@ -133,14 +127,11 @@ class BaseHandler(BaseHTTPRequestHandler):
 
     # ---- Chatt med auto-webbsök -----------------------------------------
     def _open_chat_stream(self, messages, model, opts, base):
-        """Öppna en strömmande /api/chat mot en Ollama-backend, Antigravity eller OmniRoute."""
+        """Öppna en strömmande /api/chat mot en Ollama-backend eller Antigravity."""
         m_str = str(model or "")
         if m_str.startswith("antigravity:") or m_str.startswith("gemini:") or m_str.startswith("claude:"):
             from studio.antigravity_bridge import AntigravityStream
             return AntigravityStream(messages, m_str)
-        if m_str.startswith("omniroute:"):
-            from studio.omniroute_bridge import OmniRouteStream
-            return OmniRouteStream(messages, m_str, opts)
 
         payload = {"model": model, "messages": messages, "stream": True}
         if opts:

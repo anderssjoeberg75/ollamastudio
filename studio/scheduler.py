@@ -410,7 +410,7 @@ def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
       molnmodeller som Claude/Gemini vägrar pentester enligt sina regler).
     - 'security' / 'ponytail' / 'resolve': Väljer den bästa modellen som finns att
       tillgå (Claude Sonnet 5.5 för säkerhet, Gemini Flash för snabba tester/förenklingar,
-      OmniRoute, eller bästa lokala Ollama-modell).
+      eller bästa lokala Ollama-modell).
     """
     if task_type == "pentest":
         return _get_local_ollama_model(base_url=base_url)
@@ -784,7 +784,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     - Pentest: HÅRDKODAT att ALLTID köras med en lokal Ollama-modell (eftersom
       molnmodeller som Claude/Gemini vägrar pentester enligt sina säkerhetspolicyer).
     - Övriga moment (säkerhetsgranskning, ponytail, resolve): Körs med bästa
-      modellen som finns att tillgå (Claude Sonnet 5.5, Gemini Flash, OmniRoute eller lokal).
+      modellen som finns att tillgå (Claude Sonnet 5.5, Gemini Flash eller lokal).
     """
     token = setting_str("gitlab_token")
     if not token:

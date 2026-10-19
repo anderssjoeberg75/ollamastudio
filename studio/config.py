@@ -102,9 +102,6 @@ SETTINGS_SPEC = {
     "code_sandbox_image":   ("OLLAMA_STUDIO_CODE_SANDBOX_IMAGE", "python:3.12-slim", "str", False),
     # MCP-server för att styra Ollama Studio via Model Context Protocol
     "mcp_enabled":          ("OLLAMA_STUDIO_MCP", "1", "bool", False),
-    # OmniRoute AI Gateway (https://github.com/diegosouzapw/OmniRoute)
-    "omniroute_url":        ("OMNIROUTE_URL", "http://127.0.0.1:20128", "str", False),
-    "omniroute_api_key":    ("OMNIROUTE_API_KEY", "sk-omniroute-studio-master", "str", True),
 }
 
 _settings_lock = threading.Lock()

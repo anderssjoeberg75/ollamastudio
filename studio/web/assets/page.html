@@ -539,27 +539,6 @@ dpo:      {"prompt": "Explain gravity", "chosen": "Good answer…", "rejected": 
           </div>
         </div>
 
-        <div class="set-card" id="cardOmniRoute">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <h2 style="margin:0">🚀 OmniRoute AI Gateway</h2>
-            <span id="omniStatusBadge" style="font-size:12px;padding:3px 10px;border-radius:12px;background:rgba(49,248,137,0.15);color:var(--green);font-weight:600">Kontrollerar…</span>
-          </div>
-          <p class="hint">Universell AI Gateway med <b>358 leverantörer</b>, över <b>150 gratistiers</b>, 19 routing-strategier (som <code>omniroute:auto/coding</code>), automatisk fallback och token-komprimering via <a href="https://github.com/diegosouzapw/OmniRoute" target="_blank" style="color:var(--accent)">OmniRoute</a>.</p>
-          <div class="set-row">
-            <label>Gateway URL <span class="hint">(standard: http://127.0.0.1:20128)</span></label>
-            <input id="stOmniRouteUrl" type="text" placeholder="http://127.0.0.1:20128" onchange="saveOmniRouteSettings()">
-          </div>
-          <div id="omniStatusDetails" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin:10px 0;font-size:13px">
-            Laddar status…
-          </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button type="button" class="btn accent small" id="btnOmniPing" onclick="pingOmniRoute()">⚡ Testa anslutning</button>
-            <button type="button" class="btn ghost small" onclick="loadOmniRouteStatus()">↻ Uppdatera status</button>
-            <a href="http://192.168.107.15:20128/dashboard" target="_blank" class="btn ghost small" style="text-decoration:none">📊 Öppna OmniRoute Dashboard</a>
-            <span id="omniPingResult" style="font-size:12px;color:var(--subtle)"></span>
-          </div>
-        </div>
-
         <div class="set-card">
           <h2>🤗 Hugging Face</h2>
           <p class="hint">Ollama can fetch GGUF models directly from Hugging Face
