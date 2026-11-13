@@ -174,35 +174,56 @@ def ws_tree(max_entries=500):
     return out
 
 
-def ws_write_file(rel, content):
-    """Skriv en fil inom arbetsytan. Returnerar en diff. Det gamla innehållet läggs
-    på ångra-stacken så en skrivning alltid går att backa (även i fria händer-läget)."""
+def _closest_snippet(text, query, max_lines=6):
+    """Hjälpfunktion för att hitta det närmaste textpartiet i filen när en matchning misslyckas."""
+    lines = text.splitlines()
+    q_lines = [q.strip() for q in query.splitlines() if q.strip()]
+    if not q_lines:
+        return ""
+    first_q = q_lines[0].lower()
+    for i, line in enumerate(lines):
+        if first_q in line.lower() or (len(first_q) > 8 and difflib.SequenceMatcher(None, first_q, line.strip().lower()).ratio() > 0.65):
+            start = max(0, i - 2)
+            end = min(len(lines), i + max_lines)
+            return "\n".join("%d\t%s" % (n + 1, lines[n]) for n in range(start, end))
+    return ""
+
+
+def ws_write_file(rel, content, mode="overwrite"):
+    """Skriv en fil inom arbetsytan. Stödjer mode='overwrite' (standard) eller 'append'.
+    Returnerar en diff. Det gamla innehållet läggs på ångra-stacken så en skrivning alltid
+    går att backa (även i fria händer-läget)."""
     full = ws_resolve(rel)
     if content is None:
         raise ValueError("Inget innehåll")
-    if len(content.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
-        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
+    is_append = str(mode or "").strip().lower() == "append"
     existed = os.path.isfile(full)
     old = ""
     if existed:
         with open(full, "r", encoding="utf-8", errors="replace") as f:
             old = f.read()
+
+    new_content = (old + content) if (is_append and existed) else content
+    if len(new_content.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
+        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
+
     parent = os.path.dirname(full)
     if parent:
         os.makedirs(parent, exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
-        f.write(content)
+        f.write(new_content)
     rel_path = _ws_rel(full)
     undo_push(rel_path, old if existed else None)
     _analysis_changed(rel_path)
     return {"path": rel_path, "created": not existed,
-            "diff": ws_diff(old, content, rel_path)}
+            "mode": "append" if is_append else "overwrite",
+            "diff": ws_diff(old, new_content, rel_path)}
 
 
 def ws_edit_file(rel, old_text, new_text):
     """Byt ut en exakt textbit i en fil – motsvarigheten till Claude Codes Edit.
-    Biten måste finnas exakt EN gång; annars vet vi inte vilken som menades. Det här
-    är det viktiga verktyget för stora filer: modellen behöver inte skriva om allt."""
+    Biten måste finnas exakt EN gång (eller entydigt med fuzzy whitespace-matching);
+    annars vet vi inte vilken som menades."""
     full = ws_resolve(rel)
     if not os.path.isfile(full):
         raise ValueError("Ingen fil: " + rel)
@@ -212,14 +233,33 @@ def ws_edit_file(rel, old_text, new_text):
         raise ValueError("old_text saknas – ange texten som ska bytas ut")
     with open(full, "r", encoding="utf-8", errors="replace") as f:
         cur = f.read()
-    hits = cur.count(old_text)
+
+    # Normalisera radbrytningar
+    norm_cur = cur.replace("\r\n", "\n")
+    norm_old = str(old_text).replace("\r\n", "\n")
+    norm_new = str(new_text if new_text is not None else "").replace("\r\n", "\n")
+
+    hits = norm_cur.count(norm_old)
+    match_used = norm_old
     if hits == 0:
-        raise ValueError("Hittade inte texten i %s – den måste stämma exakt, tecken för "
-                         "tecken (läs filen igen och kopiera raderna)" % rel)
+        # Prova fuzzy whitespace-matchning (t.ex. olika indrag eller blanksteg i början/slutet)
+        old_stripped = norm_old.strip()
+        if old_stripped and old_stripped != norm_old:
+            s_hits = norm_cur.count(old_stripped)
+            if s_hits == 1:
+                match_used = old_stripped
+                hits = 1
+                norm_new = norm_new.strip()
+            elif s_hits > 1:
+                raise ValueError("Fuzzy träff på %r finns %d gånger i %s – ta med fler omgivande rader så den blir unik" % (norm_old[:40], s_hits, rel))
+        if hits == 0:
+            snippet = _closest_snippet(norm_cur, norm_old)
+            hint = ("\nNärmaste rader i filen just nu:\n" + snippet) if snippet else ""
+            raise ValueError("Hittade inte texten i %s – den måste stämma exakt, tecken för tecken.%s" % (rel, hint))
     if hits > 1:
-        raise ValueError("Texten finns %d gånger i %s – ta med fler omgivande rader så "
-                         "den blir unik" % (hits, rel))
-    updated = cur.replace(old_text, new_text if new_text is not None else "", 1)
+        raise ValueError("Texten finns %d gånger i %s – ta med fler omgivande rader så den blir unik" % (hits, rel))
+
+    updated = norm_cur.replace(match_used, norm_new, 1)
     if len(updated.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
         raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
     with open(full, "w", encoding="utf-8") as f:
@@ -229,6 +269,61 @@ def ws_edit_file(rel, old_text, new_text):
     _analysis_changed(rel_path)
     return {"path": rel_path, "created": False,
             "diff": ws_diff(cur, updated, rel_path)}
+
+
+def ws_edit_file_batch(rel, edits):
+    """Applicera en lista med kirurgiska sök-och-ersätt ändringar [{old_text, new_text}, ...]
+    i filen sekventiellt i ett enda svep."""
+    if not isinstance(edits, list) or not edits:
+        raise ValueError("edits måste vara en icke-tom lista med {old_text, new_text}")
+    full = ws_resolve(rel)
+    if not os.path.isfile(full):
+        raise ValueError("Ingen fil: " + rel)
+    with open(full, "r", encoding="utf-8", errors="replace") as f:
+        cur = f.read()
+
+    norm_cur = cur.replace("\r\n", "\n")
+    modified = norm_cur
+    applied_count = 0
+    errors = []
+
+    for i, ed in enumerate(edits):
+        if not isinstance(ed, dict):
+            errors.append("edit %d: måste vara ett objekt med old_text och new_text" % i)
+            continue
+        old = str(ed.get("old_text", ed.get("old", "")) or "").replace("\r\n", "\n")
+        new = str(ed.get("new_text", ed.get("new", "")) or "").replace("\r\n", "\n")
+        if not old:
+            errors.append("edit %d: old_text är tom" % i)
+            continue
+        hits = modified.count(old)
+        if hits == 0:
+            old_s = old.strip()
+            if old_s and old_s != old and modified.count(old_s) == 1:
+                modified = modified.replace(old_s, new.strip(), 1)
+                applied_count += 1
+                continue
+            errors.append("edit %d: hittade inte %r" % (i, old[:40]))
+            continue
+        if hits > 1:
+            errors.append("edit %d: texten %r finns %d gånger (måste vara unik)" % (i, old[:40], hits))
+            continue
+        modified = modified.replace(old, new, 1)
+        applied_count += 1
+
+    if errors:
+        raise ValueError("; ".join(errors) + (" (applicerade %d ändringar innan felet)" % applied_count if applied_count else ""))
+
+    if len(modified.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
+        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
+
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(modified)
+    rel_path = _ws_rel(full)
+    undo_push(rel_path, cur)
+    _analysis_changed(rel_path)
+    return {"path": rel_path, "created": False, "applied": applied_count,
+            "diff": ws_diff(cur, modified, rel_path)}
 
 
 # ---- Ångra: varje skrivning sparar sitt gamla innehåll ----------------------

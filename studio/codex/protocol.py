@@ -17,8 +17,8 @@ from .gitlab import gitlab_create_issue
 from .skills import (get_agent, get_skill, get_workflow, list_agents,
                      list_skills, list_workflows)
 from .workspace import (CODE_READ_LINES, ws_current, ws_diff, ws_edit_file,
-                        ws_list_dir, ws_read_file, ws_resolve, ws_search,
-                        ws_tree, ws_write_file)
+                        ws_edit_file_batch, ws_list_dir, ws_read_file, ws_resolve,
+                        ws_search, ws_tree, ws_write_file)
 
 
 # ---- Agent-protokoll --------------------------------------------------------
@@ -484,6 +484,7 @@ def agent_tool_exec(name, args, ctx=None):
         if name in ("write_file", "write_to_file"):
             path = (args.get("path") or args.get("TargetFile") or "").strip()
             content = args.get("content") if args.get("content") is not None else args.get("CodeContent")
+            mode = args.get("mode") or "overwrite"
             if not path:
                 return "FEL: path saknas", {"summary": "fel: path saknas"}
             if content is None:
@@ -491,19 +492,43 @@ def agent_tool_exec(name, args, ctx=None):
             if not isinstance(content, str):
                 content = str(content)
             before = ws_current(path)
-            preview = ws_diff(before, content, path) or "(oförändrad)"
-            if not ctx.ask("edit", "write:" + path, "Skriva filen %s" % path, preview):
+            is_append = str(mode).strip().lower() == "append"
+            preview_content = (before + content) if (is_append and before) else content
+            preview = ws_diff(before, preview_content, path) or "(oförändrad)"
+            action_desc = ("Lägga till i filen %s (append)" if is_append else "Skriva filen %s") % path
+            if not ctx.ask("edit", "write:" + path, action_desc, preview):
                 return _denied("att skriva " + path), {"summary": "nekat: " + path, "denied": True}
-            r = ws_write_file(path, content)
+            r = ws_write_file(path, content, mode=mode)
             ctx.writes.append(r["path"])
-            return ("OK: skrev %s (%d tecken).%s" % (
-                        r["path"], len(content),
+            verb = "lade till i" if is_append else "skrev"
+            return ("OK: %s %s (%d tecken).%s" % (
+                        verb, r["path"], len(content),
                         " Filen skapades." if r["created"] else ""),
-                    {"summary": ("skapade " if r["created"] else "skrev ") + r["path"],
+                    {"summary": (("lade till i " if is_append else ("skapade " if r["created"] else "skrev ")) + r["path"]),
                      "path": r["path"], "diff": r["diff"], "wrote": True})
 
         if name in ("edit_file", "replace_file_content", "replace_file"):
             path = (args.get("path") or args.get("TargetFile") or "").strip()
+            edits = args.get("edits")
+            if not path:
+                return "FEL: path saknas", {"summary": "fel: path saknas"}
+            if not os.path.isfile(ws_resolve(path)):
+                return ("FEL: filen %s finns inte. Använd write_file för att skapa den." % path,
+                        {"summary": "ingen fil: " + path})
+
+            # 1. Batch edits
+            if isinstance(edits, list) and edits:
+                cur = ws_current(path)
+                preview = "Batch edits (%d stycken)" % len(edits)
+                if not ctx.ask("edit", "edit:" + path, "Ändra i filen %s (%d ändringar)" % (path, len(edits)), preview):
+                    return _denied("att ändra " + path), {"summary": "nekat: " + path, "denied": True}
+                r = ws_edit_file_batch(path, edits)
+                ctx.writes.append(r["path"])
+                return ("OK: ändrade %s (%d ändringar applicerade)." % (r["path"], r.get("applied", len(edits))),
+                        {"summary": "ändrade %s (%d st)" % (r["path"], r.get("applied", len(edits))), "path": r["path"],
+                         "diff": r["diff"], "wrote": True})
+
+            # 2. Singel edit (eller fallback)
             old_text = args.get("old_text")
             if old_text is None:
                 old_text = args.get("old")
@@ -514,22 +539,23 @@ def agent_tool_exec(name, args, ctx=None):
                 new_text = args.get("new")
             if new_text is None:
                 new_text = args.get("ReplacementContent")
-            if not path:
-                return "FEL: path saknas", {"summary": "fel: path saknas"}
             if not old_text:
-                return ("FEL: old_text saknas – ange den exakta text som ska bytas ut.",
+                return ("FEL: old_text saknas – ange den exakta text som ska bytas ut (eller en lista med 'edits').",
                         {"summary": "fel: old_text saknas"})
-            if not os.path.isfile(ws_resolve(path)):
-                return ("FEL: filen %s finns inte. Använd write_file för att skapa den." % path,
-                        {"summary": "ingen fil: " + path})
+
             # Förhandsvisa ändringen innan vi frågar – användaren ska se vad hen godkänner.
             cur = ws_current(path)
-            hits = cur.count(old_text)
+            norm_cur = cur.replace("\r\n", "\n")
+            norm_old = str(old_text).replace("\r\n", "\n")
+            hits = norm_cur.count(norm_old)
+            if hits == 0 and norm_old.strip() and norm_cur.count(norm_old.strip()) == 1:
+                norm_old = norm_old.strip()
+                hits = 1
             if hits != 1:
                 return (("FEL: texten finns %d gånger i %s. Den måste finnas exakt en gång – "
                          "läs filen och ta med fler omgivande rader." % (hits, path)),
                         {"summary": "ingen unik träff"})
-            preview = ws_diff(cur, cur.replace(old_text, new_text or "", 1), path)
+            preview = ws_diff(norm_cur, norm_cur.replace(norm_old, str(new_text or "").replace("\r\n", "\n"), 1), path)
             if not ctx.ask("edit", "edit:" + path, "Ändra i filen %s" % path, preview):
                 return _denied("att ändra " + path), {"summary": "nekat: " + path, "denied": True}
             r = ws_edit_file(path, old_text, new_text)
