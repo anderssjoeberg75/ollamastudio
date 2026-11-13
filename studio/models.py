@@ -205,16 +205,20 @@ def select_optimal_model(models, task="code"):
         n = name.lower()
         score = 0
         if task in ("code", "audit", "security", "ponytail"):
-            # Kodspecialisering
-            if "qwen2.5-coder" in n or "qwen2.5_coder" in n:
+            # Kodspecialisering - Llama prioriteras alltid i första hand
+            if any(k in n for k in ("llama3.2", "llama3.1", "llama3", "llama-3", "codellama")):
+                score += 1200
+            elif "llama" in n:
+                score += 1100
+            elif "qwen2.5-coder" in n or "qwen2.5_coder" in n:
                 score += 1000
-            elif any(k in n for k in ("coder", "starcoder", "codellama", "deepseek-coder", "codeqwen")):
+            elif any(k in n for k in ("coder", "starcoder", "deepseek-coder", "codeqwen")):
                 score += 750
             elif "code" in n or "devstral" in n:
                 score += 550
             elif "qwen" in n:
                 score += 400
-            elif any(k in n for k in ("llama3", "mistral", "command-r")):
+            elif any(k in n for k in ("mistral", "command-r")):
                 score += 300
             elif "gemma" in n:
                 score += 150

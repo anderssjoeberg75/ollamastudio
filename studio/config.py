@@ -17,7 +17,8 @@ APP_VERSION = "1.0.0"
 
 LISTEN_HOST = os.environ.get("OLLAMA_STUDIO_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("OLLAMA_STUDIO_PORT", "8080"))
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+LLAMA_URL = os.environ.get("LLAMA_URL", "").rstrip("/")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", LLAMA_URL or "http://localhost:11434").rstrip("/")
 TOKEN = os.environ.get("OLLAMA_STUDIO_TOKEN", "").strip()
 
 # Projektets rot – mappen som ollama_web.py ligger i, alltså EN nivå upp från
@@ -102,6 +103,9 @@ SETTINGS_SPEC = {
     "code_sandbox_image":   ("OLLAMA_STUDIO_CODE_SANDBOX_IMAGE", "python:3.12-slim", "str", False),
     # MCP-server för att styra Ollama Studio via Model Context Protocol
     "mcp_enabled":          ("OLLAMA_STUDIO_MCP", "1", "bool", False),
+    # Stöd för llama-server (llama.cpp)
+    "llama_url":            ("LLAMA_URL", "", "str", False),
+    "backend_type":         ("OLLAMA_STUDIO_BACKEND_TYPE", "auto", "str", False),
 }
 
 _settings_lock = threading.Lock()

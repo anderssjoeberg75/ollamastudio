@@ -38,17 +38,27 @@ class TestModelRouter(unittest.TestCase):
         self.assertEqual(cat, "pentest")
 
     def test_select_best_model_for_pentest_hardcoded_local(self):
-        # Pentest ska ALLTID välja lokal Ollama-modell även när moln (Antigravity/Claude) är aktivt
+        # Pentest ska ALLTID välja lokal Llama-modell även när moln (Antigravity/Claude) är aktivt
         with patch("studio.codex.router.antigravity_available", return_value=True):
             res = select_best_model_for_task(
                 "Kör penetrationstest och nätverksskanning mot målservern",
                 labels=["pentest"],
                 installed_models=["qwen2.5-coder:14b", "llama3.2:latest"]
             )
-            self.assertEqual(res["model"], "qwen2.5-coder:14b")
+            self.assertEqual(res["model"], "llama3.2:latest")
             self.assertEqual(res["task_type"], "pentest")
             self.assertEqual(res["agent"], "openclaw-redteam")
-            self.assertIn("Lokal Ollama-modell", res["reason"])
+            self.assertIn("Lokal Llama-modell", res["reason"])
+
+    def test_select_best_model_prefers_llama_over_qwen(self):
+        # Verifiera att Llama-modeller väljs före Qwen och DeepSeek
+        with patch("studio.codex.router.antigravity_available", return_value=False):
+            res = select_best_model_for_task(
+                "Implementera ny funktion i Python",
+                labels=["general"],
+                installed_models=["deepseek-r1:8b", "qwen2.5-coder:14b", "llama3.1:8b"]
+            )
+            self.assertEqual(res["model"], "llama3.1:8b")
 
     def test_classify_ponytail_task(self):
         cat = classify_task(
@@ -83,7 +93,7 @@ class TestModelRouter(unittest.TestCase):
             self.assertEqual(res["model"], "antigravity:gemini-3.8-flash-medium")
 
     def test_select_best_model_prefers_local_when_requested(self):
-        # När prefer_local är True och passande lokal modell finns
+        # När prefer_local är True och passande lokal modell finns väljs Llama först
         with patch("studio.codex.router.antigravity_available", return_value=True):
             res = select_best_model_for_task(
                 "Förenkla och ta bort onödig kod enligt ponytail",
@@ -91,12 +101,14 @@ class TestModelRouter(unittest.TestCase):
                 installed_models=["qwen2.5-coder:7b", "llama3.2:latest"],
                 prefer_local=True,
             )
-            self.assertEqual(res["model"], "qwen2.5-coder:7b")
+            self.assertEqual(res["model"], "llama3.2:latest")
 
     def test_model_matrix_structure(self):
         matrix = get_model_matrix()
         self.assertIn("antigravity:claude-sonnet-5-5-medium", matrix)
         self.assertIn("antigravity:gemini-3.8-flash-medium", matrix)
+        self.assertIn("llama3.2", matrix)
+        self.assertIn("llama3.1", matrix)
         self.assertIn("qwen2.5-coder", matrix)
         sonnet = matrix["antigravity:claude-sonnet-5-5-medium"]
         self.assertEqual(sonnet["provider"], "anthropic_subscription")

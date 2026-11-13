@@ -4,7 +4,7 @@ Väljer automatiskt den mest optimala modellen för varje given uppgift baserat 
 modellernas specifika styrkor:
 - Claude (via Antigravity): Kritiska säkerhetsfixar, avancerad refaktorisering, djup arkitektur
 - Gemini (via Antigravity): Blixtsnabba åtgärder, enhetstester, linter/kodstil, stora kontexter
-- Lokala Ollama-modeller: 100% lokal integritet, ponytail-förenklingar, linter-städning, offline
+- Lokala Llama-modeller (Llama-server / Ollama): 100% lokal integritet, kodning, ponytail-förenklingar, pentest, offline
 """
 import re
 
@@ -40,6 +40,27 @@ MODEL_MATRIX = {
         "strengths": ["enorm kontext", "omfattande kodsökningar", "integrationsanalys"],
         "best_for": ["large_repo_search", "integration_fix"]
     },
+    "llama3.2": {
+        "name": "Llama 3.2 (Lokal)",
+        "provider": "llama",
+        "tier": "local_coding",
+        "strengths": ["lokal integritet", "syntax", "kodning", "linters", "offline", "pentest", "förenkling"],
+        "best_for": ["offline", "local_coding", "syntax", "pentest", "yagni_prune", "simple_cleanup", "ponytail_cleanup"]
+    },
+    "llama3.1": {
+        "name": "Llama 3.1 (Lokal)",
+        "provider": "llama",
+        "tier": "local_coding",
+        "strengths": ["avancerad kodning", "flerfilsanalys", "större kontext", "pentest"],
+        "best_for": ["local_coding", "pentest", "offline", "complex_refactor"]
+    },
+    "codellama": {
+        "name": "Code Llama (Lokal)",
+        "provider": "llama",
+        "tier": "local_coding",
+        "strengths": ["kodgenerering", "felsökning", "syntax"],
+        "best_for": ["local_coding", "syntax"]
+    },
     "qwen2.5-coder": {
         "name": "Qwen 2.5 Coder (Lokal)",
         "provider": "ollama",
@@ -53,13 +74,6 @@ MODEL_MATRIX = {
         "tier": "local_reasoning",
         "strengths": ["algoritmer", "matematik", "logiska felresonemang", "pentest"],
         "best_for": ["algorithms", "math", "logical_bug", "pentest"]
-    },
-    "llama3.2": {
-        "name": "Llama 3.2 (Lokal)",
-        "provider": "ollama",
-        "tier": "local_fast",
-        "strengths": ["lättviktig", "död kod rensning", "enkla if-förenklingar"],
-        "best_for": ["yagni_prune", "simple_cleanup"]
     }
 }
 
@@ -147,9 +161,9 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
         if name:
             installed_names.append(name)
     
-    # Hitta bästa lokala modell bland installerade
+    # Hitta bästa lokala modell bland installerade (Llama prioriteras alltid i första hand)
     local_candidate = None
-    for pref in ("qwen2.5-coder", "qwen2.5", "deepseek-r1", "codellama", "llama3.2", "llama3.1", "mistral"):
+    for pref in ("llama3.2", "llama3.1", "llama3", "llama", "codellama", "qwen2.5-coder", "qwen2.5", "deepseek-r1", "mistral"):
         for inst in installed_names:
             if inst.lower().startswith(pref):
                 local_candidate = inst
@@ -159,14 +173,16 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
     if not local_candidate and installed_names:
         local_candidate = installed_names[0]
 
+    default_local = local_candidate or "llama3.2"
+
     # REGELVERK:
-    # 0. Pentest: HÅRDKODAT TILL LOKAL OLLAMA-MODELL
+    # 0. Pentest: HÅRDKODAT TILL LOKAL LLAMA/OLLAMA-MODELL
     # Molnmodeller (Claude, Gemini etc.) blockerar eller vägrar penetrationstester
-    # p.g.a. leverantörernas policyer. Därför körs pentest ALLTID på lokal Ollama-modell.
+    # p.g.a. leverantörernas policyer. Därför körs pentest ALLTID på lokal modell (Llama).
     if task_type == "pentest":
         return _decorate({
-            "model": local_candidate or "qwen2.5-coder",
-            "reason": "Lokal Ollama-modell hårdkodad för penetrationstest (molnmodeller blockerar pentester p.g.a. policy).",
+            "model": default_local,
+            "reason": "Lokal Llama-modell hårdkodad för penetrationstest (molnmodeller blockerar pentester p.g.a. policy).",
             "task_type": task_type
         }, task_type)
 
@@ -180,8 +196,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "task_type": task_type
             }, task_type)
         return _decorate({
-            "model": local_candidate or "deepseek-r1",
-            "reason": "Lokal resonemangsmodell valdes för säkerhetsfix (offline-läge).",
+            "model": default_local,
+            "reason": "Lokal Llama-modell valdes för säkerhetsfix (offline-läge).",
             "task_type": task_type
         }, task_type)
 
@@ -194,8 +210,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "task_type": task_type
             }, task_type)
         return _decorate({
-            "model": local_candidate or "qwen2.5-coder",
-            "reason": "Lokal modell valdes för refaktorisering (offline).",
+            "model": default_local,
+            "reason": "Lokal Llama-modell valdes för refaktorisering (offline).",
             "task_type": task_type
         }, task_type)
 
@@ -209,8 +225,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "task_type": task_type
             }, task_type)
         return _decorate({
-            "model": local_candidate or "qwen2.5-coder",
-            "reason": "Lokal kodmodell valdes för testskrivning.",
+            "model": default_local,
+            "reason": "Lokal Llama-modell valdes för testskrivning.",
             "task_type": task_type
         }, task_type)
 
@@ -220,7 +236,7 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
         if local_candidate and prefer_local:
             return _decorate({
                 "model": local_candidate,
-                "reason": "Lokal modell valdes för minimalistisk Ponytail-kodstädning.",
+                "reason": "Lokal Llama-modell valdes för minimalistisk Ponytail-kodstädning.",
                 "task_type": task_type
             }, task_type)
         if agy_ok:
@@ -230,8 +246,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "task_type": task_type
             }, task_type)
         return _decorate({
-            "model": local_candidate or "llama3.2",
-            "reason": "Lokal modell valdes för förenklingsgranskning.",
+            "model": default_local,
+            "reason": "Lokal Llama-modell valdes för förenklingsgranskning.",
             "task_type": task_type
         }, task_type)
 
@@ -244,8 +260,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 "task_type": task_type
             }, task_type)
         return _decorate({
-            "model": local_candidate or "qwen2.5-coder",
-            "reason": "Lokal modell valdes för formateringsfix.",
+            "model": default_local,
+            "reason": "Lokal Llama-modell valdes för formateringsfix.",
             "task_type": task_type
         }, task_type)
 
@@ -258,8 +274,8 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
         }, task_type)
 
     return _decorate({
-        "model": local_candidate or "qwen2.5-coder",
-        "reason": "Lokal Ollama-modell valdes.",
+        "model": default_local,
+        "reason": "Lokal Llama-modell valdes.",
         "task_type": task_type
     }, task_type)
 

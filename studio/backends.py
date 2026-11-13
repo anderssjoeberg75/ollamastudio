@@ -50,25 +50,38 @@ def backend_url(label):
 
 
 def _backend_is_alive(url, timeout=0.8):
-    """Snabb kontroll om en Ollama-instans svarar på nätverket."""
+    """Snabb kontroll om en Ollama- eller llama-server-instans svarar på nätverket."""
     if not url:
         return False
+    base = url.rstrip("/")
+    # 1. Prova Ollama /api/version
     try:
-        req = urllib.request.Request(url.rstrip("/") + "/api/version")
+        req = urllib.request.Request(base + "/api/version")
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status == 200
+            if resp.status == 200:
+                return True
     except Exception:
-        return False
+        pass
+    # 2. Prova llama-server endpoints (/health, /props, /v1/models)
+    for ep in ("/health", "/props", "/v1/models"):
+        try:
+            req = urllib.request.Request(base + ep)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status in (200, 204):
+                    return True
+        except Exception:
+            pass
+    return False
 
 
 def select_optimal_backend(preferred_url=None):
-    """Väljer den mest optimala Ollama-backend/GPU-instansen som är tillgänglig.
+    """Väljer den mest optimala Ollama/llama-server backend/GPU-instansen som är tillgänglig.
 
     Prioriterar:
-    1. Instanser på GPU med Flash Attention / KV-cache-optimeringar (t.ex. port 11436).
+    1. Instanser på llama-server eller GPU med optimeringar (t.ex. port 8080 eller 11436).
     2. Instanser på nyare GPU med mer VRAM (t.ex. GPU 1 / RTX 3060 framför GPU 0 / GTX 1070).
-    3. Auto-upptäckt: om primär URL är port 11434, kontrolleras om port 11436 eller 11435
-       finns på samma värd och är igång.
+    3. Auto-upptäckt: om primär URL är port 11434, kontrolleras om port 8080 (llama-server),
+       11436 eller 11435 finns på samma värd och är igång.
     4. Faller tillbaka på primär backend om inget annat är tillgängligt.
     """
     g = globals()
@@ -77,13 +90,16 @@ def select_optimal_backend(preferred_url=None):
     if preferred_url and _backend_is_alive(preferred_url):
         return preferred_url
 
-    # Auto-upptäckt: om vi har en instans på port 11434 och inga separata GPU-instanser
-    # är listade, kolla om GPU 1-instanserna (11436 tuned och 11435) finns på samma värd.
+    # Auto-upptäckt: om vi har en instans på port 11434 eller 8080
     known_urls = {b.get("url") or "" for b in backends_list}
     expanded = list(backends_list)
     for b in backends_list:
         url = b.get("url") or ""
         if ":11434" in url:
+            u_llama = url.replace(":11434", ":8080")
+            if u_llama not in known_urls:
+                expanded.append({"label": "Llama Server", "url": u_llama, "gpu": "0"})
+                known_urls.add(u_llama)
             u_tuned = url.replace(":11434", ":11436")
             if u_tuned not in known_urls:
                 expanded.append({"label": "GPU 1 tuned", "url": u_tuned, "gpu": "1"})
@@ -101,8 +117,11 @@ def select_optimal_backend(preferred_url=None):
         gpu = str(b.get("gpu") or "")
         score = 0
 
-        # Port 11436 / tuned / flash attention (optimalast – snabbast GPU & optimerad)
-        if ":11436" in url or "tuned" in label or "flash" in label:
+        # Llama Server (högsta prioritet när llama-server önskas framför ollama)
+        if ":8080" in url or "llama_server" in label or "llama-server" in label or (label.startswith("llama") and not label.startswith("ollama")):
+            score += 1200
+        # Port 11436 / tuned / flash attention (snabbast GPU & optimerad)
+        elif ":11436" in url or "tuned" in label or "flash" in label:
             score += 1000
         # Port 11435 / GPU 1 (RTX 3060 m.fl.)
         elif ":11435" in url or "gpu 1" in label or gpu == "1":
@@ -115,7 +134,7 @@ def select_optimal_backend(preferred_url=None):
 
         scored.append((score, url))
 
-    # Sortera fallande efter poäng (bästa hårdvaran först)
+    # Sortera fallande efter poäng (bästa hårdvaran/llama först)
     scored.sort(key=lambda x: x[0], reverse=True)
 
     # Välj den högst rankade som svarar

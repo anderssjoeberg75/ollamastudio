@@ -1,17 +1,18 @@
-# Modellprioritering: Lokala Ollama-modeller och Gratismodeller i Första Hand
+# Modellprioritering: Lokala Llama- och Ollama-modeller i Första Hand
 
 När agenter och specialistverktyg används inom detta projekt och i Ollama Studio Codex gäller strikt följande prioritetsordning för val av LLM:
 
-## 1. Prioritet 1: Lokala Ollama-modeller (Lokal GPU / CPU)
-- **Huvudregel:** Lokala modeller ska **alltid** prioriteras i första hand för alla agentuppgifter när de finns tillgängliga i miljön.
+## 1. Prioritet 1: Lokala Llama- & Ollama-modeller (Llama-server / Ollama, Lokal GPU / CPU)
+- **Huvudregel:** Lokala modeller ska **alltid** prioriteras i första hand för alla agentuppgifter när de finns tillgängliga i miljön, med Llama-familjen som förstahandsval.
+- **Backend:** Stöd för både llama-server (llama.cpp) och Ollama.
 - **Modeller:**
-  - Kodning, refaktorisering, linter och buggfixar: `qwen2.5-coder` (14b, 7b), `deepseek-coder`, `codellama`.
-  - Resonemang, algoritmer och logisk analys: `deepseek-r1` (8b, 14b).
-  - Ponytail, förenkling, YAGNI och död kod: `llama3.2`, `qwen2.5-coder`, `mistral`.
+  - Kodning, refaktorisering, linter och buggfixar: `llama3.2`, `llama3.1`, `codellama`, `qwen2.5-coder`.
+  - Resonemang, algoritmer och logisk analys: `llama3.1`, `deepseek-r1`.
+  - Ponytail, förenkling, YAGNI och död kod: `llama3.2`, `llama3`, `qwen2.5-coder`.
 - **Fördelar:**
   - 100% lokal dataintegritet och säkerhet.
   - Noll API- och tokenkostnader.
-  - Ingen nätverkslatens eller risk för avbrott mot externa tjänster.
+  - Snabb körning direkt mot lokal hårdvara.
 
 ## 2. Prioritet 2: Kostnadsfria Modeller (Free Tiers & Zero-Cost)
 - Om lämplig lokal modell saknas eller inte är installerad på Ollama-instansen, ska kostnadsfria molnalternativ väljas före betalmodeller:

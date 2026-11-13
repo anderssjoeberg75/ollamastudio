@@ -378,29 +378,33 @@ def _get_active_code_model(base_url=None):
 
 
 def _get_local_ollama_model(base_url=None):
-    """Hämtar alltid en lokal Ollama-modell (aldrig molnmodeller som Claude/Gemini).
+    """Hämtar alltid en lokal Llama/Ollama-modell (aldrig molnmodeller som Claude/Gemini).
 
     Krävs för penetrationstestning (pentest) eftersom molnmodeller blockerar eller
     vägrar utföra pentester p.g.a. sina strikta säkerhets- och användarpolicyer.
     """
     base = base_url or backends.select_optimal_backend()
+    from .llama_bridge import detect_backend_type, llama_server_models
     try:
-        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-            models = data.get("models") or []
-            if models:
-                from .models import select_optimal_model
-                optimal = select_optimal_model(models, task="security")
-                if optimal:
-                    return optimal
-                optimal_code = select_optimal_model(models, task="code")
-                if optimal_code:
-                    return optimal_code
-                return models[0].get("name") or models[0].get("model") or ""
+        if detect_backend_type(base) == "llama_server":
+            models = llama_server_models(base)
+        else:
+            req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                models = data.get("models") or []
+        if models:
+            from .models import select_optimal_model
+            optimal = select_optimal_model(models, task="security")
+            if optimal:
+                return optimal
+            optimal_code = select_optimal_model(models, task="code")
+            if optimal_code:
+                return optimal_code
+            return models[0].get("name") or models[0].get("model") or ""
     except Exception:
         pass
-    return "qwen2.5-coder:latest"
+    return "llama3.2:latest"
 
 
 def _get_best_model_for_task(task_type, text="", labels="", base_url=None):

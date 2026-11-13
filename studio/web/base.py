@@ -75,12 +75,19 @@ class BaseHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _upstream_get(self, path, base=None, timeout=8):
-        req = urllib.request.Request((base or _backends.PRIMARY["url"]) + path)
+        b_url = (base or _backends.PRIMARY["url"]).rstrip("/")
+        from studio.llama_bridge import detect_backend_type, llama_server_models, llama_server_version
+        if detect_backend_type(b_url, timeout=timeout) == "llama_server":
+            if path in ("/api/tags", "/api/models"):
+                return {"models": llama_server_models(b_url, timeout=timeout)}
+            if path in ("/api/version", "/version"):
+                return llama_server_version(b_url, timeout=timeout)
+        req = urllib.request.Request(b_url + path)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def _proxy_stream(self, upstream_path, payload, base=None):
-        """POSTa till en Ollama-backend (eller Antigravity-abonnemang) och strömma NDJSON-svaret rad för rad till webbläsaren."""
+        """POSTa till en Ollama-backend (eller Antigravity / llama-server) och strömma NDJSON-svaret rad för rad till webbläsaren."""
         m_str = str(payload.get("model") or "")
         if m_str.startswith("antigravity:") or m_str.startswith("gemini:") or m_str.startswith("claude:"):
             from studio.antigravity_bridge import AntigravityStream
@@ -89,14 +96,24 @@ class BaseHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._send_json({"error": str(e)}, 502)
         else:
-            try:
-                body = json.dumps(payload).encode()
-                req = urllib.request.Request((base or _backends.PRIMARY["url"]) + upstream_path, data=body,
-                                             method="POST",
-                                             headers={"Content-Type": "application/json"})
-                upstream = urllib.request.urlopen(req, timeout=120)
-            except Exception as e:
-                return self._send_json({"error": str(e)}, 502)
+            b_url = (base or _backends.PRIMARY["url"]).rstrip("/")
+            from studio.llama_bridge import detect_backend_type, LlamaServerStream
+            if detect_backend_type(b_url) == "llama_server" and upstream_path == "/api/chat":
+                try:
+                    upstream = LlamaServerStream(b_url, payload.get("messages") or [],
+                                                 model=payload.get("model"),
+                                                 opts=payload.get("options"))
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 502)
+            else:
+                try:
+                    body = json.dumps(payload).encode()
+                    req = urllib.request.Request(b_url + upstream_path, data=body,
+                                                 method="POST",
+                                                 headers={"Content-Type": "application/json"})
+                    upstream = urllib.request.urlopen(req, timeout=120)
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 502)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
@@ -127,11 +144,16 @@ class BaseHandler(BaseHTTPRequestHandler):
 
     # ---- Chatt med auto-webbsök -----------------------------------------
     def _open_chat_stream(self, messages, model, opts, base):
-        """Öppna en strömmande /api/chat mot en Ollama-backend eller Antigravity."""
+        """Öppna en strömmande chatt mot en Ollama-backend, llama-server eller Antigravity."""
         m_str = str(model or "")
         if m_str.startswith("antigravity:") or m_str.startswith("gemini:") or m_str.startswith("claude:"):
             from studio.antigravity_bridge import AntigravityStream
             return AntigravityStream(messages, m_str)
+
+        b_url = (base or _backends.PRIMARY["url"]).rstrip("/")
+        from studio.llama_bridge import detect_backend_type, LlamaServerStream
+        if detect_backend_type(b_url) == "llama_server":
+            return LlamaServerStream(b_url, messages, model=model, opts=opts)
 
         payload = {"model": model, "messages": messages, "stream": True}
         if opts:
@@ -139,7 +161,7 @@ class BaseHandler(BaseHTTPRequestHandler):
         if keep_alive_value():
             payload["keep_alive"] = keep_alive_value()
         body = json.dumps(payload).encode()
-        req = urllib.request.Request((base or _backends.PRIMARY["url"]) + "/api/chat", data=body,
+        req = urllib.request.Request(b_url + "/api/chat", data=body,
                                      method="POST",
                                      headers={"Content-Type": "application/json"})
         return urllib.request.urlopen(req, timeout=300)
