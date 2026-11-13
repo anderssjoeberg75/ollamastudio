@@ -1,23 +1,33 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ollama Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>__STYLES__</style>
 </head>
 <body>
   <div class="sidebar">
     <div class="logo">
-      <div class="row"><span class="diamond">◆</span><span class="txt">Ollama</span></div>
-      <div class="sub txt">S T U D I O</div>
+      <div class="brand-row" style="display:flex;align-items:center;gap:10px;">
+        <svg class="brand-mark" viewBox="0 0 348 282" style="width:26px;height:26px;flex:none;" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M164 6 L226 6 Q240 6 233.7 18.5 L111.3 261.5 Q105 274 91 274 L24 274 Q10 274 16.5 261.6 L143.5 18.4 Q150 6 164 6 Z" fill="var(--fg)"/>
+          <path d="M225 135 L260 135 Q272 135 277.2 145.8 L332.8 261.2 Q338 272 326 272 L269 272 Q257 272 253.3 260.6 L216.7 146.4 Q213 135 225 135 Z" fill="var(--accent)"/>
+        </svg>
+        <span class="txt" style="font-family:var(--font-display);font-size:17px;font-weight:700;letter-spacing:-0.03em;">STUDIO</span>
+        <span class="badge" style="font-size:10px;padding:2px 6px;border-radius:4px;background:var(--accent-subtle);color:var(--accent);font-family:var(--font-mono);font-weight:600">v1.1</span>
+      </div>
+      <div class="sub txt" style="margin-top:4px;font-size:10.5px;color:var(--subtle);font-family:var(--font-mono);letter-spacing:0.04em;">Your model · Your machine</div>
     </div>
     <div class="nav">
       <a id="nav-models" class="active" onclick="showView('models')"><span class="dot">●</span><span class="label">My Models</span></a>
       <a id="nav-discover" onclick="showView('discover')"><span class="dot">●</span><span class="label">Discover / Install</span></a>
       <a id="nav-chat" onclick="showView('chat')"><span class="dot">●</span><span class="label">Chat</span></a>
       <a id="nav-code" onclick="showView('code')"><span class="dot">●</span><span class="label">Codex</span></a>
-      <a id="nav-schedule" onclick="openScheduleModal()" title="Schedule security and ponytail audits in GitLab"><span class="dot">⏰</span><span class="label">Scheduling</span></a>
+      <a id="nav-schedule" onclick="openScheduleModal()" title="Schedule security and ponytail audits in GitHub"><span class="dot">⏰</span><span class="label">Scheduling</span></a>
       <a id="nav-train" onclick="showView('train')"><span class="dot">●</span><span class="label">AI Training</span></a>
       <a id="nav-system" onclick="showView('system')"><span class="dot">●</span><span class="label">System / GPU</span></a>
       <a id="nav-settings" onclick="showView('settings')"><span class="dot">●</span><span class="label">⚙ Settings</span></a>
@@ -178,7 +188,7 @@
             <button class="btn ghost small" id="codeRepoRemove" onclick="removeRepo()"
                     title="Delete the fetched repo from server disk" style="display:none">🗑 Remove locally</button>
             <button class="btn ghost small" onclick="loadRepos(true)" title="Refresh list">↻</button>
-            <button class="btn ghost small" onclick="openScheduleModal()" title="Schedule recurring security and ponytail audits in GitLab">⏰ Schedule</button>
+            <button class="btn ghost small" onclick="openScheduleModal()" title="Schedule recurring security and ponytail audits in GitHub">⏰ Schedule</button>
             <span class="hint" id="codeRepoHint"></span>
           </div>
           <div id="codeGit" class="code-git" style="display:none">
@@ -229,7 +239,7 @@
             <button class="btn ghost small" onclick="runPonytailAudit()"
                     title="Find over-engineering and unnecessary complexity according to .agents/skills/ponytail-audit/SKILL.md">✂ Ponytail audit</button>
             <button class="btn ghost small" onclick="openScheduleModal()"
-                    title="Schedule recurring security and ponytail audits in GitLab">⏰ Scheduling</button>
+                    title="Schedule recurring security and ponytail audits in GitHub">⏰ Scheduling</button>
             <span class="hint" style="color:var(--faint);font-size:12px">standalone · independent of chat</span>
           </div>
           <div id="codeLocalBar" class="chatbar" style="display:none">
@@ -733,13 +743,13 @@ dpo:      {"prompt": "Explain gravity", "chosen": "Good answer…", "rejected": 
           </div>
 
           <div class="set-row" style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
-            <label style="font-weight:600">🌐 Production server per GitLab project <span class="hint">(bind target environment to repository)</span></label>
+            <label style="font-weight:600">🌐 Production server per repository <span class="hint">(bind target environment to repository)</span></label>
             <p class="hint" style="margin:4px 0 10px">If a repository has a dedicated live environment, configure it here. It is automatically targeted during scheduled and manual security reviews.</p>
             <div style="display:grid;grid-template-columns:1fr 1.2fr 1fr auto;gap:8px;align-items:end">
               <div>
-                <label style="font-size:11px;color:var(--subtle);display:block;margin-bottom:3px">GitLab project</label>
+                <label style="font-size:11px;color:var(--subtle);display:block;margin-bottom:3px">GitHub repository</label>
                 <select id="stSecProjSelect" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 9px;font-size:12px;width:100%">
-                  <option value="">Loading projects…</option>
+                  <option value="">Loading repositories…</option>
                 </select>
               </div>
               <div>
@@ -780,20 +790,20 @@ dpo:      {"prompt": "Explain gravity", "chosen": "Good answer…", "rejected": 
   <div class="overlay" id="scheduleOverlay">
     <div class="modal" style="max-width:680px;width:95%;max-height:90vh;overflow-y:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h3 style="margin:0;display:flex;align-items:center;gap:8px">⏰ Schedule Audits (GitLab)</h3>
+        <h3 style="margin:0;display:flex;align-items:center;gap:8px">⏰ Schedule Audits (GitHub)</h3>
         <button class="btn ghost small" onclick="closeScheduleModal()" style="font-size:16px;line-height:1;padding:4px 8px">✕</button>
       </div>
       <p style="color:var(--subtle);font-size:13px;margin:0 0 16px">
-        Schedule automated security and ponytail reviews for your GitLab projects. Findings are automatically filed as Work Items (Issues) directly in the respective GitLab repository.
+        Schedule automated security and ponytail reviews for your GitHub repositories. Findings are automatically filed as Issues directly in the respective GitHub repository.
       </p>
 
       <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:18px">
         <div style="font-weight:600;font-size:13px;margin-bottom:10px;color:var(--text)">➕ Add new schedule</div>
         <div style="display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:12px;margin-bottom:12px">
           <div>
-            <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">GitLab project</label>
+            <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">GitHub repository</label>
             <select id="schProjectSelect" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font-size:13px">
-              <option value="">Loading projects…</option>
+              <option value="">Loading repositories…</option>
             </select>
           </div>
           <div>
