@@ -7,7 +7,7 @@ Codex and coding agents working in this repository must adhere to the following 
 - **Ponytail Senior Dev Mode**: [`.agents/rules/ponytail.md`](.agents/rules/ponytail.md) — Follow lazy senior dev practices (YAGNI, stdlib first, minimal diffs, no unnecessary abstractions or dependencies).
 - **Compilation / Execution**: [`.agents/rules/compile.md`](.agents/rules/compile.md) — Python virtual environment & runtime instructions.
 - **Accounts & Configuration**: [`.agents/rules/accounts.md`](.agents/rules/accounts.md) — Handling environment variables and local accounts.
-- **GitLab / Version Control**: [`.agents/rules/github.md`](.agents/rules/github.md) — Commit & branch guidelines för GitLab.
+- **GitHub / Version Control**: [`.agents/rules/github.md`](.agents/rules/github.md) — Commit & branch guidelines för GitHub.
 - **Red Team Security Guidelines**: [`.agents/rules/redteam.md`](.agents/rules/redteam.md) — Disciplined red-team protocol, command logging, safety constraints, and chain of command during security testing.
 - **Modellprioritering (Ollama & Gratismodeller)**: [`.agents/rules/model-priority.md`](.agents/rules/model-priority.md) — Lokala Ollama-modeller och kostnadsfria modeller prioriteras alltid i första hand vid körning av agenter och specialistverktyg.
 

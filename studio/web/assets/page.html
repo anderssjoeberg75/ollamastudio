@@ -30,8 +30,8 @@
       <h1 id="title">My Models</h1>
       <div class="right">
         <span id="summary"></span>
-        <button class="btn ghost small" onclick="openScheduleModal()" title="Schedule recurring security and ponytail audits in GitLab">⏰ Scheduling</button>
-        <button class="btn ghost small" onclick="updateApp()" title="Fetches latest code from GitLab, restarts the server and refreshes the view">↻ Update</button>
+        <button class="btn ghost small" onclick="openScheduleModal()" title="Schedule recurring security and ponytail audits in GitHub">⏰ Scheduling</button>
+        <button class="btn ghost small" onclick="updateApp()" title="Fetches latest code from GitHub, restarts the server and refreshes the view">↻ Update</button>
       </div>
     </div>
 
@@ -168,8 +168,7 @@
         <div class="code-main">
           <div id="codeRepoBar" class="code-repobar" style="display:none">
             <select id="codeRepoProvider" onchange="onProviderChange()" style="max-width:115px;padding:6px 8px;font-size:12.5px;font-weight:600">
-              <option value="gitlab">🦊 GitLab</option>
-              <option value="github">🐙 GitHub</option>
+              <option value="github" selected>🐙 GitHub</option>
             </select>
             <select id="codeRepoSelect" onchange="onRepoPick()">
               <option value="">Loading…</option>
