@@ -25,7 +25,7 @@ def self_update():
     if not os.path.isdir(os.path.join(d, ".git")):
         return {"ok": False,
                 "output": "Appmappen (%s) är inget git-repo – kan inte hämta uppdateringar. "
-                          "Klona projektet från GitHub för att kunna uppdatera härifrån." % d,
+                          "Klona projektet från GitLab för att kunna uppdatera härifrån." % d,
                 "restart": False}
     try:
         r = subprocess.run(["git", "pull", "--ff-only"], cwd=d,

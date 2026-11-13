@@ -158,12 +158,12 @@ async function waitForServer(){
 }
 
 async function updateApp(){
-  if(!confirm('Fetch the latest code from GitHub and restart Ollama Studio?\n\n'
+  if(!confirm('Fetch the latest code from GitLab and restart Ollama Studio?\n\n'
             + 'If there is new code, the server will restart and the page will reload – ongoing chat '
             + 'or Codex runs will be interrupted. If everything is already up to date, no restart occurs.')){
     return;
   }
-  setStatus('Fetching latest code from GitHub…', 'var(--amber)');
+  setStatus('Fetching latest code from GitLab…', 'var(--amber)');
   let res;
   try{
     const r = await api('/api/self-update', {method:'POST', headers: headers(true)});
