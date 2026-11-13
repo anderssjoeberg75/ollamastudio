@@ -1,8 +1,8 @@
-"""Schemaläggare för återkommande granskningar i GitLab.
+"""Schemaläggare för återkommande granskningar i GitHub/GitLab.
 
 Låter användaren schemalägga automatiska säkerhets- och ponytail-genomgångar
-av valda GitLab-projekt. Granskningen körs i bakgrunden via Codex-protokollet,
-och varje identifierat fynd sparas som ett Work Item (Issue) i GitLab.
+av valda repon. Granskningen körs i bakgrunden via Codex-protokollet,
+och varje identifierat fynd sparas som ett Issue i repot (GitHub eller GitLab).
 """
 import datetime
 import json
@@ -27,10 +27,46 @@ from .codex.context import (
 from .codex.gitlab import (
     extract_findings_from_text, gitlab_create_issue, gitlab_fetch_repo
 )
+from .codex.github import (
+    github_create_issue, github_fetch_repo, github_list_issues,
+    github_close_issue, github_comment_issue
+)
 from .codex.permissions import AgentRun, RepeatGuard
 from .codex.protocol import (
     agent_system_prompt, agent_tool_exec, parse_tool_call, strip_edits
 )
+
+def _create_repo_issue(title, description="", labels=None, project_slug=None):
+    slug = (project_slug or "").strip().lower()
+    is_github = ("github.com" in slug) or (setting_str("github_token") and "/" in slug and not slug.startswith("http://") and not slug.startswith("https://"))
+    if is_github and setting_str("github_token"):
+        return github_create_issue(title, description=description, labels=labels, project_slug=project_slug)
+    return gitlab_create_issue(title, description=description, labels=labels, project_slug=project_slug)
+
+def _close_repo_issue(issue_iid, project_slug=None):
+    slug = (project_slug or "").strip().lower()
+    is_github = ("github.com" in slug) or (setting_str("github_token") and "/" in slug and not slug.startswith("http://") and not slug.startswith("https://"))
+    if is_github and setting_str("github_token"):
+        return github_close_issue(issue_iid, project_slug=project_slug)
+    from .codex.gitlab import gitlab_close_issue
+    return gitlab_close_issue(issue_iid, project_slug=project_slug)
+
+def _comment_repo_issue(issue_iid, note, project_slug=None):
+    slug = (project_slug or "").strip().lower()
+    is_github = ("github.com" in slug) or (setting_str("github_token") and "/" in slug and not slug.startswith("http://") and not slug.startswith("https://"))
+    if is_github and setting_str("github_token"):
+        return github_comment_issue(issue_iid, note, project_slug=project_slug)
+    from .codex.gitlab import gitlab_comment_issue
+    return gitlab_comment_issue(issue_iid, note, project_slug=project_slug)
+
+def _list_repo_issues(project_slug=None, state="opened"):
+    slug = (project_slug or "").strip().lower()
+    is_github = ("github.com" in slug) or (setting_str("github_token") and "/" in slug and not slug.startswith("http://") and not slug.startswith("https://"))
+    if is_github and setting_str("github_token"):
+        gh_state = "open" if state in ("opened", "open") else "all"
+        return github_list_issues(project_slug=project_slug, state=gh_state)
+    from .codex.gitlab import gitlab_list_issues
+    return gitlab_list_issues(project_slug=project_slug, state=state)
 
 _running_jobs = set()
 _running_lock = threading.Lock()
@@ -606,7 +642,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                 title = args.get("title") or args.get("titel") or ""
                 desc = args.get("description") or args.get("desc") or ""
                 labels = args.get("labels") or "security"
-                ok, res = gitlab_create_issue(title, desc, labels=labels, project_slug=project_slug)
+                ok, res = _create_repo_issue(title, desc, labels=labels, project_slug=project_slug)
                 if ok:
                     ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
                 result = ("OK: Skapade issue %s" if ok else "FEL: %s") % res
@@ -638,7 +674,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
         if msg and not getattr(ctx, "issues_created", 0):
             findings = extract_findings_from_text(msg)
             for f in findings:
-                ok, res = gitlab_create_issue(
+                ok, res = _create_repo_issue(
                     f["title"], f["description"],
                     labels=f.get("labels"), project_slug=project_slug
                 )
@@ -652,12 +688,11 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
 
 
 def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
-    """Hämtar öppna GitLab-issues (fynd) för projektet, väljer optimal modell och åtgärdar dem."""
+    """Hämtar öppna issues (fynd) för projektet, väljer optimal modell och åtgärdar dem."""
     from .codex.router import select_best_model_for_task
-    from .codex.gitlab import gitlab_list_issues, gitlab_close_issue, gitlab_comment_issue
     from .codex.gitops import git_commit_all, git_diff_text, git_push
 
-    issues = gitlab_list_issues(project_slug=project_slug, state="opened")
+    issues = _list_repo_issues(project_slug=project_slug, state="opened")
     if not issues:
         return 0, []
 
@@ -742,24 +777,24 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             )
             ok_commit, _ = git_commit_all(commit_msg)
             if ok_commit:
-                gitlab_close_issue(iid, project_slug=project_slug)
+                _close_repo_issue(iid, project_slug=project_slug)
                 ok_push, push_err = git_push()
                 resolved_count += 1
                 if status_cb:
                     push_msg = " och pushad" if ok_push else (" (push: %s)" % push_err)
-                    status_cb("Fynd #%s åtgärdat, commitat%s och stängt i GitLab!" % (iid, push_msg))
+                    status_cb("Fynd #%s åtgärdat, commitat%s och stängt i repot!" % (iid, push_msg))
         else:
             low_resp = (resp_text or "").lower()
             if any(k in low_resp for k in ("redan_åtgärdad", "already_resolved", "redan åtgärdat", "redan löst", "redan implementerats", "inte längre ett problem")):
-                gitlab_comment_issue(
+                _comment_repo_issue(
                     iid,
                     f"Automatisk verifiering (modell {chosen_model}): Detta fynd är redan åtgärdat eller överflödigt i källkoden. Stänger issue.",
                     project_slug=project_slug
                 )
-                gitlab_close_issue(iid, project_slug=project_slug)
+                _close_repo_issue(iid, project_slug=project_slug)
                 resolved_count += 1
                 if status_cb:
-                    status_cb("Fynd #%s redan åtgärdat i koden – stängt i GitLab." % iid)
+                    status_cb("Fynd #%s redan åtgärdat i koden – stängt i repot." % iid)
 
     if resolved_count > 0:
         git_push()
@@ -782,7 +817,7 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
 
 def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_pentest=True,
                        status_cb=None, prod_server="", prod_token="", sec_mode="safe", run_resolve=False):
-    """Kör hela granskningen mot ett GitLab-projekt och sparar fynden som GitLab Work Items.
+    """Kör hela granskningen mot ett valt repo (GitHub eller GitLab) och sparar fynden som Issues.
 
     Modellval:
     - Pentest: HÅRDKODAT att ALLTID köras med en lokal Ollama-modell (eftersom
@@ -790,9 +825,10 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     - Övriga moment (säkerhetsgranskning, ponytail, resolve): Körs med bästa
       modellen som finns att tillgå (Claude Sonnet 5.5, Gemini Flash eller lokal).
     """
-    token = setting_str("gitlab_token")
-    if not token:
-        return False, "Ingen GitLab-token konfigurerad under ⚙ Inställningar", 0, 0
+    token_gh = setting_str("github_token")
+    token_gl = setting_str("gitlab_token")
+    if not token_gh and not token_gl:
+        return False, "Ingen GitHub- eller GitLab-token konfigurerad under ⚙ Inställningar", 0, 0
 
     base_url = backends.select_optimal_backend()
     sec_model = _get_best_model_for_task("security", text="Säkerhetsgranskning SAST", labels="security", base_url=base_url)

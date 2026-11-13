@@ -317,3 +317,182 @@ def github_create_pr(title, body, base=None, head=None):
         return False, "GitHub HTTP %d: %s" % (e.code, msg or "kunde inte skapa PR")
     except Exception as e:
         return False, str(e)
+
+
+def github_create_issue(title, description="", labels=None, project_slug=None):
+    """Skapa ett Issue via GitHub REST API v3/v4. Returnerar (ok, url_eller_fel)."""
+    token = setting_str("github_token") or os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return False, "Ingen GitHub-token angiven (⚙ Inställningar)"
+
+    slug = (project_slug or "").strip()
+    if not slug:
+        owner, repo = git_remote_slug()
+        if owner and repo:
+            slug = f"{owner}/{repo}"
+    if not slug:
+        return False, "Hittar inte GitHub-repo (origin måste peka på ett GitHub-repo)"
+
+    if "/" not in slug:
+        return False, f"Ogiltigt GitHub-repo format: {slug}"
+
+    owner, repo = slug.split("/", 1)
+    payload_dict = {
+        "title": title or "Säkerhetsfynd",
+        "body": description or ""
+    }
+    if labels:
+        if isinstance(labels, str):
+            payload_dict["labels"] = [l.strip() for l in labels.split(",") if l.strip()]
+        elif isinstance(labels, list):
+            payload_dict["labels"] = labels
+
+    payload = json.dumps(payload_dict).encode("utf-8")
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues"
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "OllamaStudio"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return True, data.get("html_url", "Issue skapad")
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode("utf-8")).get("message", "")
+        except Exception:
+            msg = ""
+        return False, f"GitHub HTTP {e.code}: {msg or 'kunde inte skapa Issue'}"
+    except Exception as e:
+        return False, str(e)
+
+
+def github_list_issues(project_slug=None, state="open", max_items=200):
+    """Lista issues från GitHub för ett repo med stöd för paginering."""
+    token = setting_str("github_token") or os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return []
+
+    slug = (project_slug or "").strip()
+    if not slug:
+        owner, repo = git_remote_slug()
+        if owner and repo:
+            slug = f"{owner}/{repo}"
+    if not slug or "/" not in slug:
+        return []
+
+    owner, repo = slug.split("/", 1)
+    all_issues = []
+    page = 1
+    while len(all_issues) < max_items:
+        per_page = min(100, max_items - len(all_issues))
+        url = f"{GITHUB_API}/repos/{owner}/{repo}/issues?state={state}&per_page={per_page}&page={page}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": "Bearer " + token,
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "OllamaStudio"
+            }
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if not data or not isinstance(data, list):
+                break
+            for item in data:
+                # Filtrera bort PRs då GitHub API listar PRs som issues också
+                if "pull_request" in item:
+                    continue
+                all_issues.append({
+                    "id": item.get("id"),
+                    "iid": item.get("number"),
+                    "title": item.get("title", ""),
+                    "description": item.get("body", "") or "",
+                    "web_url": item.get("html_url", ""),
+                    "labels": [lbl.get("name") if isinstance(lbl, dict) else str(lbl) for lbl in item.get("labels", [])],
+                    "state": item.get("state", "open")
+                })
+            if len(data) < per_page:
+                break
+            page += 1
+        except Exception:
+            break
+    return all_issues
+
+
+def github_comment_issue(issue_number, note, project_slug=None):
+    """Lägg till en kommentar på ett issue i GitHub."""
+    token = setting_str("github_token") or os.environ.get("GITHUB_TOKEN", "")
+    if not token or not note:
+        return False, "Ingen token eller anteckning"
+
+    slug = (project_slug or "").strip()
+    if not slug:
+        owner, repo = git_remote_slug()
+        if owner and repo:
+            slug = f"{owner}/{repo}"
+    if not slug or "/" not in slug:
+        return False, "Inget repo-slug"
+
+    owner, repo = slug.split("/", 1)
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{issue_number}/comments"
+    payload = json.dumps({"body": note}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "OllamaStudio"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status in (200, 201), "Kommentar sparad"
+    except Exception as e:
+        return False, str(e)
+
+
+def github_close_issue(issue_number, project_slug=None):
+    """Stäng ett issue i GitHub när det har åtgärdats."""
+    token = setting_str("github_token") or os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        return False, "Ingen GitHub-token"
+
+    slug = (project_slug or "").strip()
+    if not slug:
+        owner, repo = git_remote_slug()
+        if owner and repo:
+            slug = f"{owner}/{repo}"
+    if not slug or "/" not in slug:
+        return False, "Inget repo-slug"
+
+    owner, repo = slug.split("/", 1)
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{issue_number}"
+    payload = json.dumps({"state": "closed"}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        method="PATCH",
+        headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "OllamaStudio"
+        }
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status in (200, 201), "Stängd"
+    except Exception as e:
+        return False, str(e)

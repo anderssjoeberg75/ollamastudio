@@ -1893,10 +1893,10 @@ async function populateSecProjectSelect(){
   if(!sel || sel._loaded) return;
   sel._loaded = true;
   try{
-    const r = await api('/api/gitlab/repos');
+    const r = await api('/api/github/repos');
     const d = await r.json();
     const repos = d.repos || [];
-    let html = '<option value="">-- Select GitLab project --</option>';
+    let html = '<option value="">-- Select GitHub repository --</option>';
     for(const repo of repos){
       const slug = repo.slug || repo.name;
       html += `<option value="${esc(slug)}">${esc(slug)}</option>`;
@@ -1911,14 +1911,14 @@ async function populateSecProjectSelect(){
       if(tokEl) tokEl.value = '';
     };
   }catch(e){
-    sel.innerHTML = '<option value="">Could not load projects</option>';
+    sel.innerHTML = '<option value="">Could not load repositories</option>';
   }
 }
 async function saveProjectTarget(){
   const sel = document.getElementById('stSecProjSelect');
   const project = (sel ? sel.value : '').trim();
   if(!project){
-    toast('Select a GitLab project first', true);
+    toast('Select a GitHub repository first', true);
     return;
   }
   const server = (document.getElementById('stSecProjServer').value || '').trim();
@@ -3477,16 +3477,16 @@ function closeScheduleModal(){
 async function populateScheduleProjects(){
   const sel = document.getElementById('schProjectSelect');
   if(!sel) return;
-  sel.innerHTML = '<option value="">Loading projects from GitLab…</option>';
+  sel.innerHTML = '<option value="">Loading repositories from GitHub…</option>';
   try{
-    const r = await api('/api/gitlab/repos');
+    const r = await api('/api/github/repos');
     const d = await r.json();
     const repos = d.repos || [];
     if(!repos.length){
-      sel.innerHTML = '<option value="">No GitLab projects found (verify GitLab token under ⚙ Settings)</option>';
+      sel.innerHTML = '<option value="">No GitHub repositories found (verify GitHub token under ⚙ Settings)</option>';
       return;
     }
-    let html = '<option value="">-- Select GitLab project --</option>';
+    let html = '<option value="">-- Select GitHub repository --</option>';
     for(const repo of repos){
       const slug = repo.slug || repo.name;
       html += `<option value="${escSch(slug)}">${escSch(slug)}</option>`;
@@ -3521,7 +3521,7 @@ async function populateScheduleProjects(){
       }
     };
   }catch(e){
-    sel.innerHTML = '<option value="">Could not load GitLab projects: ' + escSch(e.message) + '</option>';
+    sel.innerHTML = '<option value="">Could not load GitHub repositories: ' + escSch(e.message) + '</option>';
   }
 }
 
@@ -3740,7 +3740,7 @@ async function addScheduleJob(){
   const sel = document.getElementById('schProjectSelect');
   const project = (sel ? sel.value : '').trim();
   if(!project){
-    toast('Select a GitLab project first', true);
+    toast('Select a GitHub repository first', true);
     return;
   }
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;

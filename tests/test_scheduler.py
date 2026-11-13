@@ -224,7 +224,7 @@ class TestScheduler(unittest.TestCase):
         mock_setting.return_value = ""
         ok, msg, sec, pny = run_headless_audit("org/repo")
         self.assertFalse(ok)
-        self.assertIn("Ingen GitLab-token", msg)
+        self.assertTrue("Ingen GitLab-token" in msg or "Ingen GitHub- eller GitLab-token" in msg)
         self.assertEqual(sec, 0)
         self.assertEqual(pny, 0)
 
