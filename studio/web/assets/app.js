@@ -93,6 +93,60 @@ function applyPrefs(){
       try { localStorage.setItem('os_preview_stage_height', P.preview_height); } catch(e){}
     }
   }
+  if(typeof updateSavedCost==='function') updateSavedCost();
+
+  // Synka konversationer från SQLite om tillgängliga
+  if(P.conversations){
+    try {
+      const parsed = JSON.parse(P.conversations);
+      if(Array.isArray(parsed) && parsed.length >= conversations.length){
+        conversations = parsed;
+        persistConvos(false); // spara lokalt utan att posta tillbaka
+        renderConvoSelect();
+      }
+    }catch(e){}
+  }
+  if(P.active_convo && (!currentConvoId || currentConvoId !== P.active_convo)){
+    const c = conversations.find(x=>x.id === P.active_convo);
+    if(c){
+      chatMessages = JSON.parse(JSON.stringify(c.messages || []));
+      currentConvoId = c.id;
+      setActiveConvo(c.id, false);
+      renderChat();
+      renderConvoSelect();
+    }
+  }
+
+  // Synka Codex-meddelanden från SQLite
+  if(P.code_messages && (!codeMessages || !codeMessages.length)){
+    try {
+      const parsedCode = JSON.parse(P.code_messages);
+      if(Array.isArray(parsedCode) && parsedCode.length){
+        codeMessages = parsedCode;
+        saveCodeMsgs(false);
+        restoreCodeLog();
+      }
+    }catch(e){}
+  }
+
+  // Synka UI dimensioner och tema från SQLite
+  if(P.theme){
+    document.documentElement.setAttribute('data-theme', P.theme);
+    try { localStorage.setItem('os_theme', P.theme); } catch(e){}
+  }
+  if(P.preview_width){
+    const previewPane = document.getElementById('previewPane');
+    if(previewPane) previewPane.style.width = P.preview_width + 'px';
+    try { localStorage.setItem('os_preview_width', P.preview_width); } catch(e){}
+  }
+  if(P.preview_height){
+    const previewStage = document.getElementById('previewStage');
+    if(previewStage){
+      previewStage.style.flex = 'none';
+      previewStage.style.height = P.preview_height + 'px';
+      try { localStorage.setItem('os_preview_stage_height', P.preview_height); } catch(e){}
+    }
+  }
 }
 let systemTimer = null;    // intervall för System-vyn
 let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
@@ -161,9 +215,9 @@ function humanDate(s){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'My Models', discover:'Discover / Install', chat:'Chat', system:'System / GPU', settings:'Settings', code:'Codex', train:'AI Training'};
+const TITLES = {models:'My Models', discover:'Discover / Install', chat:'Chat', system:'System / GPU', settings:'Settings', code:'Codex', train:'AI Training', github:'GitHub'};
 function showView(v){
-  for(const k of ['models','discover','chat','system','settings','code','train']){
+  for(const k of ['models','discover','chat','system','settings','code','train','github']){
     const navBtn = document.getElementById('nav-'+k);
     if(navBtn) navBtn.classList.toggle('active', v===k);
     const viewEl = document.getElementById('view-'+k);
@@ -181,6 +235,7 @@ function showView(v){
   if(v==='discover'){ renderCatalog(); }
   if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>{ const ci = document.getElementById('chatInput'); if(ci) ci.focus(); }, 0); }
   if(v==='settings'){ loadSettingsForm(); }
+  if(v==='github'){ loadGitHubView(); }
   if(v==='code'){
     updateCodeView();
     if(cfg.code){
@@ -4174,6 +4229,223 @@ async function launchPentest(runImmediately){
     setTimeout(() => {
       sendAgent();
     }, 200);
+  }
+}
+
+/* ---- GitHub Repositories & Workspace View ---- */
+let ghViewRepos = [];
+let ghViewLocal = [];
+
+async function loadGitHubView(force = false){
+  const sel = document.getElementById('ghRepoSelect');
+  const banner = document.getElementById('ghStatusBanner');
+  if(!sel) return;
+  if(ghViewRepos.length && !force){
+    renderGhViewRepos();
+    return;
+  }
+  sel.innerHTML = '<option value="">Loading GitHub repositories…</option>';
+  try {
+    const r = await api('/api/github/repos');
+    const d = await r.json();
+    ghViewRepos = d.repos || [];
+    ghViewLocal = d.local || [];
+    if(d.error){
+      if(banner){
+        banner.style.display = 'block';
+        banner.style.background = 'rgba(239, 68, 68, 0.1)';
+        banner.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+        banner.style.color = '#ef4444';
+        banner.innerHTML = '⚠ ' + esc(d.error) + ' &mdash; Add or verify your GitHub Token under <a href="#" onclick="showView(\'settings\');return false" style="font-weight:600;text-decoration:underline">⚙ Settings</a>.';
+      }
+    } else {
+      if(banner){
+        banner.style.display = 'block';
+        banner.style.background = 'rgba(34, 197, 94, 0.1)';
+        banner.style.border = '1px solid rgba(34, 197, 94, 0.3)';
+        banner.style.color = '#22c55e';
+        banner.innerHTML = '✓ GitHub connected (' + ghViewRepos.length + ' remote repositories available, ' + ghViewLocal.length + ' cloned locally).';
+      }
+    }
+    renderGhViewRepos(d.current);
+  } catch(e){
+    sel.innerHTML = '<option value="">Failed to load repositories: ' + esc(e.message) + '</option>';
+  }
+}
+
+function renderGhViewRepos(currentWs){
+  const sel = document.getElementById('ghRepoSelect');
+  if(!sel) return;
+  const options = [];
+  const seen = new Set();
+  (ghViewRepos || []).forEach(r => {
+    seen.add(r.slug);
+    options.push({slug: r.slug, desc: r.desc, priv: r.private});
+  });
+  (ghViewLocal || []).forEach(lr => {
+    if(!seen.has(lr.slug)){
+      options.push({slug: lr.slug, desc: '📁 Cloned on server', priv: false});
+    }
+  });
+
+  if(!options.length){
+    sel.innerHTML = '<option value="">No repositories found. Enter a custom repo URL on the right.</option>';
+    onGhRepoSelectChange();
+    return;
+  }
+
+  sel.innerHTML = '<option value="">-- Choose repository --</option>' + options.map(r => 
+    `<option value="${esc(r.slug)}">${esc(r.slug)}${r.priv ? ' 🔒' : ''}${r.desc ? ' – ' + esc(r.desc) : ''}</option>`
+  ).join('');
+
+  // Auto-select active repo if matched
+  const curSlug = (document.getElementById('codeRepoSelect') || {}).value;
+  if(curSlug && options.some(o => o.slug === curSlug)){
+    sel.value = curSlug;
+  }
+  onGhRepoSelectChange();
+}
+
+function onGhRepoSelectChange(){
+  const sel = document.getElementById('ghRepoSelect');
+  const slug = sel ? sel.value : '';
+  const detailsEl = document.getElementById('ghRepoDetails');
+  const actionsEl = document.getElementById('ghRepoActions');
+  const badgeEl = document.getElementById('ghCloneStatusBadge');
+
+  if(!slug){
+    if(detailsEl) detailsEl.innerHTML = 'Select a repository from the list above or enter a repository URL.';
+    if(actionsEl) actionsEl.innerHTML = '';
+    if(badgeEl) { badgeEl.textContent = 'none'; badgeEl.className = 'tele-pill'; }
+    loadGhIssues('open', '');
+    return;
+  }
+
+  const local = (ghViewLocal || []).find(l => l.slug === slug);
+  if(badgeEl){
+    badgeEl.textContent = local ? 'cloned' : 'remote only';
+    badgeEl.className = 'tele-pill ' + (local ? 'ok' : '');
+  }
+
+  if(detailsEl){
+    let info = `<strong>Repository:</strong> <a href="https://github.com/${esc(slug)}" target="_blank" style="color:var(--accent);text-decoration:underline">${esc(slug)} ↗</a><br>`;
+    if(local){
+      info += `<strong>Local server path:</strong> <code>${esc(local.path)}</code><br>`;
+      info += `<strong>Active Branch:</strong> ${esc(local.branch || 'main')} &middot; `;
+      info += local.dirty ? `<span style="color:var(--warning)">${local.dirty} uncommitted changes</span>` : `<span style="color:var(--green)">clean</span>`;
+    } else {
+      info += `<em>Repository is currently only remote on GitHub. Click "Fetch / Clone" to download to Ollama Studio workspace.</em>`;
+    }
+    detailsEl.innerHTML = info;
+  }
+
+  if(actionsEl){
+    actionsEl.innerHTML = `
+      <button class="btn accent small" onclick="openRepoInCodex('${esc(slug)}')"><i class="ph ph-code"></i> Open in Codex IDE</button>
+      <button class="btn small" onclick="cloneOrPullGhRepo('${esc(slug)}')"><i class="ph ph-download-simple"></i> ${local ? 'Pull latest' : 'Clone to Studio'}</button>
+      <a class="btn ghost small" href="https://github.com/${esc(slug)}" target="_blank"><i class="ph ph-arrow-square-out"></i> View on GitHub</a>
+    `;
+  }
+
+  loadGhIssues('open', slug);
+}
+
+async function cloneOrPullGhRepo(slug){
+  if(!slug) return;
+  toast('Fetching repository ' + slug + '…');
+  try {
+    const r = await api('/api/github/fetch', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({repo: slug})
+    });
+    const d = await r.json();
+    if(d.ok){
+      toast('Repository updated on disk: ' + (d.target || slug));
+      await loadGitHubView(true);
+      const sel = document.getElementById('ghRepoSelect');
+      if(sel) sel.value = slug;
+      onGhRepoSelectChange();
+    } else {
+      toast('Failed to clone: ' + (d.message || 'unknown error'), true);
+    }
+  } catch(e){
+    toast('Clone request failed: ' + e.message, true);
+  }
+}
+
+function openRepoInCodex(slug){
+  if(!slug) return;
+  const codeSelect = document.getElementById('codeRepoSelect');
+  if(codeSelect){
+    codeSelect.value = slug;
+    if(typeof onRepoPick === 'function') onRepoPick();
+  }
+  showView('code');
+  toast('Switched Codex IDE workspace to ' + slug);
+}
+
+async function fetchCustomGhRepo(){
+  const inp = document.getElementById('ghCustomRepoInp');
+  const val = inp ? inp.value.trim() : '';
+  if(!val){
+    toast('Please enter a GitHub repository slug (e.g. owner/repo)', true);
+    return;
+  }
+  await cloneOrPullGhRepo(val);
+  if(inp) inp.value = '';
+}
+
+async function loadGhIssues(state = 'open', overrideSlug = null){
+  const container = document.getElementById('ghIssuesContainer');
+  if(!container) return;
+  const sel = document.getElementById('ghRepoSelect');
+  const slug = overrideSlug !== null ? overrideSlug : (sel ? sel.value : '');
+
+  if(!slug){
+    container.innerHTML = '<div style="color:var(--fg-subtle);font-size:13px;padding:14px;text-align:center">Select a GitHub repository to load issues and vulnerability reports.</div>';
+    return;
+  }
+
+  container.innerHTML = '<div style="color:var(--fg-muted);font-size:13px;padding:12px;text-align:center">Fetching ' + state + ' issues for ' + esc(slug) + ' from GitHub…</div>';
+
+  try {
+    const r = await api(`/api/github/issues?repo=${encodeURIComponent(slug)}&state=${encodeURIComponent(state)}`);
+    const d = await r.json();
+    const issues = d.issues || [];
+
+    if(!issues.length){
+      container.innerHTML = `<div style="color:var(--fg-muted);font-size:13px;padding:14px;text-align:center;background:var(--bg-sunken);border-radius:8px">No ${state} issues found in <strong>${esc(slug)}</strong>. Everything looks clean!</div>`;
+      return;
+    }
+
+    let html = '';
+    issues.forEach(iss => {
+      const labels = (iss.labels || []).map(l => `<span class="comp-chip" style="font-size:10.5px;padding:2px 6px">${esc(l)}</span>`).join(' ');
+      const isSec = (iss.title || '').includes('PENTEST') || (iss.title || '').includes('SECURITY') || (iss.labels || []).some(l => /security|cwe|bug|audit/i.test(l));
+      const icon = isSec ? '🛡️' : '⚠';
+      html += `
+        <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px;color:var(--fg);margin-bottom:4px">
+              ${icon} <a href="${esc(iss.web_url)}" target="_blank" style="color:var(--fg);text-decoration:none">#${iss.iid} ${esc(iss.title)} ↗</a>
+            </div>
+            <div style="font-size:12px;color:var(--fg-muted);margin-bottom:6px;max-height:48px;overflow:hidden;text-overflow:ellipsis">
+              ${esc(iss.description ? iss.description.slice(0, 180) + '…' : '(no description)')}
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+              ${labels}
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+            <a href="${esc(iss.web_url)}" target="_blank" class="btn small ghost" style="font-size:11px;padding:3px 8px">GitHub ↗</a>
+          </div>
+        </div>
+      `;
+    });
+    container.innerHTML = html;
+  } catch(e){
+    container.innerHTML = `<div style="color:var(--danger);font-size:13px;padding:12px;text-align:center">Error loading issues: ${esc(e.message)}</div>`;
   }
 }
 

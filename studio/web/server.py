@@ -35,7 +35,7 @@ from studio.codex.commands import (
     code_run_allowlist, code_run_enabled, run_command)
 from studio.codex.github import (
     code_repos_root, github_create_pr, github_fetch_repo, github_list_repos,
-    local_repos, remove_local_repo)
+    github_list_issues, local_repos, remove_local_repo)
 from studio.codex.gitlab import (
     gitlab_create_mr, gitlab_fetch_repo, gitlab_list_repos)
 from studio.codex.gitops import (
@@ -145,6 +145,12 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     return self._send_json({"path": rel, "content": ws_current(rel)})
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
+            if path == "/api/github/issues":
+                slug = query.get("repo", [""])[0].strip()
+                state = query.get("state", ["open"])[0].strip()
+                issues = github_list_issues(project_slug=slug, state=state)
+                return self._send_json({"issues": issues, "repo": slug})
+
             if path in ("/api/github/repos", "/api/gitlab/repos"):
                 if not code_toggle_on():
                     return self._send_json({"repos": [], "error": "Codex är av"}, 400)

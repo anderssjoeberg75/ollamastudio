@@ -46,9 +46,9 @@
           <span class="sp-left"><i class="ph ph-compass"></i> <span>Install / Hub</span></span>
           <span class="sp-badge">hf/ollama</span>
         </button>
-        <button class="session-pill" id="nav-schedule" onclick="openScheduleModal()" title="Schedule recurring audits in GitHub">
-          <span class="sp-left"><i class="ph ph-clock"></i> <span>Audits (GitHub)</span></span>
-          <span class="sp-badge">cron</span>
+        <button class="session-pill" id="nav-github" onclick="showView('github')" title="GitHub Repositories, Issues & Pull Requests">
+          <span class="sp-left"><i class="ph ph-github-logo"></i> <span>GitHub</span></span>
+          <span class="sp-badge">repos</span>
         </button>
         <button class="session-pill" id="nav-pentest" onclick="openPentestModal()" title="Run interactive red-team penetration test with WhiteRabbitNeo">
           <span class="sp-left"><i class="ph ph-shield-warning" style="color:#a855f7"></i> <span>Pentest Suite</span></span>
@@ -388,6 +388,81 @@
 
       <!-- VIEW: SYSTEM -->
       <div id="view-system" class="view hidden"><div id="systemBody"></div></div>
+
+      <!-- VIEW: GITHUB -->
+      <div id="view-github" class="view hidden" style="padding:16px 20px">
+        <div style="max-width:960px;margin:0 auto">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+            <div>
+              <h2 style="margin:0 0 4px;display:flex;align-items:center;gap:8px"><i class="ph ph-github-logo"></i> <span>GitHub Workspaces &amp; Repos</span></h2>
+              <p style="margin:0;font-size:13px;color:var(--subtle)">Explore, clone, and manage your connected GitHub repositories and issues directly in Ollama Studio.</p>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn ghost small" onclick="openScheduleModal()" title="Automated background audit schedule"><i class="ph ph-clock"></i> <span>Audit Schedule</span></button>
+              <button class="btn accent small" onclick="loadGitHubView(true)"><i class="ph ph-arrows-clockwise"></i> <span>Refresh Repos</span></button>
+            </div>
+          </div>
+
+          <!-- GitHub status bar -->
+          <div id="ghStatusBanner" style="display:none;padding:10px 14px;border-radius:10px;margin-bottom:16px;font-size:13px"></div>
+
+          <!-- Repository Selector & Stats Grid -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px" class="gh-grid-row">
+            <div class="card" style="padding:16px">
+              <div style="font-weight:600;font-size:14px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+                <i class="ph ph-git-branch"></i> <span>Active Repository</span>
+              </div>
+              <select id="ghRepoSelect" onchange="onGhRepoSelectChange()" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-sunken);color:var(--fg);font-size:13px;margin-bottom:10px">
+                <option value="">Loading repositories…</option>
+              </select>
+              <div id="ghRepoDetails" style="font-size:12.5px;color:var(--fg-muted);line-height:1.5">
+                Select a repository to view branches, clone status, and inspect issues.
+              </div>
+              <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap" id="ghRepoActions">
+                <!-- Action buttons (Open in Codex, Clone, Pull, Web URL) -->
+              </div>
+            </div>
+
+            <div class="card" style="padding:16px">
+              <div style="font-weight:600;font-size:14px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+                <span style="display:flex;align-items:center;gap:6px"><i class="ph ph-git-pull-request"></i> <span>Quick Git Actions</span></span>
+                <span class="tele-pill" id="ghCloneStatusBadge">ready</span>
+              </div>
+              <p style="font-size:12.5px;color:var(--fg-muted);margin:0 0 12px">
+                Clone to server disk, switch branches, or create pull requests with Codex agents.
+              </p>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;gap:8px">
+                  <input id="ghCustomRepoInp" placeholder="owner/repo or https://github.com/..." style="flex:1;padding:7px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-sunken);color:var(--fg);font-size:12.5px">
+                  <button class="btn small" onclick="fetchCustomGhRepo()">Clone / Open</button>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+                  <button class="btn small ghost" onclick="showView('settings')"><i class="ph ph-gear"></i> <span>GitHub Token</span></button>
+                  <button class="btn small ghost" onclick="openScheduleModal()"><i class="ph ph-clock"></i> <span>Schedule Audits</span></button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Issues & Audit Findings List -->
+          <div class="card" style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+              <div style="font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px">
+                <i class="ph ph-warning-circle"></i> <span>Repository Issues &amp; Audit Reports</span>
+              </div>
+              <div style="display:flex;gap:6px">
+                <button class="btn small ghost" onclick="loadGhIssues('open')">Open Issues</button>
+                <button class="btn small ghost" onclick="loadGhIssues('all')">All</button>
+              </div>
+            </div>
+            <div id="ghIssuesContainer" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
+              <div style="color:var(--fg-subtle);font-size:13px;padding:14px;text-align:center">
+                Select a GitHub repository above to load issues and vulnerability reports.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- VIEW: SETTINGS -->
       <div id="view-settings" class="view hidden">
