@@ -1847,32 +1847,32 @@ async function loadAntigravityStatus(){
       const modelsHtml = (d.models || []).map(m => `<span style="display:inline-block;padding:2px 8px;border-radius:6px;background:var(--card);border:1px solid var(--border);margin:2px 4px 2px 0;font-size:12px">✨ <b>${esc(m)}</b></span>`).join('');
 
       details.innerHTML = `
-        <div style="color:var(--green);font-weight:600;margin-bottom:6px">✓ Google Antigravity &amp; Claude är anslutet och redo!</div>
-        <div style="color:var(--subtle);font-size:12px;margin-bottom:6px">Motor: <code>${esc(d.bin || 'agy')}</code></div>
-        <div style="margin-top:6px">${modelsHtml || 'Inga modeller hittades'}</div>
+        <div style="color:var(--green);font-weight:600;margin-bottom:6px">✓ Google Antigravity &amp; Claude connected and ready!</div>
+        <div style="color:var(--subtle);font-size:12px;margin-bottom:6px">Engine: <code>${esc(d.bin || 'agy')}</code></div>
+        <div style="margin-top:6px">${modelsHtml || 'No models found'}</div>
       `;
     } else if(d.available){
-      badge.textContent = '● Kräver inloggning';
+      badge.textContent = '● Requires login';
       badge.style.background = 'rgba(255,180,84,0.15)';
       badge.style.color = 'var(--amber)';
       details.innerHTML = `
-        <div style="color:var(--amber);font-weight:600;margin-bottom:6px">⚠️ Antigravity är installerad men inte inloggad</div>
-        <div style="color:var(--subtle);font-size:12px;margin-bottom:8px">Status: <i>${esc(d.error || 'Logga in för att se modeller')}</i></div>
-        <div style="font-size:12px">Kör <code>agy</code> i en SSH-terminal på servern en gång för att länka ditt Google-konto.</div>
+        <div style="color:var(--amber);font-weight:600;margin-bottom:6px">⚠️ Antigravity is installed but not logged in</div>
+        <div style="color:var(--subtle);font-size:12px;margin-bottom:8px">Status: <i>${esc(d.error || 'Log in to see models')}</i></div>
+        <div style="font-size:12px">Run <code>agy</code> in an SSH terminal on the server once to link your Google account.</div>
       `;
     } else {
-      badge.textContent = '● Ej installerad';
+      badge.textContent = '● Not installed';
       badge.style.background = 'rgba(255,92,108,0.15)';
       badge.style.color = 'var(--danger)';
       details.innerHTML = `
-        <div style="color:var(--danger);font-weight:600;margin-bottom:6px">✗ Antigravity CLI hittades inte</div>
-        <div style="color:var(--subtle);font-size:12px">Kunde inte hitta 'agy' i systemets sökvägar på servern.</div>
+        <div style="color:var(--danger);font-weight:600;margin-bottom:6px">✗ Antigravity CLI not found</div>
+        <div style="color:var(--subtle);font-size:12px">Could not find 'agy' in server PATH.</div>
       `;
     }
   } catch(e) {
-    badge.textContent = 'Fel';
+    badge.textContent = 'Error';
     badge.style.color = 'var(--danger)';
-    details.textContent = 'Kunde inte hämta status: ' + e.message;
+    details.textContent = 'Could not fetch status: ' + e.message;
   }
 }
 
@@ -1880,7 +1880,7 @@ async function pingAntigravity(){
   const resEl = document.getElementById('agyPingResult');
   const btn = document.getElementById('btnAgyPing');
   if(!resEl) return;
-  resEl.textContent = '⏳ Testar Gemini & Claude…';
+  resEl.textContent = '⏳ Testing Gemini & Claude…';
   if(btn) btn.disabled = true;
 
   try {
@@ -1889,10 +1889,10 @@ async function pingAntigravity(){
     if(d.ok){
       resEl.innerHTML = `<span style="color:var(--green);font-weight:600">✓ ${esc(d.message)}</span>`;
     } else {
-      resEl.innerHTML = `<span style="color:var(--danger)">✗ Test misslyckades: ${esc(d.error || 'okänt fel')}</span>`;
+      resEl.innerHTML = `<span style="color:var(--danger)">✗ Test failed: ${esc(d.error || 'unknown error')}</span>`;
     }
   } catch(e){
-    resEl.innerHTML = `<span style="color:var(--danger)">✗ Nätverksfel: ${esc(e.message)}</span>`;
+    resEl.innerHTML = `<span style="color:var(--danger)">✗ Network error: ${esc(e.message)}</span>`;
   } finally {
     if(btn) btn.disabled = false;
   }
@@ -4298,15 +4298,15 @@ async function executeDockChat(userText) {
   const uRow = document.createElement('div');
   uRow.className = 'term-line cmd';
   uRow.style.color = 'var(--fg)';
-  uRow.innerHTML = `<span style="color:var(--accent);font-weight:bold">&gt; Du:</span> ${esc(userText)}`;
+  uRow.innerHTML = `<span style="color:var(--accent);font-weight:bold">&gt; You:</span> ${esc(userText)}`;
   scrollArea.appendChild(uRow);
 
   // Add assistant placeholder row
   const aRow = document.createElement('div');
   aRow.className = 'term-line output';
   aRow.style.marginBottom = '8px';
-  const modelName = (document.getElementById('chatModel') && document.getElementById('chatModel').value) || 'Modell';
-  aRow.innerHTML = `<span style="color:#10b981;font-weight:bold">&gt; ${esc(modelName)}:</span> <span class="dock-ans">tänker…</span>`;
+  const modelName = (document.getElementById('chatModel') && document.getElementById('chatModel').value) || 'Model';
+  aRow.innerHTML = `<span style="color:#10b981;font-weight:bold">&gt; ${esc(modelName)}:</span> <span class="dock-ans">thinking…</span>`;
   scrollArea.appendChild(aRow);
   scrollArea.scrollTop = scrollArea.scrollHeight;
 
@@ -4366,12 +4366,12 @@ async function executeDockChat(userText) {
     }
 
     if (!fullReply) {
-      ansSpan.textContent = 'Inget svar.';
+      ansSpan.textContent = 'No response.';
     } else {
       dockChatHistory.push({ role: 'assistant', content: fullReply });
     }
   } catch (err) {
-    ansSpan.textContent = '[Fel: ' + err.message + ']';
+    ansSpan.textContent = '[Error: ' + err.message + ']';
     ansSpan.style.color = '#ef4444';
   }
   scrollArea.scrollTop = scrollArea.scrollHeight;
@@ -4415,7 +4415,7 @@ function clearTerminalOutput() {
     const el = document.getElementById(id);
     if (el) {
       if (id === 'termOutputChat') {
-        el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[chat]</span> Snabbchatt rensad.</div>';
+        el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[chat]</span> Quick chat cleared.</div>';
         dockChatHistory = [];
       } else {
         el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[system]</span> Cleared.</div>';
@@ -4680,11 +4680,11 @@ function updateSavedCost(currentConvoTokens) {
     } else {
       el.textContent = savedSEK.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
     }
-    el.title = `${totalAll.toLocaleString()} tokens bearbetade lokalt (~${(totalAll * 0.000009).toFixed(2)} USD sparat jämfört med Anthropic Claude 3.5 Sonnet)`;
+    el.title = `${totalAll.toLocaleString()} tokens processed locally (~${(totalAll * 0.000009).toFixed(2)} USD saved compared to Anthropic Claude 3.5 Sonnet)`;
 
     const tokEl = document.getElementById('totalTokensUsed');
     if (tokEl) {
-      tokEl.textContent = totalAll.toLocaleString('sv-SE') + ' tokens totalt';
+      tokEl.textContent = totalAll.toLocaleString('en-US') + ' tokens total';
     }
   } catch(e) {}
 }
