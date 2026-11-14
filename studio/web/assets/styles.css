@@ -759,10 +759,12 @@ html, body {
 .floating-composer {
   width: 100%;
   max-width: 780px;
-  background: var(--bg-raised);
+  background: var(--ath-glass-panel);
+  backdrop-filter: var(--ath-blur);
+  -webkit-backdrop-filter: var(--ath-blur);
   border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: var(--shadow-composer);
+  box-shadow: var(--shadow-composer), inset 0 1px 0 var(--ath-rim);
   padding: 12px 14px 10px;
   display: flex;
   flex-direction: column;
