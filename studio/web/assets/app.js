@@ -4013,17 +4013,163 @@ const _origPopulateChatModels = typeof populateChatModels === 'function' ? popul
 if (_origPopulateChatModels) {
   populateChatModels = function() {
     _origPopulateChatModels.apply(this, arguments);
-    try {
-      const origSelect = document.getElementById('chatModel');
-      const teleSelect = document.getElementById('teleModelSelect');
-      const compSelect = document.getElementById('composerModelSelect');
-      if (origSelect) {
-        if (teleSelect) teleSelect.innerHTML = origSelect.innerHTML;
-        if (compSelect) compSelect.innerHTML = origSelect.innerHTML;
-        if (teleSelect) teleSelect.value = origSelect.value;
-        if (compSelect) compSelect.value = origSelect.value;
-      }
-    } catch(e) {}
+    syncModelSelectors();
   };
 }
+
+function syncModelSelectors() {
+  try {
+    const origSelect = document.getElementById('chatModel');
+    const teleSelect = document.getElementById('teleModelSelect');
+    const compSelect = document.getElementById('composerModelSelect');
+    const teleName = document.getElementById('teleModelName');
+    const compName = document.getElementById('composerModelName');
+    if (origSelect) {
+      if (teleSelect) {
+        teleSelect.innerHTML = origSelect.innerHTML;
+        teleSelect.value = origSelect.value;
+      }
+      if (compSelect) {
+        compSelect.innerHTML = origSelect.innerHTML;
+        compSelect.value = origSelect.value;
+      }
+      const val = origSelect.value || 'No model';
+      if (teleName) teleName.textContent = val;
+      if (compName) compName.textContent = val;
+    }
+  } catch(e) {}
+}
+
+function onTeleModelSelect(sel) {
+  const orig = document.getElementById('chatModel');
+  if (orig && sel) {
+    orig.value = sel.value;
+    orig.dispatchEvent(new Event('change'));
+    syncModelSelectors();
+  }
+}
+
+function onComposerModelChange(sel) {
+  const orig = document.getElementById('chatModel');
+  if (orig && sel) {
+    orig.value = sel.value;
+    orig.dispatchEvent(new Event('change'));
+    syncModelSelectors();
+  }
+}
+
+// Live Telemetry updater for Topbar pills & Context Gauge
+function updateTelemetry(stats) {
+  try {
+    // 1. Model name
+    const curModel = (document.getElementById('chatModel') || {}).value || '';
+    const teleName = document.getElementById('teleModelName');
+    const compName = document.getElementById('composerModelName');
+    if (teleName && curModel) teleName.textContent = curModel;
+    if (compName && curModel) compName.textContent = curModel;
+
+    // 2. Speed (tokens/s)
+    const spdEl = document.getElementById('teleSpeed');
+    if (spdEl) {
+      if (stats && stats.tps) {
+        spdEl.textContent = stats.tps.toFixed(0) + ' t/s';
+      } else if (stats && stats.eval_count && stats.eval_duration) {
+        const tps = stats.eval_count / (stats.eval_duration / 1e9);
+        spdEl.textContent = tps.toFixed(0) + ' t/s';
+      }
+    }
+
+    // 3. Latency
+    const latEl = document.getElementById('teleLatency');
+    if (latEl) {
+      if (stats && stats.prompt_eval_duration) {
+        latEl.textContent = (stats.prompt_eval_duration / 1e6).toFixed(0) + 'ms';
+      } else if (stats && stats.secs) {
+        latEl.textContent = (stats.secs * 1000).toFixed(0) + 'ms';
+      } else if (stats && stats.total_duration) {
+        latEl.textContent = (stats.total_duration / 1e6).toFixed(0) + 'ms';
+      }
+    }
+
+    // 4. Context memory from chat settings / tokens
+    const ctxVal = (document.getElementById('csCtx') || {}).value;
+    const ctxEl = document.getElementById('teleCtx');
+    if (ctxEl) {
+      if (ctxVal) {
+        const num = parseInt(ctxVal, 10);
+        ctxEl.textContent = (num >= 1024) ? Math.round(num / 1024) + 'k' : num;
+      }
+    }
+
+    // 5. Total tokens / memory widget in sidebar
+    const memPct = document.getElementById('memPct');
+    if (memPct) {
+      const maxCtx = parseInt(ctxVal, 10) || 8192;
+      let totalTokens = 0;
+      chatMessages.forEach(m => {
+        if (m.stats && m.stats.tokens) totalTokens += m.stats.tokens;
+        else if (m.content) totalTokens += Math.round(m.content.length / 4);
+      });
+      const pct = Math.min(100, Math.round((totalTokens / maxCtx) * 100));
+      memPct.textContent = pct + '%';
+    }
+  } catch(e) {}
+}
+
+// Update GPU VRAM percentage from /api/system
+async function updateVramTelemetry() {
+  try {
+    const r = await fetch('/api/system', {headers: headers(false)});
+    if (!r.ok) return;
+    const s = await r.json();
+    lastSystem = s;
+    if (s && s.gpus && s.gpus.length) {
+      let totalUsed = 0, totalMem = 0;
+      s.gpus.forEach(g => {
+        totalUsed += (g.mem_used_mb || 0);
+        totalMem += (g.mem_total_mb || 0);
+      });
+      if (totalMem > 0) {
+        const pct = Math.round((totalUsed / totalMem) * 100);
+        const vramEl = document.getElementById('teleVram');
+        if (vramEl) vramEl.textContent = pct + '%';
+      }
+    } else if (s && s.mem && s.mem.total) {
+      const pct = Math.round((s.mem.used / s.mem.total) * 100);
+      const vramEl = document.getElementById('teleVram');
+      if (vramEl) vramEl.textContent = pct + '% (RAM)';
+    }
+  } catch(e) {}
+}
+
+// Background poll for VRAM telemetry every 5s
+setInterval(updateVramTelemetry, 5000);
+updateVramTelemetry();
+
+// Hook into chat rendering/completion to update throughput & latency
+const _origRenderChat = typeof renderChat === 'function' ? renderChat : null;
+if (_origRenderChat) {
+  renderChat = function() {
+    _origRenderChat.apply(this, arguments);
+    if (chatMessages && chatMessages.length) {
+      for (let i = chatMessages.length - 1; i >= 0; i--) {
+        if (chatMessages[i].role === 'assistant' && chatMessages[i].stats) {
+          updateTelemetry(chatMessages[i].stats);
+          break;
+        }
+      }
+    }
+    updateTelemetry();
+  };
+}
+
+// Hook chatModel changes to keep telemetry in sync
+const chatModelEl = document.getElementById('chatModel');
+if (chatModelEl) {
+  chatModelEl.addEventListener('change', () => {
+    syncModelSelectors();
+    updateTelemetry();
+  });
+}
+
 

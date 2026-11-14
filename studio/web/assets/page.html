@@ -117,24 +117,24 @@
       <div class="topbar-telemetry">
         <div class="tele-pill model-pill" title="Active Model">
           <i class="ph ph-gear"></i>
-          <span id="teleModelName">Qwen2.5-77B-Q4_K_M</span>
+          <span id="teleModelName">–</span>
           <select id="teleModelSelect" onchange="onTeleModelSelect(this)"></select>
         </div>
-        <div class="tele-pill" title="Throughput speed">
+        <div class="tele-pill" title="Throughput speed (last response)">
           <i class="ph ph-lightning" style="color:var(--accent)"></i>
-          <span id="teleSpeed">884 t/s</span>
+          <span id="teleSpeed">– t/s</span>
         </div>
-        <div class="tele-pill" title="GPU VRAM">
+        <div class="tele-pill" title="GPU VRAM Usage">
           <i class="ph ph-brain" style="color:var(--purple)"></i>
-          <span id="teleVram">42%</span>
+          <span id="teleVram">–%</span>
         </div>
-        <div class="tele-pill" title="Latency">
+        <div class="tele-pill" title="Latency / Duration">
           <span>~</span>
-          <span id="teleLatency">164ms</span>
+          <span id="teleLatency">–ms</span>
         </div>
-        <div class="tele-pill" title="Context memory">
+        <div class="tele-pill" title="Context memory (configured / used)">
           <span>ctx</span>
-          <span id="teleCtx">19k.2</span>
+          <span id="teleCtx">8k</span>
         </div>
       </div>
 
@@ -228,7 +228,7 @@
                 </div>
                 <div class="composer-model-pill" id="composerModelPill">
                   <span>✦</span>
-                  <span id="composerModelName">Omni 6 27B</span>
+                  <span id="composerModelName">–</span>
                   <select id="composerModelSelect" onchange="onComposerModelChange(this)"></select>
                 </div>
                 <button class="send-arrow-btn" id="chatSend" type="button">
