@@ -39,6 +39,7 @@ function applyPrefs(){
   // Modeller/GPU sätts av populate-funktionerna som läser uiPrefs
   populateChatModels(); populateBackends(); populateCodeModels();
   if(typeof updateChatWarning==='function') updateChatWarning();
+  if(typeof updateSavedCost==='function') updateSavedCost();
 }
 let systemTimer = null;    // intervall för System-vyn
 let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
@@ -4625,6 +4626,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTermInputListeners('termInputShell', 'termOutputShell');
   setupDockChatListeners();
   initPaneResizers();
+  updateSavedCost();
 });
 
 // Also run immediately in case DOM is already loaded
@@ -4633,6 +4635,7 @@ setTimeout(() => {
   setupTermInputListeners('termInputShell', 'termOutputShell');
   setupDockChatListeners();
   initPaneResizers();
+  updateSavedCost();
 }, 100);
 
 function setupDockChatListeners() {
