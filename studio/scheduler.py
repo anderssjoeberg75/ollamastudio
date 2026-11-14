@@ -707,7 +707,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
             })
             continue
 
-        # Applicera eventuella filblock (*** FIL: sökväg ... *** SLUT) som modellen returnerat
+        # Applicera eventuella filblock (*** FILE: sökväg ... *** END) som modellen returnerat
         from .codex.protocol import parse_edits
         edits = parse_edits(full)
         if edits:

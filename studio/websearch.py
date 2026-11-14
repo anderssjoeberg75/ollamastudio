@@ -111,7 +111,8 @@ def _strip_html(s):
 
 def _ddg_real_url(href):
     """DuckDuckGo länkar via en redirect (…/l/?uddg=<url>). Plocka ut riktiga URL:en."""
-    m = re.search(r"[?&]uddg=([^&]+)", href or "")
+    href = href or ""
+    m = re.search(r"[?&]uddg=([^&]+)", href)
     if m:
         return urllib.parse.unquote(m.group(1))
     if href.startswith("//"):

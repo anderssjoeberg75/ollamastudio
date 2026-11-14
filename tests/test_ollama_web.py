@@ -168,6 +168,7 @@ class TestWebSearchParsing(unittest.TestCase):
         self.assertEqual(
             w._ddg_real_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fex.se%2Fa&rut=x"),
             "https://ex.se/a")
+        self.assertEqual(w._ddg_real_url(None), "")      # tål None utan att krascha
 
     def test_extract_query(self):
         self.assertEqual(w.extract_search_query("SEARCH: population of Sweden 2025"),
@@ -460,6 +461,15 @@ class TestCodeAssistant(_DBTest):
         self.assertEqual(w.parse_tool_call("TOOL git_status")["name"], "git_status")
         self.assertIsNone(w.parse_tool_call("ingen tool här"))
         self.assertIsNone(w.parse_tool_call('TOOL rm_rf {"path": "/"}'))   # okänt namn
+
+    def test_recover_garbled_tool_args_keeps_unquoted_scalars(self):
+        # Ociterade tal och booleans tappades förut i fallback-läget.
+        a = w.recover_garbled_tool_args("search", 'query="foo" regex=false limit=5')
+        self.assertEqual(a["query"], "foo")
+        self.assertIs(a["regex"], False)          # inte sanningssträngen "false"
+        self.assertEqual(a["limit"], 5)           # int, som i JSON-vägen
+        b = w.recover_garbled_tool_args("read_file", 'path="app.py" start=12')
+        self.assertEqual(b["start"], 12)
 
     def test_permission_modes_decide_what_needs_an_ok(self):
         run = w.AgentRun(lambda ev: None, "ask")

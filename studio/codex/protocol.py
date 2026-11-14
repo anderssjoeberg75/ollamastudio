@@ -192,6 +192,25 @@ def strip_think_tags(text):
     return cleaned.strip()
 
 
+def _coerce_scalar(tok):
+    """Tolka ett ociterat JSON-skalär till rätt Python-typ (så t.ex. regex=false blir
+    False, inte sanningssträngen "false", och start=1 blir int 1 som i JSON-vägen)."""
+    low = tok.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low == "null":
+        return None
+    try:
+        return int(tok)
+    except ValueError:
+        try:
+            return float(tok)
+        except ValueError:
+            return tok
+
+
 def recover_garbled_tool_args(name, snippet):
     """Försök rädda argument om modellen skrev trasig JSON eller hybrid-format."""
     if not snippet:
@@ -203,10 +222,18 @@ def recover_garbled_tool_args(name, snippet):
             return json.loads(trimmed + "}")
         except Exception:
             pass
-    # 2. Heuristisk extraktion av nyckel-värde
+    # 2. Heuristisk extraktion av nyckel-värde: citerade strängar ELLER ociterade
+    #    tal/booleans (annars tappades t.ex. {"start": 1} i det här fallback-läget).
     args = {}
-    for m in re.finditer(r'["\']?(\w+)["\']?\s*[:=]\s*["\']([^"\']+)["\']', snippet):
-        args[m.group(1)] = m.group(2)
+    for m in re.finditer(
+            r'["\']?(\w+)["\']?\s*[:=]\s*(?:"([^"]*)"|\'([^\']*)\'|(-?\d+(?:\.\d+)?|true|false|null))',
+            snippet):
+        if m.group(2) is not None:
+            args[m.group(1)] = m.group(2)
+        elif m.group(3) is not None:
+            args[m.group(1)] = m.group(3)
+        else:
+            args[m.group(1)] = _coerce_scalar(m.group(4))
     primary_arg = {
         "read_file": "path", "list_dir": "path", "git_diff": "path",
         "run_command": "cmd", "search": "query", "find_symbol": "name",
