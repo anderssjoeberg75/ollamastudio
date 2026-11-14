@@ -378,6 +378,12 @@ html, body {
   color: var(--fg);
   letter-spacing: -0.02em;
 }
+.cost-widget-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
 
 .memory-widget {
   display: flex;

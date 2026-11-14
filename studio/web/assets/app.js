@@ -2608,6 +2608,14 @@ async function streamModel(convo, onDelta){
       let msg; try{ msg = JSON.parse(line); }catch(e){ continue; }
       const c = msg.message && msg.message.content;
       if(c){ full += c; if(onDelta) onDelta(c); }
+      if(msg.done && msg.eval_count){
+        try {
+          let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
+          cumTokens += (msg.eval_count || 0);
+          localStorage.setItem('os_cum_tokens', cumTokens.toString());
+          updateTelemetry();
+        } catch(e) {}
+      }
     }
   }
   return full;
@@ -4343,6 +4351,14 @@ async function executeDockChat(userText) {
             ansSpan.textContent = fullReply;
             scrollArea.scrollTop = scrollArea.scrollHeight;
           }
+          if (msg.done && msg.eval_count) {
+            try {
+              let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
+              cumTokens += (msg.eval_count || 0);
+              localStorage.setItem('os_cum_tokens', cumTokens.toString());
+              updateTelemetry();
+            } catch(e) {}
+          }
           if (msg.error) {
             throw new Error(msg.error);
           }
@@ -4645,6 +4661,11 @@ function updateSavedCost(currentConvoTokens) {
       el.textContent = savedSEK.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
     }
     el.title = `${totalAll.toLocaleString()} tokens bearbetade lokalt (~${(totalAll * 0.000009).toFixed(2)} USD sparat jämfört med Anthropic Claude 3.5 Sonnet)`;
+
+    const tokEl = document.getElementById('totalTokensUsed');
+    if (tokEl) {
+      tokEl.textContent = totalAll.toLocaleString('sv-SE') + ' tokens totalt';
+    }
   } catch(e) {}
 }
 
