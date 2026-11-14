@@ -8,6 +8,8 @@ import json
 import time
 import urllib.error
 import urllib.request
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 _backend_type_cache = {}  # url -> (timestamp, "ollama"|"llama_server")
 _CACHE_TTL = 30.0
@@ -25,6 +27,7 @@ def is_llama_server(base_url, timeout=1.0):
                 if resp.status in (200, 204):
                     return True
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
     return False
 
@@ -51,6 +54,7 @@ def detect_backend_type(base_url, timeout=1.0, force_refresh=False):
                 _backend_type_cache[base] = (now, "ollama")
                 return "ollama"
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
     # 2. Prova llama-server (/health, /props, /v1/models)
@@ -89,6 +93,7 @@ def llama_server_models(base_url, timeout=5.0):
                             }
                         })
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
     if not models:
@@ -175,6 +180,7 @@ class LlamaServerStream:
                     try:
                         obj = json.loads(content)
                     except Exception:
+                        _log.debug("ignored exception", exc_info=True)
                         continue
 
                     choices = obj.get("choices") or []
@@ -201,4 +207,5 @@ class LlamaServerStream:
             try:
                 self.resp.close()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass

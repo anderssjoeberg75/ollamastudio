@@ -17,6 +17,8 @@ import urllib.request
 
 from .config import APP_DIR, HF, hf_enabled, hf_token
 from .websearch import _strip_html
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -28,6 +30,7 @@ from .websearch import _strip_html
 try:
     from catalog import CATALOG
 except Exception:
+    _log.debug("ignored exception", exc_info=True)
     CATALOG = [  # reservlista (kort) – full katalog finns i catalog.py
         {"pull": "llama3.2",   "name": "Llama 3.2 3B", "size": "~2.0 GB", "tag": "Rekommenderad",
          "desc": "Bra allround-modell för chatt och vardagsuppgifter. Lagom liten."},
@@ -118,6 +121,7 @@ def ollama_library_search(query, limit=20, timeout=8):
             html = resp.read(600000).decode("utf-8", errors="replace")
         found = parse_ollama_library(html, limit)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         found = []
     with _library_lock:
         _library_cache[query.lower()] = (now, found)
@@ -166,6 +170,7 @@ def model_search(query, limit=20):
                 m["source"] = "hf"
             return ranked
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return []
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:

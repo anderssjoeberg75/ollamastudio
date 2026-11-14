@@ -7,6 +7,8 @@ import urllib.request
 
 from .config import OLLAMA_URL
 from .logging_util import get_logger
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 log = get_logger("ollamastudio.backends")
 
@@ -65,6 +67,7 @@ def _backend_is_alive(url, timeout=0.8):
             if resp.status == 200:
                 return True
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     # 2. Prova llama-server endpoints (/props eller /v1/models)
     try:
@@ -78,6 +81,7 @@ def _backend_is_alive(url, timeout=0.8):
                     return False
                 return True
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     for ep in ("/health", "/v1/models"):
         try:
@@ -93,6 +97,7 @@ def _backend_is_alive(url, timeout=0.8):
                             return False
                     return True
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
     return False
 

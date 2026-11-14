@@ -19,6 +19,8 @@ from studio.codex.workspace import ws_current, ws_diff, ws_write_file
 from studio.config import (
     CODE_MODE_LABELS, code_ctx, code_max_steps, code_mode, code_options,
     code_workspace_root, setting_str)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 class CodexRoutes(BaseHandler):
@@ -62,6 +64,7 @@ class CodexRoutes(BaseHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return
 
         if scratch:
@@ -75,6 +78,7 @@ class CodexRoutes(BaseHandler):
                     try:
                         obj = json.loads(raw.decode("utf-8", "replace"))
                     except Exception:
+                        _log.debug("ignored exception", exc_info=True)
                         continue
                     chunk = (obj.get("message") or {}).get("content") or ""
                     if chunk:
@@ -83,6 +87,7 @@ class CodexRoutes(BaseHandler):
                 try:
                     up.close()
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     pass
                 for ed in parse_edits(full):
                     self._emit({"type": "edit", "path": ed["path"], "content": ed["content"],
@@ -128,6 +133,7 @@ class CodexRoutes(BaseHandler):
                         try:
                             obj = json.loads(raw.decode("utf-8", "replace"))
                         except Exception:
+                            _log.debug("ignored exception", exc_info=True)
                             continue
                         if obj.get("ping"):
                             self._emit({"type": "ping"})
@@ -140,6 +146,7 @@ class CodexRoutes(BaseHandler):
                     try:
                         up.close()
                     except Exception:
+                        _log.debug("ignored exception", exc_info=True)
                         pass
 
                 call = parse_tool_call(full)

@@ -14,6 +14,8 @@ import time
 from . import sysinfo
 from .config import (TRAIN, soup_binary, train_resolve, train_toggle_on,
                      train_workspace_root, setting_str)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -78,6 +80,7 @@ class TrainJob:
         try:
             proc.terminate()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return False
         threading.Thread(target=self._kill_later, args=(proc,), daemon=True).start()
         return True
@@ -86,9 +89,11 @@ class TrainJob:
         try:
             proc.wait(timeout=grace)
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             try:
                 proc.kill()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
     # ---- läsning av utdata ----
@@ -119,6 +124,7 @@ class TrainJob:
         try:
             self.proc.stdout.close()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
         self.returncode = self.proc.wait()
         self.ended = time.time()
@@ -208,6 +214,7 @@ def train_gpu_hint():
             if mb > best_mb:
                 best_mb, name = mb, gpu.get("name") or ""
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     return best_mb, name
 

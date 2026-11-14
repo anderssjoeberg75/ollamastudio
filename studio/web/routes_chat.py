@@ -11,6 +11,8 @@ from studio.websearch import (
     WEBSEARCH_ANSWER_INSTRUCTION, WEBSEARCH_INSTRUCTION, WEBSEARCH_MARKER,
     enrich_results, extract_search_query, format_search_context, now_context,
     search_footer, web_search)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 class ChatRoutes(BaseHandler):
@@ -51,6 +53,7 @@ class ChatRoutes(BaseHandler):
                 try:
                     obj = json.loads(raw.decode("utf-8", "replace"))
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     continue
                 if obj.get("done"):
                     last_done = obj
@@ -80,6 +83,7 @@ class ChatRoutes(BaseHandler):
             try:
                 up1.close()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
         if decided != "search":
@@ -97,6 +101,7 @@ class ChatRoutes(BaseHandler):
         try:
             results = web_search(query) if query else []
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             results = []
         # Läs sidorna bakom de bästa träffarna – utdragen räcker sällan för
         # frågor om nuläget (resultat, ledare, priser).
@@ -109,6 +114,7 @@ class ChatRoutes(BaseHandler):
             try:
                 results = enrich_results(results, pages, query)
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
         step2 = ([{"role": "system", "content": WEBSEARCH_ANSWER_INSTRUCTION + " " + now}]
@@ -129,6 +135,7 @@ class ChatRoutes(BaseHandler):
                 try:
                     obj = json.loads(raw.decode("utf-8", "replace"))
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     continue
                 if obj.get("done"):
                     done2 = obj
@@ -141,6 +148,7 @@ class ChatRoutes(BaseHandler):
             try:
                 up2.close()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
         self._emit_content(search_footer(query, results))

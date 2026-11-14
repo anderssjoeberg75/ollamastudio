@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 
 from . import backends
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 UNLOAD_TIMEOUT = 20
 
@@ -61,6 +63,7 @@ def unload_model(base, name, timeout=UNLOAD_TIMEOUT):
             body = json.loads(e.read().decode("utf-8", "replace") or "{}")
             return False, body.get("error") or ("HTTP %s" % e.code)
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return False, "HTTP %s" % e.code
     except Exception as e:
         return False, str(e)
@@ -133,6 +136,7 @@ def _backends_holding_gpu(index):
         from .sysinfo import nvidia_gpus
         gpus, _err = nvidia_gpus()
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return []
     if not gpus:
         return []

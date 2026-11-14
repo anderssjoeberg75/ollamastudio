@@ -9,6 +9,8 @@ import time
 
 from .codex.gitops import git_available
 from . import config
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -63,6 +65,7 @@ def _restart_process():
         sys.stdout.flush()
         sys.stderr.flush()
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     script = os.path.abspath(sys.argv[0])
     os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])

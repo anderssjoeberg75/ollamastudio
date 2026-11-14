@@ -9,6 +9,8 @@ import re
 import threading
 
 from ..config import code_workspace_root
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -340,6 +342,7 @@ def _analysis_changed(rel):
         from .analyze import invalidate
         invalidate(code_workspace_root())
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
 
@@ -404,5 +407,6 @@ def ws_current(rel):
             with open(full, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     return ""

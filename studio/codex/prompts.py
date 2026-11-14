@@ -4,6 +4,8 @@ Innehåller över 900 officiellt extraherade systemprompter från Claude Code
 som referensbibliotek för Codex kodagent, kodgranskning, testning och refaktorisering.
 """
 import os
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 
@@ -48,6 +50,7 @@ def get_prompt(name):
         if wf:
             return wf
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     return None
 
@@ -82,6 +85,7 @@ def search_prompts(query, max_results=20):
                         if len(matches) >= max_results:
                             return matches
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
     # Sök även bland ECC-agenter och skills
@@ -94,6 +98,7 @@ def search_prompts(query, max_results=20):
                 if len(matches) >= max_results:
                     break
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
     return matches

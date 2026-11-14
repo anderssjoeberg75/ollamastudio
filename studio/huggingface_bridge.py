@@ -7,6 +7,8 @@ import json
 import urllib.error
 
 from .config import HF, hf_auto_enabled, hf_enabled, hf_token
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -30,12 +32,14 @@ def _pull_error_text(http_error):
     try:
         body = http_error.read().decode("utf-8", errors="replace")
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         body = ""
     try:
         data = json.loads(body or "null")
         if isinstance(data, dict) and data.get("error"):
             return str(data["error"])
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     body = (body or "").strip()
     return "HTTP %d%s" % (http_error.code, (": " + body[:200]) if body else "")

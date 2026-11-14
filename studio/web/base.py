@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler
 from http.server import BaseHTTPRequestHandler
 from studio import backends as _backends
 from studio.config import TOKEN, keep_alive_value
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 MAX_BODY_BYTES = int(os.environ.get("OLLAMA_STUDIO_MAX_BODY", str(64 * 1024 * 1024)))
@@ -54,6 +56,7 @@ class BaseHandler(BaseHTTPRequestHandler):
                 if origin_host and req_host and origin_host != req_host:
                     return False
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 return False
         else:
             referer = self.headers.get("Referer")
@@ -63,6 +66,7 @@ class BaseHandler(BaseHTTPRequestHandler):
                     if ref_host and req_host and ref_host != req_host:
                         return False
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     return False
         return True
 
@@ -132,6 +136,7 @@ class BaseHandler(BaseHTTPRequestHandler):
             try:
                 upstream.close()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
     def _emit(self, obj):

@@ -20,6 +20,8 @@ from .skills import (get_agent, get_skill, get_workflow, list_agents,
 from .workspace import (CODE_READ_LINES, ws_current, ws_diff, ws_edit_file,
                         ws_edit_file_batch, ws_list_dir, ws_read_file, ws_resolve,
                         ws_search, ws_tree, ws_write_file)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # ---- Agent-protokoll --------------------------------------------------------
@@ -178,6 +180,7 @@ def _json_object_at(text, i):
                 try:
                     return json.loads(text[i:j + 1]), j + 1
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     return None, j + 1
     return None, i
 
@@ -221,6 +224,7 @@ def recover_garbled_tool_args(name, snippet):
         try:
             return json.loads(trimmed + "}")
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
     # 2. Heuristisk extraktion av nyckel-värde: citerade strängar ELLER ociterade
     #    tal/booleans (annars tappades t.ex. {"start": 1} i det här fallback-läget).

@@ -17,6 +17,8 @@ from ..config import code_workspace_root, setting_str, settings_set
 from . import gitops
 from .gitops import (_git, git_available, git_current_branch, git_is_repo,
                      git_remote_slug)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 GITHUB_API = "https://api.github.com"
@@ -41,6 +43,7 @@ def code_repos_root(create=False):
     try:
         path = os.path.realpath(path)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return None
     if create:
         try:
@@ -313,6 +316,7 @@ def github_create_pr(title, body, base=None, head=None):
         try:
             msg = json.loads(e.read().decode("utf-8")).get("message", "")
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             msg = ""
         return False, "GitHub HTTP %d: %s" % (e.code, msg or "kunde inte skapa PR")
     except Exception as e:
@@ -368,6 +372,7 @@ def github_create_issue(title, description="", labels=None, project_slug=None):
         try:
             msg = json.loads(e.read().decode("utf-8")).get("message", "")
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             msg = ""
         return False, f"GitHub HTTP {e.code}: {msg or 'kunde inte skapa Issue'}"
     except Exception as e:
@@ -424,6 +429,7 @@ def github_list_issues(project_slug=None, state="open", max_items=200):
                 break
             page += 1
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             break
     return all_issues
 
