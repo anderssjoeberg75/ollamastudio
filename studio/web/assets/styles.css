@@ -62,7 +62,7 @@
 
   /* ---- ROBURFORMAAI GLASS & WINDOW DESIGN SYSTEM ---- */
   --ath-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.20) 45%), rgba(244, 244, 242, 0.35);
-  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.50), rgba(255, 255, 255, 0.25) 45%), rgba(250, 249, 246, 0.38);
+  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.20) 45%), rgba(244, 244, 242, 0.35);
   --ath-shadow: 0 20px 45px -20px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --ath-rim: rgba(255, 255, 255, 0.8);
   --ath-blur: blur(28px) saturate(150%);
@@ -135,7 +135,7 @@
 
   /* ---- ROBURFORMAAI GLASS & WINDOW DESIGN SYSTEM (Dark) ---- */
   --ath-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01) 45%), rgba(16, 21, 34, 0.30);
-  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.008) 45%), rgba(11, 15, 24, 0.35);
+  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01) 45%), rgba(16, 21, 34, 0.30);
   --ath-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --ath-rim: rgba(255, 255, 255, 0.08);
   --ath-blur: blur(28px) saturate(150%);
@@ -493,9 +493,7 @@ html, body {
   justify-content: space-between;
   padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.4);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: transparent;
   z-index: 5;
 }
 .topbar-left {
@@ -859,9 +857,7 @@ html, body {
   justify-content: space-between;
   padding: 0 12px 0 16px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.4);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: transparent;
 }
 .preview-tabs {
   display: flex;
@@ -894,7 +890,7 @@ html, body {
 .preview-stage {
   flex: 1 1 52%;
   min-height: 220px;
-  background: var(--ath-glass-panel);
+  background: transparent;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -936,7 +932,7 @@ html, body {
   min-height: 180px;
   display: flex;
   flex-direction: column;
-  background: var(--ath-glass);
+  background: transparent;
 }
 .term-tabs-header {
   height: 36px;
@@ -946,10 +942,7 @@ html, body {
   gap: 2px;
   padding: 0 8px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.25);
-}
-[data-theme="dark"] .term-tabs-header {
-  background: rgba(0, 0, 0, 0.2);
+  background: transparent;
 }
 .term-tab {
   font-family: var(--font-sans);
