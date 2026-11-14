@@ -91,6 +91,11 @@ def run_in_sandbox(toks, cwd, timeout=120, env=None, output_cap=20000):
         "--pids-limit", "512",
         "--memory", "2g", "--memory-swap", "2g",
         "--cpus", "2",
+    ]
+    # Opt-in full nätisolering (se inställningen). AV som default så nmap m.fl. funkar.
+    if setting_bool("code_sandbox_isolate_network"):
+        cmd += ["--network", "none"]
+    cmd += [
         "-v", f"{abs_cwd}:/workspace",
         "-w", "/workspace",
     ]

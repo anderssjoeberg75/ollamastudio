@@ -118,6 +118,10 @@ SETTINGS_SPEC = {
     # Docker Sandbox för Codex (Agentor-arkitektur)
     "code_sandbox_enabled": ("OLLAMA_STUDIO_CODE_SANDBOX", "0", "bool", False),
     "code_sandbox_image":   ("OLLAMA_STUDIO_CODE_SANDBOX_IMAGE", "python:3.12-slim", "str", False),
+    # Full nätisolering i sandlådan (--network none). AV som default så att
+    # säkerhetstest-verktyg (nmap m.fl.) fungerar; slå på för att köra opålitlig
+    # kod helt utan nätverk.
+    "code_sandbox_isolate_network": ("OLLAMA_STUDIO_CODE_SANDBOX_NO_NET", "0", "bool", False),
     # MCP-server för att styra Ollama Studio via Model Context Protocol
     "mcp_enabled":          ("OLLAMA_STUDIO_MCP", "1", "bool", False),
     # Stöd för llama-server (llama.cpp)

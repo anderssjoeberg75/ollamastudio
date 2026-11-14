@@ -13,6 +13,7 @@ import tempfile
 import socket
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -169,6 +170,27 @@ class TestWebSearchParsing(unittest.TestCase):
             w._ddg_real_url("//duckduckgo.com/l/?uddg=https%3A%2F%2Fex.se%2Fa&rut=x"),
             "https://ex.se/a")
         self.assertEqual(w._ddg_real_url(None), "")      # tål None utan att krascha
+
+    def test_resolve_public_ip_rejects_private(self):
+        pub = [(2, 1, 6, "", ("93.184.216.34", 0))]
+        priv = [(2, 1, 6, "", ("127.0.0.1", 0))]
+        mixed = [(2, 1, 6, "", ("93.184.216.34", 0)), (2, 1, 6, "", ("10.0.0.5", 0))]
+        with patch("socket.getaddrinfo", return_value=pub):
+            self.assertEqual(ws_mod._resolve_public_ip("example.com"), "93.184.216.34")
+        with patch("socket.getaddrinfo", return_value=priv):
+            with self.assertRaises(ValueError):
+                ws_mod._resolve_public_ip("evil.internal")
+        with patch("socket.getaddrinfo", return_value=mixed):   # en intern IP räcker för att neka
+            with self.assertRaises(ValueError):
+                ws_mod._resolve_public_ip("rebind.example")
+
+    def test_fetch_opener_pins_only_without_proxy(self):
+        with patch("urllib.request.getproxies", return_value={}):
+            types = [type(h).__name__ for h in ws_mod._build_fetch_opener("https").handlers]
+            self.assertIn("_PinnedHTTPSHandler", types)
+        with patch("urllib.request.getproxies", return_value={"https": "http://p:3128"}):
+            types = [type(h).__name__ for h in ws_mod._build_fetch_opener("https").handlers]
+            self.assertNotIn("_PinnedHTTPSHandler", types)
 
     def test_extract_query(self):
         self.assertEqual(w.extract_search_query("SEARCH: population of Sweden 2025"),
@@ -1317,14 +1339,18 @@ class TestPageReading(unittest.TestCase):
                  kwargs={"poll_interval": 0.02}, daemon=True).start()
         self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
         self._old_check = ws_mod.url_is_public
+        self._old_resolve = ws_mod._resolve_public_ip
 
     def tearDown(self):
         ws_mod.url_is_public = self._old_check
+        ws_mod._resolve_public_ip = self._old_resolve
         self.srv.shutdown()
         self.srv.server_close()
 
     def _allow_local(self):
+        # Tillåt den lokala testservern: både förkontrollen och pin-to-IP-steget.
         ws_mod.url_is_public = lambda url: url.startswith("http")
+        ws_mod._resolve_public_ip = lambda host: host
 
     # ---- textutvinning ----
     def test_html_to_text(self):
