@@ -4314,6 +4314,38 @@ async function executeDockChat(userText) {
   scrollArea.scrollTop = scrollArea.scrollHeight;
 }
 
+async function executeTerminalCommand(cmd, outputTargetId) {
+  const scrollArea = document.getElementById(outputTargetId);
+  if (!cmd || !scrollArea) return;
+
+  // Add cmd line
+  const cmdRow = document.createElement('div');
+  cmdRow.className = 'term-line cmd';
+  cmdRow.textContent = `$ ${cmd}`;
+  scrollArea.appendChild(cmdRow);
+  scrollArea.scrollTop = scrollArea.scrollHeight;
+
+  try {
+    const r = await fetch('/api/codex/terminal/run', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({ cmd })
+    });
+    const res = await r.json();
+    const outRow = document.createElement('div');
+    outRow.className = res.ok ? 'term-line output' : 'term-line error';
+    outRow.textContent = res.output !== undefined ? res.output : (res.error || 'Command failed');
+    scrollArea.appendChild(outRow);
+  } catch (err) {
+    const errRow = document.createElement('div');
+    errRow.className = 'term-line error';
+    errRow.textContent = `[error] ${err.message || 'Execution error'}`;
+    scrollArea.appendChild(errRow);
+  }
+
+  scrollArea.scrollTop = scrollArea.scrollHeight;
+}
+
 function clearTerminalOutput() {
   const targets = ['termOutputTerminal', 'termOutputChat', 'termOutputSandbox', 'termOutputBackend', 'termOutputShell', 'termOutputAgentLog'];
   targets.forEach(id => {
