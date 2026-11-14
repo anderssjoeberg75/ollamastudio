@@ -375,7 +375,7 @@ html, body {
   font-family: var(--font-mono);
   font-size: 18px;
   font-weight: 700;
-  color: var(--green);
+  color: var(--fg);
   letter-spacing: -0.02em;
 }
 
