@@ -146,8 +146,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
             if path == "/api/github/issues":
-                slug = query.get("repo", [""])[0].strip()
-                state = query.get("state", ["open"])[0].strip()
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                slug = q.get("repo", [""])[0].strip()
+                state = q.get("state", ["open"])[0].strip()
                 issues = github_list_issues(project_slug=slug, state=state)
                 return self._send_json({"issues": issues, "repo": slug})
 
