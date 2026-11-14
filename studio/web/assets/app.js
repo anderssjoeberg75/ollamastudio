@@ -4415,7 +4415,7 @@ function clearTerminalOutput() {
     const el = document.getElementById(id);
     if (el) {
       if (id === 'termOutputChat') {
-        el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[chat]</span> Quick chat cleared.</div>';
+        el.innerHTML = '';
         dockChatHistory = [];
       } else {
         el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[system]</span> Cleared.</div>';
