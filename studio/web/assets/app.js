@@ -4251,13 +4251,17 @@ async function launchPentest(runImmediately){
   // Automatically switch Codex model to WhiteRabbitNeo for pentest
   const codeModelSel = document.getElementById('codeModel');
   if(codeModelSel){
-    const rabbitOpt = [...codeModelSel.options].find(o => /whiterabbit/i.test(o.value));
-    if(rabbitOpt){
-      codeModelSel.value = rabbitOpt.value;
-      saveCodeModel();
-      const teleComp = document.getElementById('composerModelName');
-      if(teleComp) teleComp.textContent = rabbitOpt.value;
+    let rabbitOpt = [...codeModelSel.options].find(o => /whiterabbit/i.test(o.value));
+    if(!rabbitOpt){
+      rabbitOpt = document.createElement('option');
+      rabbitOpt.value = 'whiterabbitneo';
+      rabbitOpt.textContent = 'whiterabbitneo (Dedicated Pentest)';
+      codeModelSel.appendChild(rabbitOpt);
     }
+    codeModelSel.value = rabbitOpt.value;
+    saveCodeModel();
+    const teleComp = document.getElementById('composerModelName');
+    if(teleComp) teleComp.textContent = rabbitOpt.value;
   }
 
   // Populate Codex Input

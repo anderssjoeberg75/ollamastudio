@@ -478,7 +478,18 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                         if isinstance(m, dict) and m.get("content")]
             if not model or not messages:
                 return self._send_json({"error": "model och messages krävs"}, 400)
-            base = backend_url(data.get("backend"))
+            
+            backend_param = data.get("backend")
+            from studio.codex.router import classify_task
+            user_texts = [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
+            last_prompt = user_texts[-1] if user_texts else ""
+            task_type = classify_task(last_prompt)
+
+            if not backend_param and (task_type == "pentest" or "whiterabbit" in model.lower()):
+                from studio.backends import select_optimal_backend
+                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+            else:
+                base = backend_url(backend_param)
             return self._run_agent(model, messages, base)
 
         if path == "/api/agent/apply":

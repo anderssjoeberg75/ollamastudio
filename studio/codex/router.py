@@ -100,7 +100,7 @@ def classify_task(text="", labels=""):
     combined = f"{labels} {text}".lower()
 
     # 1. Pentest (Penetrationstestning mot nätverk och API:er)
-    if re.search(r'\b(pentest|penetrationstest|redteam|nmap|nuclei|ffuf|sqlmap|nikto|active_scan)\b', combined):
+    if re.search(r'\b(pentest\w*|penetration[ -]?test\w*|red[ -]?team\w*|nmap|nuclei|ffuf|sqlmap|nikto|active_scan|whiterabbit\w*)\b', combined):
         return "pentest"
 
     # 2. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)
@@ -192,8 +192,6 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
             if "whiterabbit" in m.lower():
                 pentest_m = m
                 break
-        if not pentest_m and installed_names:
-            pentest_m = default_local
         if not pentest_m:
             pentest_m = "whiterabbitneo"
         reason = (
