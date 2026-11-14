@@ -1878,7 +1878,7 @@ function renderProjectTargets(targets){
     html += `
       <div style="display:flex;align-items:center;justify-content:space-between;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:12px">
         <div style="display:flex;align-items:center;gap:8px">
-          <b>🦊 ${esc(k)}:</b>
+          <b>🐙 ${esc(k)}:</b>
           <code style="color:var(--accent-hov)">${esc(item.prod_server || '–')}</code>
           ${tokBadge}
         </div>
@@ -3618,7 +3618,7 @@ async function loadScheduleJobs(){
         <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;overflow:hidden">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;max-width:100%">
-              <span style="font-weight:600;font-size:14px;color:var(--text);white-space:nowrap">🦊 ${escSch(job.project)}</span>
+              <span style="font-weight:600;font-size:14px;color:var(--text);white-space:nowrap">🐙 ${escSch(job.project)}</span>
               ${secBadge} ${penBadge} ${pnyBadge} ${resBadge} ${secModeBadge} ${prodBadge}
             </div>
             <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">

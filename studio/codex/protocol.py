@@ -7,12 +7,13 @@ import json
 import os
 import re
 
-from ..config import CODE_MODES, code_mode
+from ..config import CODE_MODES, code_mode, setting_str
 from .commands import code_run_allowed, code_run_enabled, run_command
 from .analyze import analyze, find_symbol, project_brief
 from .context import cap_tool_result
 from .gitops import (git_commit_all, git_create_branch, git_diff_text,
                      git_status_info)
+from .github import github_create_issue
 from .gitlab import gitlab_create_issue
 from .skills import (get_agent, get_skill, get_workflow, list_agents,
                      list_skills, list_workflows)
@@ -613,9 +614,14 @@ def agent_tool_exec(name, args, ctx=None):
             labels = args.get("labels") or args.get("etiketter") or "security"
             if not title:
                 return "FEL: title saknas", {"summary": "fel: title saknas"}
-            if ctx.mode == "ask" and not ctx.ask("git", "issue:" + title, "Skapa GitLab Issue: " + title, desc):
+            is_gh = bool(setting_str("github_token"))
+            prov_name = "GitHub" if is_gh else "GitLab"
+            if ctx.mode == "ask" and not ctx.ask("git", "issue:" + title, f"Skapa {prov_name} Issue: " + title, desc):
                 return _denied("att skapa issue"), {"summary": "nekat", "denied": True}
-            ok, res = gitlab_create_issue(title, desc, labels=labels)
+            if is_gh:
+                ok, res = github_create_issue(title, desc, labels=labels)
+            else:
+                ok, res = gitlab_create_issue(title, desc, labels=labels)
             if ok:
                 ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
             return (("OK: Skapade issue %s" if ok else "FEL: %s") % res,

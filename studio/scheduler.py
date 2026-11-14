@@ -862,7 +862,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
         ),
     }
 
-    is_github = "github.com" in project.lower()
+    is_github = ("github.com" in project.lower()) or (setting_str("github_token") and "/" in project and not project.startswith("http://") and not project.startswith("https://"))
     provider_name = "GitHub" if is_github else "GitLab"
     if status_cb:
         status_cb("Optimal hårdvara (%s) vald. Pentest: lokal Ollama (%s), Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."

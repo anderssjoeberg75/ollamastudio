@@ -13,11 +13,12 @@ from studio.codex.permissions import AgentRun, RepeatGuard
 from studio.codex.protocol import (
     AGENT_SYSTEM_SCRATCH, agent_system_prompt, agent_tool_exec, parse_edits,
     parse_tool_call, strip_edits)
+from studio.codex.github import github_create_issue
 from studio.codex.gitlab import extract_findings_from_text, gitlab_create_issue
 from studio.codex.workspace import ws_current, ws_diff, ws_write_file
 from studio.config import (
     CODE_MODE_LABELS, code_ctx, code_max_steps, code_mode, code_options,
-    code_workspace_root)
+    code_workspace_root, setting_str)
 
 
 class CodexRoutes(BaseHandler):
@@ -183,12 +184,18 @@ class CodexRoutes(BaseHandler):
                     if not getattr(ctx, "issues_created", 0):
                         findings = extract_findings_from_text(msg)
                         for f in findings:
-                            ok, res = gitlab_create_issue(f["title"], f["description"], labels=f.get("labels"))
+                            is_gh = bool(setting_str("github_token"))
+                            if is_gh:
+                                ok, res = github_create_issue(f["title"], f["description"], labels=f.get("labels"))
+                                prov_label = "GitHub Issue: "
+                            else:
+                                ok, res = gitlab_create_issue(f["title"], f["description"], labels=f.get("labels"))
+                                prov_label = "GitLab Issue: "
                             if ok:
                                 ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
                                 self._emit({"type": "tool", "name": "create_issue",
                                             "args": {"title": f["title"]},
-                                            "summary": "Skapade GitLab Issue: " + f["title"],
+                                            "summary": "Skapade " + prov_label + f["title"],
                                             "url": res, "ok": True})
                 finished = True
                 break
