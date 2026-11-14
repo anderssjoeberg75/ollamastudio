@@ -70,9 +70,12 @@
         <span>WORKSPACE</span>
         <button class="iconbtn sm" onclick="pickLocalDir()" title="Open local folder"><i class="ph ph-plus"></i></button>
       </div>
-      <div class="workspace-card" id="sidebarWsCard" onclick="showView('code')">
-        <i class="ph ph-folder-simple" style="color:var(--accent)"></i>
-        <span id="sidebarWsLabel">Studio Workspace</span>
+      <div class="workspace-card" id="sidebarWsCard" onclick="showView('github')" title="Click to view connected GitHub repository and issues">
+        <i class="ph ph-github-logo" id="sidebarWsIcon" style="font-size:16px;color:var(--accent)"></i>
+        <div style="display:flex;flex-direction:column;min-width:0;flex:1">
+          <span id="sidebarWsLabel" style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">anderssjoeberg75/healthchat</span>
+          <span id="sidebarWsSub" style="font-size:10px;color:var(--fg-subtle);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">GitHub &middot; main</span>
+        </div>
       </div>
 
       <div class="side-stats">

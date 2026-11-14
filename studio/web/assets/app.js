@@ -3345,18 +3345,62 @@ async function gitStatus(){
   try{
     const r = await api('/api/git/status', {headers: headers(false)});
     const g = await r.json(); lastGit = g;
-    if(!g.repo){ bar.style.display='none'; return; }
-    bar.style.display='flex';
+    updateSidebarWorkspace(g);
+    if(!g.repo){ if(bar) bar.style.display='none'; return; }
+    if(bar) bar.style.display='flex';
     const slug = g.slug || ((g.owner && g.repo_name) ? (g.owner+'/'+g.repo_name) : 'git-remote');
     const provName = g.provider === 'gitlab' ? 'GitLab' : (g.provider === 'github' ? 'GitHub' : 'Git');
-    document.getElementById('codeGitInfo').innerHTML =
-      'Branch <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' modified files · '+provName+': '+esc(slug)
-      + (g.has_token ? '' : ' · <span style="color:var(--amber)">no token</span>');
+    const gi = document.getElementById('codeGitInfo');
+    if(gi) {
+      gi.innerHTML =
+        'Branch <b>'+esc(g.branch||'?')+'</b> · '+g.changed+' modified files · '+provName+': '+esc(slug)
+        + (g.has_token ? '' : ' · <span style="color:var(--amber)">no token</span>');
+    }
     const prBtn = document.getElementById('codePrMrBtn');
     if(prBtn){
       prBtn.textContent = (g.provider === 'gitlab') ? 'Create MR' : 'Create PR';
     }
-  }catch(e){ bar.style.display='none'; }
+  }catch(e){
+    if(bar) bar.style.display='none';
+    updateSidebarWorkspace(null);
+  }
+}
+
+function updateSidebarWorkspace(g){
+  const label = document.getElementById('sidebarWsLabel');
+  const sub = document.getElementById('sidebarWsSub');
+  const icon = document.getElementById('sidebarWsIcon');
+  if(!label) return;
+
+  if(localDir){
+    label.textContent = localDirName || 'Local Folder';
+    if(sub) sub.textContent = 'Browser local FS';
+    if(icon) icon.className = 'ph ph-folder';
+    return;
+  }
+
+  if(g && g.repo){
+    const slug = g.slug || ((g.owner && g.repo_name) ? (g.owner+'/'+g.repo_name) : 'Connected Git Repo');
+    const prov = g.provider === 'gitlab' ? 'GitLab' : (g.provider === 'github' ? 'GitHub' : 'Git');
+    label.textContent = slug;
+    label.title = slug + ' (' + (g.branch || 'main') + ')';
+    if(sub) sub.textContent = `${prov} · ${g.branch || 'main'}`;
+    if(icon) icon.className = g.provider === 'github' ? 'ph ph-github-logo' : (g.provider === 'gitlab' ? 'ph ph-gitlab-logo' : 'ph ph-git-branch');
+  } else {
+    // Check if a code repo is selected in dropdown
+    const sel = document.getElementById('codeRepoSelect');
+    const slug = sel ? sel.value : '';
+    if(slug){
+      label.textContent = slug;
+      label.title = slug;
+      if(sub) sub.textContent = 'GitHub repo';
+      if(icon) icon.className = 'ph ph-github-logo';
+    } else {
+      label.textContent = 'No repository';
+      if(sub) sub.textContent = 'Click to connect GitHub';
+      if(icon) icon.className = 'ph ph-github-logo';
+    }
+  }
 }
 async function gitPost(path, body){
   const r = await api(path, {method:'POST', headers:headers(true), body: JSON.stringify(body||{})});
@@ -4454,6 +4498,7 @@ refresh();
 loadPrefs();   // hämta sparade UI-val (modell, GPU, chattinställningar) från databasen
 loadCodeMsgs();   // återställ Codex-konversationen vid omladdning
 restoreCodeLog();
+gitStatus();
 
 // ==========================================
 // Workbench UI Interactive Wiring
