@@ -218,6 +218,7 @@ async function refresh(){
     try{ const sr = await api('/api/system'); if(sr.ok) lastSystem = await sr.json(); }catch(e){}
     lastModels = models;
     populateChatModels();
+    populateCodeModels();
     setStatus('Connected · v'+(v.version||'?'), 'var(--green)');
     renderModels(models);
   }catch(e){

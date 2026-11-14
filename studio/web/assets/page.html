@@ -316,15 +316,19 @@
             <div id="codeTree" class="code-files"></div>
           </div>
           <div class="code-main" style="flex:1;display:flex;flex-direction:column;padding:12px;overflow-y:auto">
-            <div id="codeRepoBar" class="code-repobar" style="display:flex;gap:8px;margin-bottom:10px">
-              <select id="codeRepoProvider" onchange="onProviderChange()" style="max-width:115px">
+            <div id="codeRepoBar" class="code-repobar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+              <select id="codeRepoProvider" onchange="onProviderChange()" style="max-width:120px">
                 <option value="github" selected>🐙 GitHub</option>
               </select>
-              <select id="codeRepoSelect" onchange="onRepoPick()" style="flex:1">
+              <select id="codeRepoSelect" onchange="onRepoPick()" style="flex:1;min-width:200px">
                 <option value="">Loading…</option>
               </select>
-              <button class="btn accent small" id="codeRepoFetch" onclick="fetchRepo()">⬇ Fetch</button>
-              <button class="btn ghost small" onclick="openScheduleModal()">⏰ Schedule</button>
+              <button class="btn accent small" id="codeRepoFetch" onclick="fetchRepo()">⬇ Fetch &amp; work here</button>
+              <button class="btn ghost small" id="codeRepoCustom" onclick="promptCustomRepo()" title="Specify custom repo (slug or URL)">➕ Custom repo…</button>
+              <button class="btn ghost small" id="codeRepoRemove" onclick="removeRepo()" title="Delete fetched repo from server disk" style="display:none">🗑 Remove</button>
+              <button class="btn ghost small" onclick="loadRepos(true)" title="Refresh repos list">↻</button>
+              <button class="btn ghost small" onclick="openScheduleModal()" title="Schedule recurring audits in GitHub">⏰ Schedule</button>
+              <div class="hint" id="codeRepoHint" style="width:100%;font-size:11px;color:var(--fg-faint);margin-top:2px"></div>
             </div>
             <div id="codeGit" class="code-git" style="display:none;margin-bottom:8px">
               <span class="gi" id="codeGitInfo"></span>
@@ -333,8 +337,22 @@
                 <button class="btn ghost small" onclick="gitCommit()">Commit</button>
                 <button class="btn ghost small" onclick="gitPush()">Push</button>
                 <button class="btn accent small" id="codePrMrBtn" onclick="createPrOrMr()">Create PR</button>
+                <button class="btn ghost small" onclick="gitStatus()" title="Refresh git status">↻</button>
               </span>
             </div>
+            <div id="codeGitMsg" class="hint" style="margin:0 2px 6px"></div>
+            <div id="codeAnalyzeNote" class="chatwarn ok" style="display:none;margin-bottom:8px"></div>
+            <div id="codeModeBar" class="code-modebar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px">
+              <label for="codeMode" style="font-weight:600;color:var(--fg-muted)">Permission:</label>
+              <select id="codeMode" onchange="saveCodeMode()" style="background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px;color:var(--fg)">
+                <option value="ask">🔒 Ask permission (every step)</option>
+                <option value="auto_edit">✍ Edit files automatically (ask before running commands)</option>
+                <option value="full">⚡ Full autonomy (do everything without asking)</option>
+              </select>
+              <span id="codeModeHint" class="mhint" style="font-size:11px;color:var(--fg-faint);flex:1"></span>
+              <button class="btn ghost small" id="codeUndoBtn" onclick="undoLast()" title="Undo the last written file" style="display:none">↩ Undo last</button>
+            </div>
+            <div id="codeNoWs" class="chatwarn warn" style="display:none;margin-bottom:8px"></div>
             <div id="codeLog" class="code-log" style="flex:1;min-height:200px;border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg-sunken);overflow-y:auto;font-family:var(--font-mono);font-size:12px">
               <div class="chat-empty">Ask Codex to inspect code, edit files or run audits.</div>
             </div>
