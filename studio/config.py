@@ -153,7 +153,8 @@ def db_init():
 _PREFS_KEYS = {"chat_model", "chat_backend", "chat_system", "chat_temp", "chat_ctx",
                "chat_websearch", "chat_memory", "code_model",
                "train_form",       # AI-träningens formulär (JSON)
-               "hide_too_big"}     # dölj modeller som inte får plats på hårdvaran
+               "hide_too_big",     # dölj modeller som inte får plats på hårdvaran
+               "cum_tokens"}       # Ackumulerat antal tokens (får aldrig nollas)
 
 
 def prefs_all():

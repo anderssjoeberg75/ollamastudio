@@ -1339,11 +1339,7 @@ async function sendChat(){
               secs: (msg.total_duration||0)/1e9,
               gpu: (document.getElementById('chatBackend').value || '')
             };
-            try {
-              let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
-              cumTokens += (msg.eval_count || 0);
-              localStorage.setItem('os_cum_tokens', cumTokens.toString());
-            } catch(e) {}
+            addCumulativeTokens(msg.eval_count || 0);
           }
           if(msg.error){ chatMessages[idx].content += '\n[Error: '+msg.error+']'; }
         }catch(e){}
@@ -2618,12 +2614,7 @@ async function streamModel(convo, onDelta){
       const c = msg.message && msg.message.content;
       if(c){ full += c; if(onDelta) onDelta(c); }
       if(msg.done && msg.eval_count){
-        try {
-          let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
-          cumTokens += (msg.eval_count || 0);
-          localStorage.setItem('os_cum_tokens', cumTokens.toString());
-          updateTelemetry();
-        } catch(e) {}
+        addCumulativeTokens(msg.eval_count || 0);
       }
     }
   }
@@ -4361,12 +4352,7 @@ async function executeDockChat(userText) {
             scrollArea.scrollTop = scrollArea.scrollHeight;
           }
           if (msg.done && msg.eval_count) {
-            try {
-              let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
-              cumTokens += (msg.eval_count || 0);
-              localStorage.setItem('os_cum_tokens', cumTokens.toString());
-              updateTelemetry();
-            } catch(e) {}
+            addCumulativeTokens(msg.eval_count || 0);
           }
           if (msg.error) {
             throw new Error(msg.error);
@@ -4647,15 +4633,40 @@ function updateTelemetry(stats) {
   } catch(e) {}
 }
 
+// Cumulative Tokens: Never reset, permanently stored and synced with database and localStorage
+function addCumulativeTokens(count) {
+  if (!count || count <= 0) return;
+  try {
+    let localTok = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
+    let dbTok = parseInt(uiPrefs.cum_tokens || '0', 10);
+    let currentMax = Math.max(localTok, dbTok);
+    let updated = currentMax + count;
+    localStorage.setItem('os_cum_tokens', updated.toString());
+    savePref('cum_tokens', updated.toString());
+    updateTelemetry();
+  } catch(e) {}
+}
+
+function getCumulativeTokens() {
+  try {
+    let localTok = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
+    let dbTok = parseInt(uiPrefs.cum_tokens || '0', 10);
+    let maxTok = Math.max(localTok, dbTok);
+    if (dbTok > localTok) localStorage.setItem('os_cum_tokens', maxTok.toString());
+    if (localTok > dbTok && localTok > 0) savePref('cum_tokens', maxTok.toString());
+    return maxTok;
+  } catch(e) {
+    return 0;
+  }
+}
+
 // Calculate and render Saved vs Anthropic (Claude 3.5 Sonnet) Cost in SEK (kronor)
 function updateSavedCost(currentConvoTokens) {
   try {
     const el = document.getElementById('savedCostAmount');
     if (!el) return;
-    // Track total cumulative tokens processed locally
-    let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
-    // If convo has tokens, accumulate with stored baseline
-    let totalAll = cumTokens + (currentConvoTokens || 0);
+    // Track total cumulative tokens processed locally - NEVER RESETS
+    let totalAll = getCumulativeTokens();
     // Anthropic Claude 3.5 Sonnet benchmark cost:
     // Blended average: ~$9.00 USD per 1M tokens ($3.00 input, $15.00 output -> ~$0.000009 USD/token)
     // USD to SEK rate: ~10.50 kr per USD
