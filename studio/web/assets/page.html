@@ -50,6 +50,10 @@
           <span class="sp-left"><i class="ph ph-clock"></i> <span>Audits (GitHub)</span></span>
           <span class="sp-badge">cron</span>
         </button>
+        <button class="session-pill" id="nav-pentest" onclick="openPentestModal()" title="Run interactive red-team penetration test with WhiteRabbitNeo">
+          <span class="sp-left"><i class="ph ph-shield-warning" style="color:#a855f7"></i> <span>Pentest Suite</span></span>
+          <span class="sp-badge" style="color:#a855f7">redteam</span>
+        </button>
         <button class="session-pill" id="nav-train" onclick="showView('train')">
           <span class="sp-left"><i class="ph ph-graduation-cap"></i> <span>AI Training</span></span>
           <span class="sp-badge">soup</span>
@@ -361,6 +365,7 @@
               <select id="codeModel"></select>
               <button class="btn ghost small" onclick="clearCode()" title="workspace files are not touched">🧹 Clear log (workspace files are not touched)</button>
               <button class="btn accent small" onclick="runSecurityAudit()">🛡 Security review</button>
+              <button class="btn accent small" onclick="openPentestModal()" style="background:#7c3aed;border-color:#7c3aed">🎯 Pentest suite</button>
               <button class="btn ghost small" onclick="runPonytailAudit()">✂ Ponytail audit</button>
             </div>
             <div class="chat-input" style="display:flex;gap:8px;margin-top:8px">
@@ -594,6 +599,169 @@
 
     <div class="row" style="margin-top:18px;display:flex;justify-content:flex-end">
       <button class="btn ghost" onclick="closeScheduleModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     PENTEST SUITE MODAL & TARGET SELECTOR
+     ============================================================ -->
+<div class="overlay" id="pentestOverlay" style="display:none">
+  <div class="modal" style="max-width:760px;width:95%;max-height:92vh;overflow-y:auto;border-radius:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0;display:flex;align-items:center;gap:8px;color:#a855f7">
+        <i class="ph-bold ph-shield-warning"></i> Pentest Suite &amp; Red-Team Testing
+      </h3>
+      <button class="btn ghost small" onclick="closePentestModal()" style="font-size:16px;line-height:1;padding:4px 8px">✕</button>
+    </div>
+    <p style="color:var(--subtle);font-size:13px;margin:0 0 16px;line-height:1.5">
+      Select the target site/URL, attack vectors, and specialized SecOps skills. Penetration testing executes via local <b>WhiteRabbitNeo</b> on port 11436 with disciplined command logging according to <code>.agents/rules/redteam.md</code>.
+    </p>
+
+    <!-- Target Site Selection Box -->
+    <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+        <i class="ph ph-globe" style="color:var(--accent)"></i> <span>1. Select Target Site &amp; Environment</span>
+      </div>
+      
+      <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">Target Site / API Endpoint URL</label>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="ptTargetSite" placeholder="https://example.com or http://192.168.107.15:8080" style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--fg);font-family:var(--font-mono)">
+            <select id="ptQuickSites" onchange="applyQuickSite(this)" style="max-width:130px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 6px;font-size:12px;color:var(--fg)">
+              <option value="">Quick select…</option>
+              <option value="http://127.0.0.1:8085">Local Ollama Studio (8085)</option>
+              <option value="http://192.168.107.15:20128">OmniRoute (20128)</option>
+              <option value="http://127.0.0.1:11434">Local Ollama (11434)</option>
+              <option value="custom">Custom Site…</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">Target Scope / Project (GitHub)</label>
+          <select id="ptProjectSelect" style="width:100%;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--fg)">
+            <option value="">-- Active Codex Workspace --</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">Optional Auth Token / Header (Bearer / X-API-Key)</label>
+          <input type="password" id="ptAuthToken" placeholder="Optional token for authenticated API scans" style="width:100%;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--fg);box-sizing:border-box">
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">Security Level / Attack Mode</label>
+          <select id="ptSecMode" style="width:100%;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--fg)">
+            <option value="safe" selected>🛡️ Safe (Non-destructive, read-only tests)</option>
+            <option value="passive">🔍 Passive Analysis (Headers, TLS, Open Ports)</option>
+            <option value="full">⚠️ Full Pentest (Active Injection &amp; Exploitation PoC)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skills & Tools Selection Box -->
+    <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px">
+          <i class="ph ph-lightning" style="color:#a855f7"></i> <span>2. Enabled SecOps Skills &amp; Testing Modules</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn ghost small" type="button" onclick="toggleAllPentestSkills(true)" style="font-size:11px;padding:2px 8px">Select all</button>
+          <button class="btn ghost small" type="button" onclick="toggleAllPentestSkills(false)" style="font-size:11px;padding:2px 8px">Clear</button>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:10px;font-size:12.5px" id="ptSkillsList">
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_dast_zap" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">dast-zap</div>
+            <div style="font-size:11px;color:var(--fg-muted)">OWASP ZAP dynamic runtime scanner &amp; top-10 check</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_dast_nuclei" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">dast-nuclei</div>
+            <div style="font-size:11px;color:var(--fg-muted)">Template vulnerability scanner &amp; CVE matching</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_dast_ffuf" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">dast-ffuf</div>
+            <div style="font-size:11px;color:var(--fg-muted)">High-speed web fuzzer &amp; hidden path discovery</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_webapp_sqlmap" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">webapp-sqlmap</div>
+            <div style="font-size:11px;color:var(--fg-muted)">SQL injection verification &amp; parameter testing</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_webapp_nikto" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">webapp-nikto</div>
+            <div style="font-size:11px;color:var(--fg-muted)">Web server misconfig &amp; dangerous file scanner</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_recon_nmap" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">recon-nmap</div>
+            <div style="font-size:11px;color:var(--fg-muted)">Service enumeration &amp; port scan reconnaissance</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_api_mitmproxy" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">api-mitmproxy</div>
+            <div style="font-size:11px;color:var(--fg-muted)">API traffic interception, inspection &amp; replay</div>
+          </div>
+        </label>
+
+        <label style="display:flex;align-items:flex-start;gap:8px;background:var(--bg-card);padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer">
+          <input type="checkbox" id="skill_openclaw_redteam" checked style="accent-color:#a855f7;margin-top:2px">
+          <div>
+            <div style="font-weight:600">openclaw-redteam</div>
+            <div style="font-size:11px;color:var(--fg-muted)">Disciplined red-team protocol &amp; command logging</div>
+          </div>
+        </label>
+      </div>
+    </div>
+
+    <!-- Execution Engine & Model info -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;margin-bottom:18px;font-size:12px">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tele-pill" style="border-color:#a855f7;color:#a855f7;font-weight:600">
+          <i class="ph-bold ph-cpu"></i> WhiteRabbitNeo-2.5-Qwen-7B
+        </span>
+        <span style="color:var(--fg-muted)">Dedicated Port 11436 · GPU 1 (RTX 3060)</span>
+      </div>
+      <div style="color:var(--fg-faint)">Strict benign payloads &amp; command safety active</div>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <button class="btn ghost" onclick="closePentestModal()">Cancel</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn ghost" onclick="launchPentest(false)"><i class="ph ph-chat-text"></i> Send to Codex IDE</button>
+        <button class="btn accent" onclick="launchPentest(true)" style="background:#7c3aed;border-color:#7c3aed">
+          <i class="ph-bold ph-play"></i> Run Pentest Now
+        </button>
+      </div>
     </div>
   </div>
 </div>

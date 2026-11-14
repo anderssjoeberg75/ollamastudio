@@ -3913,6 +3913,161 @@ async function deleteScheduleJob(id){
   }
 }
 
+/* ---- Pentest Suite Modal & Interactive Execution ---- */
+function openPentestModal(){
+  const ov = document.getElementById('pentestOverlay');
+  if(ov) ov.style.display = 'flex';
+  populatePentestProjects();
+}
+
+function closePentestModal(){
+  const ov = document.getElementById('pentestOverlay');
+  if(ov) ov.style.display = 'none';
+}
+
+function applyQuickSite(sel){
+  const inp = document.getElementById('ptTargetSite');
+  if(!inp || !sel) return;
+  if(sel.value && sel.value !== 'custom'){
+    inp.value = sel.value;
+  }
+}
+
+async function populatePentestProjects(){
+  const sel = document.getElementById('ptProjectSelect');
+  if(!sel) return;
+  sel.innerHTML = '<option value="">-- Active Codex Workspace --</option>';
+  try{
+    const r = await api('/api/github/repos');
+    const d = await r.json();
+    const repos = d.repos || [];
+    for(const repo of repos){
+      const slug = repo.slug || repo.name;
+      const opt = document.createElement('option');
+      opt.value = slug;
+      opt.textContent = slug;
+      sel.appendChild(opt);
+    }
+    const curRepo = (document.getElementById('codeRepoSelect') || {}).value;
+    if(curRepo && [...sel.options].some(o=>o.value === curRepo)){
+      sel.value = curRepo;
+    }
+  }catch(e){}
+}
+
+function toggleAllPentestSkills(checked){
+  const ids = [
+    'skill_dast_zap', 'skill_dast_nuclei', 'skill_dast_ffuf',
+    'skill_webapp_sqlmap', 'skill_webapp_nikto', 'skill_recon_nmap',
+    'skill_api_mitmproxy', 'skill_openclaw_redteam'
+  ];
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if(el) el.checked = checked;
+  });
+}
+
+function buildPentestPrompt(targetSite, secMode, token, skillsList){
+  const modeText = {
+    safe: 'SAFE (NON-DESTRUCTIVE: read-only headers, version checks, benign probes)',
+    passive: 'PASSIVE (INSPECTION ONLY: TLS, headers, DNS, open ports without active payloads)',
+    full: 'FULL PENTEST (ACTIVE INJECTIONS & PoC: verify authentication bypass, SQLi, IDOR, input fuzzing)'
+  }[secMode] || 'SAFE';
+
+  let p = `Perform a disciplined penetration test against target site: ${targetSite}\n\n`;
+  p += `### OPERATIONAL CONSTRAINTS & RED-TEAM PROTOCOL\n`;
+  p += `- Target URL / Endpoint: ${targetSite}\n`;
+  if(token) p += `- Authentication Header / Token: Provided for authenticated endpoints\n`;
+  p += `- Security Level / Mode: ${modeText}\n`;
+  p += `- Operating Framework: OpenClaw Red-Team protocol (.agents/rules/redteam.md and .agents/skills/openclaw-redteam/SKILL.md)\n`;
+  p += `- Execution Hardware / Model: WhiteRabbitNeo-2.5-Qwen-7B (Dedicated pentest model on port 11436)\n\n`;
+
+  p += `### ENABLED SECOPS SKILLS & TESTING MODULES\n`;
+  if(skillsList.length){
+    p += skillsList.map(s => `- .agents/skills/${s}/SKILL.md`).join('\n') + '\n\n';
+  } else {
+    p += `- Comprehensive manual pentest inspection\n\n`;
+  }
+
+  p += `### METHODOLOGY & EXECUTION PHASES\n`;
+  p += `1. **Reconnaissance & Asset Discovery**: Scan exposed ports, virtual hosts, and endpoint routing using recon-nmap and webapp-nikto.\n`;
+  p += `2. **Web / API Fuzzing & DAST**: Inspect HTTP response headers, crawl sub-paths using dast-ffuf and test runtime behavior using dast-zap.\n`;
+  p += `3. **Vulnerability Verification**: Verify any potential injection point (SQLi, XSS, SSRF, IDOR) using webapp-sqlmap and dast-nuclei templates strictly within scope.\n`;
+  p += `4. **Issue Reporting**: FOR EACH DISCOVERED VULNERABILITY, invoke TOOL create_issue with:\n`;
+  p += `   - title: "[PENTEST-X] Descriptive vulnerability title"\n`;
+  p += `   - description: Detailed markdown report containing Target/Endpoint, Vulnerability & CWE classification, Proof-of-Concept (PoC), and concrete remediation steps.\n\n`;
+  p += `All testing against ${targetSite} must follow strict benign, non-destructive payloads. Begin reconnaissance and active testing now.`;
+  return p;
+}
+
+async function launchPentest(runImmediately){
+  const siteInput = document.getElementById('ptTargetSite');
+  let targetSite = (siteInput ? siteInput.value : '').trim();
+  if(!targetSite){
+    toast('Please enter or select a target site URL first', true);
+    if(siteInput) siteInput.focus();
+    return;
+  }
+  if(!/^https?:\/\//i.test(targetSite)){
+    targetSite = 'http://' + targetSite;
+    if(siteInput) siteInput.value = targetSite;
+  }
+
+  const secMode = (document.getElementById('ptSecMode') || {}).value || 'safe';
+  const token = (document.getElementById('ptAuthToken') || {}).value || '';
+  const projSelect = document.getElementById('ptProjectSelect');
+  const project = projSelect ? projSelect.value : '';
+
+  const skillMap = {
+    'skill_dast_zap': 'dast-zap',
+    'skill_dast_nuclei': 'dast-nuclei',
+    'skill_dast_ffuf': 'dast-ffuf',
+    'skill_webapp_sqlmap': 'webapp-sqlmap',
+    'skill_webapp_nikto': 'webapp-nikto',
+    'skill_recon_nmap': 'recon-nmap',
+    'skill_api_mitmproxy': 'api-mitmproxy',
+    'skill_openclaw_redteam': 'openclaw-redteam'
+  };
+
+  const enabledSkills = [];
+  Object.keys(skillMap).forEach(id => {
+    const el = document.getElementById(id);
+    if(el && el.checked) enabledSkills.push(skillMap[id]);
+  });
+
+  const promptText = buildPentestPrompt(targetSite, secMode, token, enabledSkills);
+
+  closePentestModal();
+  showView('code');
+
+  // Set WhiteRabbitNeo model if available
+  const codeModelSel = document.getElementById('codeModel');
+  if(codeModelSel){
+    const rabbitOpt = [...codeModelSel.options].find(o => /whiterabbit/i.test(o.value));
+    if(rabbitOpt){
+      codeModelSel.value = rabbitOpt.value;
+      saveCodeModel();
+    }
+  }
+
+  // Populate Codex Input
+  const inp = document.getElementById('codeInput');
+  if(inp){
+    inp.value = promptText;
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 180) + 'px';
+    inp.focus();
+  }
+
+  toast('Pentest plan prepared for ' + targetSite);
+
+  if(runImmediately){
+    setTimeout(() => {
+      sendAgent();
+    }, 200);
+  }
+}
+
 loadConfig();
 refresh();
 loadPrefs();   // hämta sparade UI-val (modell, GPU, chattinställningar) från databasen
