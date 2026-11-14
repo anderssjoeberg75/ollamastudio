@@ -460,7 +460,7 @@ function fitLabel(it){
   const vram = maxGpuVramBytes(), cap = hardwareCapacityBytes();
   if(!cap) return '';
   if(vram > 0 && need <= vram)
-    return '  ·  <span style="color:var(--green)">≈ fits your GPU</span>';
+    return '  ·  <span style="color:var(--fg);font-weight:600">≈ fits your GPU</span>';
   if(need <= cap)
     return vram
       ? '  ·  <span style="color:var(--amber)">≈ runs partially on CPU (slower)</span>'
@@ -1981,7 +1981,7 @@ async function loadAntigravityStatus(){
       const modelsHtml = (d.models || []).map(m => `<span style="display:inline-block;padding:2px 8px;border-radius:6px;background:var(--card);border:1px solid var(--border);margin:2px 4px 2px 0;font-size:12px">✨ <b>${esc(m)}</b></span>`).join('');
 
       details.innerHTML = `
-        <div style="color:var(--green);font-weight:600;margin-bottom:6px">✓ Google Antigravity &amp; Claude connected and ready!</div>
+        <div style="color:var(--fg);font-weight:600;margin-bottom:6px">✓ Google Antigravity &amp; Claude connected and ready!</div>
         <div style="color:var(--subtle);font-size:12px;margin-bottom:6px">Engine: <code>${esc(d.bin || 'agy')}</code></div>
         <div style="margin-top:6px">${modelsHtml || 'No models found'}</div>
       `;
@@ -2021,7 +2021,7 @@ async function pingAntigravity(){
     const r = await api('/api/antigravity/ping', {method: 'POST', headers: headers(true)});
     const d = await r.json();
     if(d.ok){
-      resEl.innerHTML = `<span style="color:var(--green);font-weight:600">✓ ${esc(d.message)}</span>`;
+      resEl.innerHTML = `<span style="color:var(--fg);font-weight:600">✓ ${esc(d.message)}</span>`;
     } else {
       resEl.innerHTML = `<span style="color:var(--danger)">✗ Test failed: ${esc(d.error || 'unknown error')}</span>`;
     }
@@ -3791,7 +3791,7 @@ async function loadScheduleJobs(){
       // Ponytail toggle-knapp
       const pnyOn = !!job.run_ponytail;
       const pnyStyle = pnyOn
-        ? 'background:rgba(57,214,127,0.12);border:1px solid var(--green);color:var(--green);font-weight:600'
+        ? 'background:rgba(255,255,255,0.3);border:1px solid var(--border);color:var(--fg);font-weight:600'
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
       const pnyBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_ponytail', ${!pnyOn})" title="${pnyOn ? 'Ponytail audit active — click to disable' : 'Ponytail audit inactive — click to enable'}" style="${pnyStyle}"><span>✂</span><span>Ponytail</span></button>`;
 
@@ -4311,9 +4311,12 @@ async function loadGitHubView(force = false){
     } else {
       if(banner){
         banner.style.display = 'block';
-        banner.style.background = 'rgba(34, 197, 94, 0.1)';
-        banner.style.border = '1px solid rgba(34, 197, 94, 0.3)';
-        banner.style.color = '#22c55e';
+        banner.style.background = 'rgba(255, 255, 255, 0.28)';
+        banner.style.backdropFilter = 'blur(12px)';
+        banner.style.webkitBackdropFilter = 'blur(12px)';
+        banner.style.border = '1px solid rgba(255, 255, 255, 0.45)';
+        banner.style.color = 'var(--fg)';
+        banner.style.fontWeight = '600';
         banner.innerHTML = '✓ GitHub connected (' + ghViewRepos.length + ' remote repositories available, ' + ghViewLocal.length + ' cloned locally).';
       }
     }
@@ -4382,7 +4385,7 @@ function onGhRepoSelectChange(){
     if(local){
       info += `<strong>Local server path:</strong> <code>${esc(local.path)}</code><br>`;
       info += `<strong>Active Branch:</strong> ${esc(local.branch || 'main')} &middot; `;
-      info += local.dirty ? `<span style="color:var(--warning)">${local.dirty} uncommitted changes</span>` : `<span style="color:var(--green)">clean</span>`;
+      info += local.dirty ? `<span style="color:var(--warning)">${local.dirty} uncommitted changes</span>` : `<span style="color:var(--fg);font-weight:600">clean</span>`;
     } else {
       info += `<em>Repository is currently only remote on GitHub. Click "Fetch / Clone" to download to Ollama Studio workspace.</em>`;
     }
@@ -4465,17 +4468,17 @@ async function loadGhIssues(state = 'open', overrideSlug = null){
     const issues = d.issues || [];
 
     if(!issues.length){
-      container.innerHTML = `<div style="color:var(--fg-muted);font-size:13px;padding:14px;text-align:center;background:var(--bg-sunken);border-radius:8px">No ${state} issues found in <strong>${esc(slug)}</strong>. Everything looks clean!</div>`;
+      container.innerHTML = `<div style="color:var(--fg);font-size:13px;padding:14px;text-align:center;background:rgba(255,255,255,0.22);border-radius:8px;border:1px solid rgba(255,255,255,0.4)">No ${state} issues found in <strong>${esc(slug)}</strong>. Everything looks clean!</div>`;
       return;
     }
 
     let html = '';
     issues.forEach(iss => {
-      const labels = (iss.labels || []).map(l => `<span class="comp-chip" style="font-size:10.5px;padding:2px 6px">${esc(l)}</span>`).join(' ');
+      const labels = (iss.labels || []).map(l => `<span class="comp-chip" style="font-size:10.5px;padding:2px 6px;color:var(--fg);background:rgba(255,255,255,0.3);border:1px solid rgba(255,255,255,0.45)">${esc(l)}</span>`).join(' ');
       const isSec = (iss.title || '').includes('PENTEST') || (iss.title || '').includes('SECURITY') || (iss.labels || []).some(l => /security|cwe|bug|audit/i.test(l));
       const icon = isSec ? '🛡️' : '⚠';
       html += `
-        <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div style="background:rgba(255,255,255,0.22);border:1px solid rgba(255,255,255,0.4);backdrop-filter:blur(10px);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
           <div style="flex:1">
             <div style="font-weight:600;font-size:13px;color:var(--fg);margin-bottom:4px">
               ${icon} <a href="${esc(iss.web_url)}" target="_blank" style="color:var(--fg);text-decoration:none">#${iss.iid} ${esc(iss.title)} ↗</a>
@@ -4675,7 +4678,7 @@ function toggleTrustWrites() {
   if (btn) {
     if (trustWritesActive) {
       btn.classList.add('active');
-      btn.innerHTML = '<i class="ph ph-lock-open" style="color:var(--green)"></i> <span>Trust writes (ON)</span>';
+      btn.innerHTML = '<i class="ph ph-lock-open" style="color:var(--fg)"></i> <span>Trust writes (ON)</span>';
       toast('Trust writes enabled: file edits will apply automatically');
     } else {
       btn.classList.remove('active');
