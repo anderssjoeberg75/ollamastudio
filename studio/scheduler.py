@@ -20,6 +20,9 @@ from .config import (
     _settings_lock, code_options,
     code_workspace_root, prefs_all, setting_str, settings_set
 )
+from .logging_util import get_logger
+
+log = get_logger("ollamastudio.scheduler")
 from .codex.context import (
     TOOL_RESULT_PREFIX, cap_tool_result, code_char_budget,
     code_result_cap, prune_convo
@@ -762,8 +765,8 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
                     nm = m.get("name") or m.get("model") or ""
                     if nm:
                         installed_local.append(nm)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("could not list local models for routing: %s", e)
 
     resolved_count = 0
     errors = []
@@ -1096,8 +1099,8 @@ def _scheduler_loop():
                 if j.get("enabled") and not j.get("running"):
                     if j.get("next_run", 0) <= now:
                         schedule_run_job_async(j["id"])
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("scheduler tick failed: %s", e, exc_info=True)
         time.sleep(30)
 
 

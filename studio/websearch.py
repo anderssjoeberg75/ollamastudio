@@ -5,6 +5,7 @@ att hämta interna adresser – url_is_public() släpper bara ut till publika v�
 """
 import concurrent.futures
 import html as _html
+import http.client
 import ipaddress
 import json
 import os
@@ -18,6 +19,9 @@ import urllib.request
 from datetime import datetime
 
 from .config import setting_str, websearch_enabled, websearch_pages
+from .logging_util import get_logger
+
+log = get_logger("ollamastudio.websearch")
 
 
 # --------------------------------------------------------------------------
@@ -282,6 +286,73 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
             self, req, fp, code, msg, headers, newurl)
 
 
+# --------------------------------------------------------------------------
+# Pin-to-IP: url_is_public() slår upp värdnamnet, men urllib skulle slå upp det
+# IGEN vid anslutning – ett fönster för DNS-rebinding (svaret pekar på en publik
+# IP vid kontrollen och en intern vid anslutningen). Vi slår därför upp EN gång,
+# validerar, och ansluter mot exakt den IP:n. Host-header, SNI och certverifiering
+# använder fortfarande värdnamnet. Gäller bara när ingen proxy är konfigurerad –
+# med proxy är det proxyn (inte vår DNS) som är egress-kontroll.
+# --------------------------------------------------------------------------
+def _resolve_public_ip(host):
+    """Returnera EN publik IP för värdnamnet, eller höj ValueError om NÅGON uppslagen
+    adress är intern/loopback/reserverad m.m."""
+    chosen = None
+    for info in socket.getaddrinfo(host, None):
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            raise ValueError("oläsbar adress")
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            raise ValueError("icke-publik adress: %s" % ip)
+        if chosen is None:
+            chosen = info[4][0]
+    if chosen is None:
+        raise ValueError("ingen adress för %s" % host)
+    return chosen
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.create_connection(
+            (_resolve_public_ip(self.host), self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        sock = socket.create_connection(
+            (_resolve_public_ip(self.host), self.port), self.timeout, self.source_address)
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            sock = self.sock
+        # server_hostname=self.host -> SNI och certkontroll mot värdnamnet, inte IP:n.
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req)
+
+
+def _build_fetch_opener(scheme):
+    """Opener för sidhämtning. Utan proxy: fäst anslutningen vid en validerad IP
+    (stänger DNS-rebinding). Med proxy: låt proxyn sköta utgående trafik."""
+    if urllib.request.getproxies().get((scheme or "").lower()):
+        return urllib.request.build_opener(_SafeRedirect)
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _PinnedHTTPHandler(), _PinnedHTTPSHandler(), _SafeRedirect)
+
+
 def html_to_text(html):
     """Grov men robust textutvinning ur HTML – bara standardbiblioteket."""
     html = _DROP_BLOCK_RE.sub(" ", html or "")
@@ -332,7 +403,7 @@ def fetch_page_text(url, timeout=PAGE_FETCH_TIMEOUT, cap=PAGE_RAW_CAP):
     if cached is not None:
         return cached[:cap]
     try:
-        opener = urllib.request.build_opener(_SafeRedirect)
+        opener = _build_fetch_opener(url.split(":", 1)[0])
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0 (compatible; OllamaStudio/1.0)",
             "Accept": "text/html,text/plain;q=0.9",
@@ -347,7 +418,8 @@ def fetch_page_text(url, timeout=PAGE_FETCH_TIMEOUT, cap=PAGE_RAW_CAP):
         if m:
             charset = m.group(1)
         text = html_to_text(raw.decode(charset, errors="replace"))[:PAGE_RAW_CAP]
-    except Exception:
+    except Exception as e:
+        log.debug("fetch_page_text failed for %s: %s", url, e)
         return ""
     _cache_put(_page_cache, url, text)
     return text[:cap]
@@ -368,7 +440,8 @@ def enrich_results(results, pages=3, query="", timeout=PAGE_FETCH_TIMEOUT,
         for future in concurrent.futures.as_completed(futures, timeout=timeout + 4):
             try:
                 text = future.result()
-            except Exception:
+            except Exception as e:
+                log.debug("page fetch task failed: %s", e)
                 text = ""
             if text:
                 futures[future]["text"] = relevant_excerpt(text, query, per_page)
