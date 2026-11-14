@@ -1,5 +1,5 @@
 /* ============================================================
-   ACCURETTA COMPLETE DESIGN SYSTEM & WORKBENCH STYLING
+   OLLAMA STUDIO DESIGN SYSTEM & WORKBENCH STYLING
    Precision light mode default · Monospace telemetry · Soft card glass
    ============================================================ */
 
@@ -19,7 +19,7 @@
   --fs-2xl: 28px;
   --fs-3xl: 36px;
 
-  /* ---- ACCURETTA WARM LIGHT THEME PALETTE ---- */
+  /* ---- WARM LIGHT THEME PALETTE ---- */
   --bg: #FAF9F6;
   --bg-raised: #FFFFFF;
   --bg-sunken: #F4F4F2;
@@ -142,7 +142,7 @@ html, body {
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ============================================================
-   ACCURETTA WORKBENCH SHELL (.app with 3 floating panels)
+   WORKBENCH SHELL (.app with 3 floating panels)
    ============================================================ */
 .app {
   display: flex;
@@ -157,7 +157,7 @@ html, body {
 }
 
 /* ------------------------------------------------------------
-   1. LEFT SIDEBAR (Accuretta Technical Drawer)
+   1. LEFT SIDEBAR (Technical Drawer)
    ------------------------------------------------------------ */
 .sidebar {
   width: 250px;
@@ -629,7 +629,7 @@ html, body {
 }
 
 /* ------------------------------------------------------------
-   ACCURETTA FLOATING COMPOSER
+   FLOATING COMPOSER
    ------------------------------------------------------------ */
 .composer-container {
   position: absolute;

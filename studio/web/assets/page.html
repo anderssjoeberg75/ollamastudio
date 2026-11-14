@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Accuretta · Ollama Studio</title>
+<title>Ollama Studio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -21,8 +21,8 @@
           <path d="M164 6 L226 6 Q240 6 233.7 18.5 L111.3 261.5 Q105 274 91 274 L24 274 Q10 274 16.5 261.6 L143.5 18.4 Q150 6 164 6 Z" fill="#2563EB"/>
           <path d="M225 135 L260 135 Q272 135 277.2 145.8 L332.8 261.2 Q338 272 326 272 L269 272 Q257 272 253.3 260.6 L216.7 146.4 Q213 135 225 135 Z" fill="#7C3AED"/>
         </svg>
-        <span class="brand-title">Accuretta</span>
-        <span class="brand-v" id="brand-v">v0.7.3</span>
+        <span class="brand-title">Ollama Studio</span>
+        <span class="brand-v" id="brand-v">v1.0.0</span>
         <span class="grow"></span>
         <button class="iconbtn sm" id="btnToggleSidebar" onclick="toggleSidebar()" title="Collapse sidebar"><i class="ph ph-sidebar-simple"></i></button>
       </div>
@@ -73,7 +73,7 @@
       </div>
       <div class="workspace-card" id="sidebarWsCard" onclick="showView('code')">
         <i class="ph ph-folder-simple" style="color:var(--accent)"></i>
-        <span id="sidebarWsLabel">Accuretta Workspace</span>
+        <span id="sidebarWsLabel">Studio Workspace</span>
       </div>
 
       <div class="side-stats">
@@ -185,7 +185,7 @@
               <path d="M164 6 L226 6 Q240 6 233.7 18.5 L111.3 261.5 Q105 274 91 274 L24 274 Q10 274 16.5 261.6 L143.5 18.4 Q150 6 164 6 Z" fill="#2563EB"/>
               <path d="M225 135 L260 135 Q272 135 277.2 145.8 L332.8 261.2 Q338 272 326 272 L269 272 Q257 272 253.3 260.6 L216.7 146.4 Q213 135 225 135 Z" fill="#7C3AED"/>
             </svg>
-            <h1 class="welcome-title">accuretta</h1>
+            <h1 class="welcome-title">ollama studio</h1>
           </div>
           <div class="welcome-subtitle">Your model, your machine. What are we building today?</div>
 
@@ -214,7 +214,7 @@
           <div id="chatMessages" class="chat-messages"></div>
         </div>
 
-        <!-- Accuretta Floating Composer -->
+        <!-- Floating Composer -->
         <div class="composer-container">
           <div class="floating-composer" id="floatingComposer">
             <textarea id="chatInput" placeholder="ask, build, or instruct..." rows="1" onkeydown="onComposerKeyDown(event)" oninput="autoGrowTextarea(this)"></textarea>

@@ -3903,7 +3903,7 @@ loadCodeMsgs();   // återställ Codex-konversationen vid omladdning
 restoreCodeLog();
 
 // ==========================================
-// Accuretta Workbench UI Interactive Wiring
+// Workbench UI Interactive Wiring
 // ==========================================
 function setQuickPrompt(promptText) {
   const input = document.getElementById('chatInput');

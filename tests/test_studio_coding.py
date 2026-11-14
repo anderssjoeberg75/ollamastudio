@@ -7,7 +7,7 @@ from studio.codex.protocol import agent_tool_exec
 import studio.config as config
 
 
-class TestAccurettaCodingFeatures(unittest.TestCase):
+class TestStudioCodingFeatures(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.old_ws = config.setting_str("code_workspace")
