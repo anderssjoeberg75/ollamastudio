@@ -1194,6 +1194,16 @@ function renderChat(){
   }).join('');
   box.scrollTop = box.scrollHeight;
   if(thread) thread.scrollTop = thread.scrollHeight;
+
+  // Auto preview any code from latest assistant reply
+  if(chatMessages.length){
+    for(let j = chatMessages.length - 1; j >= 0; j--){
+      if(chatMessages[j].role === 'assistant' && chatMessages[j].content){
+        autoPreviewGeneratedCode(chatMessages[j].content);
+        break;
+      }
+    }
+  }
 }
 
 /* ---- Markdown rendering ---- */
@@ -1332,21 +1342,28 @@ async function sendChat(){
             if(box.lastChild) box.lastChild.textContent = chatMessages[idx].content;
             box.scrollTop = box.scrollHeight;
           }
-          if(msg.done && msg.eval_count && msg.eval_duration){
+        if(msg.done){
+          let tokenCount = msg.eval_count;
+          if(!tokenCount && chatMessages[idx] && chatMessages[idx].content){
+            tokenCount = Math.round(chatMessages[idx].content.length / 3.8);
+          }
+          if(tokenCount){
             chatMessages[idx].stats = {
-              tps: msg.eval_count / (msg.eval_duration/1e9),
-              tokens: msg.eval_count,
+              tps: msg.eval_duration ? (tokenCount / (msg.eval_duration/1e9)) : 0,
+              tokens: tokenCount,
               secs: (msg.total_duration||0)/1e9,
               gpu: (document.getElementById('chatBackend').value || '')
             };
-            addCumulativeTokens(msg.eval_count || 0);
+            addCumulativeTokens(tokenCount);
           }
-          if(msg.error){ chatMessages[idx].content += '\n[Error: '+msg.error+']'; }
-        }catch(e){}
-      }
+        }
+        if(msg.error){ chatMessages[idx].content += '\n[Error: '+msg.error+']'; }
+      }catch(e){}
     }
-    if(!chatMessages[idx].content) chatMessages[idx].content = '(no response)';
-    renderChat();
+  }
+  if(!chatMessages[idx].content) chatMessages[idx].content = '(no response)';
+  renderChat();
+  autoPreviewGeneratedCode(chatMessages[idx].content);
     if(memory) memWrite(text, chatMessages[idx].content);
   }catch(e){
     if(e.name === 'AbortError') chatMessages[idx].content += '  [cancelled]';
@@ -4143,13 +4160,80 @@ function setPreviewTab(tab) {
     if (tabCode) tabCode.classList.remove('active');
     if (tabPrev) tabPrev.classList.add('active');
     if (codePre) codePre.style.display = 'none';
-    if (iframeEl && iframeEl.src && iframeEl.src !== 'about:blank') {
+    if (iframeEl && (iframeEl.srcdoc || (iframeEl.src && iframeEl.src !== 'about:blank'))) {
       iframeEl.style.display = 'block';
       if (emptyEl) emptyEl.style.display = 'none';
     } else {
       if (emptyEl) emptyEl.style.display = 'flex';
       if (iframeEl) iframeEl.style.display = 'none';
     }
+  }
+}
+
+// Automatically detect generated code (HTML/CSS/JS or code blocks) and render in preview pane
+function autoPreviewGeneratedCode(text) {
+  if (!text || typeof text !== 'string') return;
+  const emptyEl = document.getElementById('previewEmpty');
+  const iframeEl = document.getElementById('previewIframe');
+  const codePre = document.getElementById('previewCodePre');
+  const tabPrev = document.getElementById('tabPrevPreview');
+  const tabCode = document.getElementById('tabPrevCode');
+
+  // 1. Extract markdown code blocks
+  const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
+  let match;
+  let htmlCode = '';
+  let cssCode = '';
+  let jsCode = '';
+  let allCode = '';
+
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    const lang = (match[1] || '').toLowerCase().trim();
+    const content = match[2] || '';
+    allCode += content + '\n\n';
+
+    if (lang === 'html' || content.includes('<!DOCTYPE') || content.includes('<html') || content.includes('<body') || content.includes('<div')) {
+      htmlCode += content + '\n';
+    } else if (lang === 'css' || content.includes('{') && (content.includes('margin') || content.includes('padding') || content.includes('color:'))) {
+      cssCode += content + '\n';
+    } else if (lang === 'js' || lang === 'javascript') {
+      jsCode += content + '\n';
+    }
+  }
+
+  // Check if we found a runnable web preview
+  if (htmlCode || cssCode || jsCode) {
+    let combinedHtml = htmlCode;
+    if (!combinedHtml) {
+      combinedHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${cssCode}</style></head><body><div id="app"></div><script>${jsCode}<\/script></body></html>`;
+    } else {
+      if (cssCode && !combinedHtml.includes('<style>')) {
+        combinedHtml = combinedHtml.replace('</head>', `<style>${cssCode}</style></head>`);
+        if (!combinedHtml.includes('</head>')) combinedHtml = `<style>${cssCode}</style>` + combinedHtml;
+      }
+      if (jsCode && !combinedHtml.includes('<script>')) {
+        combinedHtml = combinedHtml.replace('</body>', `<script>${jsCode}<\/script></body>`);
+        if (!combinedHtml.includes('</body>')) combinedHtml += `<script>${jsCode}<\/script>`;
+      }
+    }
+
+    if (iframeEl) {
+      iframeEl.srcdoc = combinedHtml;
+      iframeEl.style.display = 'block';
+      if (emptyEl) emptyEl.style.display = 'none';
+      if (tabPrev) tabPrev.classList.add('active');
+      if (tabCode) tabCode.classList.remove('active');
+      if (codePre) {
+        codePre.style.display = 'none';
+        codePre.textContent = (htmlCode ? htmlCode + '\n' : '') + (cssCode ? '/* CSS */\n' + cssCode + '\n' : '') + (jsCode ? '// JS\n' + jsCode : '');
+      }
+    }
+    return;
+  }
+
+  // 2. Fallback: if any other code was generated (python, bash, json etc.), update code tab
+  if (allCode.trim() && codePre) {
+    codePre.textContent = allCode.trim();
   }
 }
 
@@ -4369,6 +4453,7 @@ async function executeDockChat(userText) {
       ansSpan.textContent = 'No response.';
     } else {
       dockChatHistory.push({ role: 'assistant', content: fullReply });
+      autoPreviewGeneratedCode(fullReply);
     }
   } catch (err) {
     ansSpan.textContent = '[Error: ' + err.message + ']';
