@@ -38,6 +38,8 @@ from .codex.permissions import AgentRun, RepeatGuard
 from .codex.protocol import (
     agent_system_prompt, agent_tool_exec, parse_tool_call, strip_edits
 )
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 def _create_repo_issue(title, description="", labels=None, project_slug=None):
     slug = (project_slug or "").strip().lower()
@@ -108,6 +110,7 @@ def compute_next_run(interval_hours, run_time="", from_time=None):
                     days = max(1, interval // 24)
                     return (target_today + datetime.timedelta(days=days)).timestamp()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
     return (now + datetime.timedelta(hours=interval)).timestamp()
 
@@ -398,6 +401,7 @@ def _get_active_code_model(base_url=None):
         if m and m.lower() != "auto":
             return m
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     base = base_url or backends.select_optimal_backend()
     from .llama_bridge import detect_backend_type, llama_server_models
@@ -416,6 +420,7 @@ def _get_active_code_model(base_url=None):
                 return optimal
             return models[0].get("name") or models[0].get("model") or ""
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     return ""
 
@@ -457,6 +462,7 @@ def _get_local_ollama_model(base_url=None, task="pentest"):
                     return optimal_code
                 return models[0].get("name") or models[0].get("model") or ""
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     return "whiterabbitneo" if task == "pentest" else "llama3.2:latest"
 
@@ -479,6 +485,7 @@ def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
         if user_m and user_m.lower() != "auto":
             return user_m
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
     installed_local = []
@@ -499,6 +506,7 @@ def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
                     if nm:
                         installed_local.append(nm)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
     from .codex.router import select_best_model_for_task
@@ -607,6 +615,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                         if delta:
                             chunks.append(delta)
                     except Exception:
+                        _log.debug("ignored exception", exc_info=True)
                         continue
                 full = "".join(chunks)
                 if any(err_sig in full for err_sig in ("AGY_ERROR:", "Individual quota reached", "RESOURCE_EXHAUSTED", "quota exceeded")):
@@ -622,12 +631,14 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                                 if delta:
                                     fallback_chunks.append(delta)
                             except Exception:
+                                _log.debug("ignored exception", exc_info=True)
                                 continue
                         fallback_full = "".join(fallback_chunks)
                         if fallback_full and "AGY_ERROR:" not in fallback_full:
                             full = fallback_full
                             model = fallback_model
                     except Exception:
+                        _log.debug("ignored exception", exc_info=True)
                         pass
             except Exception as e:
                 setattr(ctx, "last_error", "Antigravity-fel (%s): %s" % (model, e))
@@ -719,6 +730,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                     from .codex.workspace import ws_write_file
                     ws_write_file(ed["path"], ed["content"])
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     pass
 
         msg = strip_edits(full)
@@ -795,6 +807,7 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
                 if ag_text:
                     agent_guidance = f"\n\nSPECIALIST DIRECTIVE ({rec_agent}):\n{ag_text[:1200]}\n"
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
         if status_cb:

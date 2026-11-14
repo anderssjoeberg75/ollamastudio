@@ -183,8 +183,8 @@ Kör detta **på servern** (exemplet utgår från att koden ligger i `/opt/ollam
 git clone https://github.com/anderssjoeberg75/ollamastudio.git /opt/ollamastudio
 cd /opt/ollamastudio
 
-# 2. Starta webbservern
-python3 ollama_web.py
+# 2. Starta webbservern – nåbar från andra datorer, skyddad med lösenord
+OLLAMA_STUDIO_HOST=0.0.0.0 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
 ```
 
 Du ser då en utskrift med adresser, t.ex.:
@@ -195,8 +195,12 @@ Du ser då en utskrift med adresser, t.ex.:
      http://<serverns-namn>:8080
 ```
 
-**Öppna den adressen i webbläsaren på din andra dator** – klart! Du kan nu installera och
-avinstallera modeller precis som i skrivbordsappen.
+**Öppna den adressen i webbläsaren på din andra dator** och ange lösenordet – klart! Du kan
+nu installera och avinstallera modeller precis som i skrivbordsappen.
+
+> Startar du bara `python3 ollama_web.py` lyssnar appen **enbart på den här datorn**
+> (`http://127.0.0.1:8080`). Utelämnar du `OLLAMA_STUDIO_TOKEN` men sätter
+> `OLLAMA_STUDIO_HOST=0.0.0.0` genereras ett lösenord automatiskt och skrivs ut vid start.
 
 > Om sidan inte laddas: kontrollera att serverns brandvägg tillåter porten, t.ex.
 > `sudo ufw allow 8080/tcp`.
@@ -225,16 +229,22 @@ journalctl -u ollama-studio-web -f     # följ loggen
 Tjänsten är förinställd på sökvägen `/opt/ollamastudio` och port `8080`. Ligger koden någon
 annanstans – ändra `WorkingDirectory` och `ExecStart` i filen.
 
+Tjänsten lyssnar som standard **bara på `127.0.0.1`**. Ska andra datorer nå den: avkommentera
+raderna `OLLAMA_STUDIO_HOST=0.0.0.0` och `OLLAMA_STUDIO_TOKEN=…` i tjänstefilen och sätt ett
+eget lösenord. (Sätter du bara värden genereras ett lösenord automatiskt – det står i
+`journalctl -u ollama-studio-web`, men byts vid varje omstart.)
+
 ### Inställningar (miljövariabler)
 
 Webbversionen styrs helt med miljövariabler (alla valfria):
 
 | Variabel | Standard | Betydelse |
 | --- | --- | --- |
-| `OLLAMA_STUDIO_HOST` | `0.0.0.0` | Adress att lyssna på (`0.0.0.0` = alla nätverkskort). |
+| `OLLAMA_STUDIO_HOST` | `127.0.0.1` | Adress att lyssna på. Standard är **bara den här datorn**. Sätt `0.0.0.0` för att nå appen från andra datorer – då krävs alltid en token (se nästa rader). |
 | `OLLAMA_STUDIO_PORT` | `8080` | Porten webbappen körs på. |
 | `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
-| `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Valfritt lösenord. Sätts det måste man ange token för att hantera modeller. |
+| `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Lösenord för webbappen. Lyssnar servern på nätverket (t.ex. `0.0.0.0`) utan att token är satt **genereras en token automatiskt** vid start och skrivs ut i loggen – sätt en egen för att den inte ska bytas vid varje omstart. |
+| `OLLAMA_STUDIO_LOG_LEVEL` | `INFO` | Loggnivå (till stderr/journalctl). `DEBUG` visar även fel som appen medvetet ignorerar och går vidare från – bra vid felsökning. |
 | `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU eller optimerad instans). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu) och [Extra instans med KV-cache-kvantisering](#extra-instans-med-kv-cache-kvantisering-gpu-1-port-11436). |
 | `OLLAMA_FLASH_ATTENTION` | *(sätts på Ollama)* | Sätts på **Ollama-tjänsten** (ej Ollama Studio). Aktiverar FlashAttention (`1`). Krävs bl.a. för kvantiserad KV-cache. Se [Extra instans](#extra-instans-med-kv-cache-kvantisering-gpu-1-port-11436). |
 | `OLLAMA_KV_CACHE_TYPE` | *(sätts på Ollama)* | Sätts på **Ollama-tjänsten** (ej Ollama Studio). Typ av KV-cache, t.ex. `q8_0` för att halvera minnesåtgången för KV-cachen. Kräver `OLLAMA_FLASH_ATTENTION=1`. |
@@ -265,6 +275,9 @@ Webbversionen styrs helt med miljövariabler (alla valfria):
 | `OLLAMA_STUDIO_CODE_STEPS` | `0` (obegränsat) | Tak för antal verktygssteg per körning. **0 = obegränsat** – agenten håller på tills den är klar; en modell som kört fast fångas i stället av loop-detektionen och av **■ Stoppa**. Sätt 1–1000 för ett hårt tak. |
 | `OLLAMA_STUDIO_CODE_CTX` | `8192` | Kontextfönster (`num_ctx`) för Codex. **Viktig:** utan den kör Ollama på sin egen standard (ofta 2048 token), och då trillar instruktionerna ut ur fönstret efter ett par steg så agenten slutar följa protokollet mitt i jobbet. `0` = låt Ollama bestämma. |
 | `OLLAMA_STUDIO_CODE_TEMP` | `0.2` | Temperatur för Codex. Lågt värde ger förutsägbar kod och stabila verktygsanrop. |
+| `OLLAMA_STUDIO_CODE_SANDBOX` | `0` (av) | Sätt `1` för att köra Codex-kommandon i en Docker-container (arbetsytan monteras som `/workspace`). Containern körs med `no-new-privileges` och tak för processer, minne (2 GB) och CPU (2). |
+| `OLLAMA_STUDIO_CODE_SANDBOX_IMAGE` | `python:3.12-slim` | Container-imagen sandlådan använder. |
+| `OLLAMA_STUDIO_CODE_SANDBOX_NO_NET` | `0` (av) | Sätt `1` för att stänga av allt nätverk i sandlådan (`--network none`) – för att köra opålitlig kod. Av som standard eftersom säkerhetstest-verktyg som nmap behöver nätverk. |
 | `OLLAMA_STUDIO_TRAIN_MENU` | `0` (av) | Sätt `1` för att visa **🎓 AI-träning** i menyn. Dold som standard – appen fokuserar på Codex. |
 
 Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
@@ -278,10 +291,10 @@ Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
 | `MEM0_AUTH_SCHEME` | `Token` | Schema i `Authorization`-headern (t.ex. `Bearer` för vissa servrar). |
 | `MEM0_ORG_ID` / `MEM0_PROJECT_ID` | *(tomt)* | Valfria org-/projekt-ID för Mem0 Cloud. |
 
-Exempel – kör på port 9000 med lösenord:
+Exempel – kör på port 9000 med lösenord, nåbar från andra datorer:
 
 ```bash
-OLLAMA_STUDIO_PORT=9000 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
+OLLAMA_STUDIO_HOST=0.0.0.0 OLLAMA_STUDIO_PORT=9000 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
 ```
 
 Exempel – samma minne som Freja (Mem0 Cloud):
@@ -298,10 +311,14 @@ OLLAMA_STUDIO_MEM0=1 MEM0_API_KEY=m0-… MEM0_USER_ID=<samma-som-freja> python3 
 
 ### Säkerhet
 
-Webbappen låter vem som helst som når porten **installera och radera modeller**. Tänk på:
+Webbappen kan installera och radera modeller, och Codex kan läsa/skriva filer, köra
+kommandon och starta säkerhetstester. Därför:
 
-- **Sätt ett token** (`OLLAMA_STUDIO_TOKEN`) om servern nås av andra än du. Då frågar
-  webbläsaren efter lösenordet första gången.
+- **Som standard lyssnar den bara på `127.0.0.1`** – ingen annan dator kommer åt den.
+- **Öppnar du den på nätverket** (`OLLAMA_STUDIO_HOST=0.0.0.0`) krävs alltid en token.
+  Har du inte satt `OLLAMA_STUDIO_TOKEN` genereras en automatiskt vid start och skrivs ut
+  i loggen. Sätt hellre en egen, så att den inte byts vid varje omstart. Webbläsaren frågar
+  efter lösenordet första gången.
 - **Begränsa med brandvägg** så bara ditt nätverk kommer åt porten.
 - **Exponera inte rakt mot internet.** Vill du nå den utifrån, lägg den bakom en
   reverse proxy (t.ex. Nginx eller Caddy) med HTTPS och inloggning.

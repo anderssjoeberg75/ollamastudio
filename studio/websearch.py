@@ -20,6 +20,8 @@ from datetime import datetime
 
 from .config import setting_str, websearch_enabled, websearch_pages
 from .logging_util import get_logger
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 log = get_logger("ollamastudio.websearch")
 
@@ -189,6 +191,7 @@ def web_search(query, max_results=5, timeout=12):
             _cache_put(_search_cache, (query or "").strip().lower(), results)
             return results
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass   # nätverksfel/blockering – prova fallbacken nedan
     page = _ddg_fetch("https://lite.duckduckgo.com/lite/?" + q, timeout)
     results = _parse_ddg_lite(page, max_results)
@@ -258,12 +261,14 @@ def url_is_public(url):
     try:
         parts = urllib.parse.urlsplit(url)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return False
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return False
     try:
         infos = socket.getaddrinfo(parts.hostname, None)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return False
     for info in infos:
         try:
@@ -313,24 +318,25 @@ def _resolve_public_ip(host):
     return chosen
 
 
+def _pinned_create_connection(address, *args, **kwargs):
+    """Ersätter socket.create_connection: anslut till den validerade IP:n i stället
+    för att låta värdnamnet slås upp på nytt."""
+    host, port = address[0], address[1]
+    return socket.create_connection((_resolve_public_ip(host), port), *args, **kwargs)
+
+
+# Bara TCP-målet byts ut – resten av stdlib:s connect() (TCP_NODELAY, tunnel och
+# för HTTPS: SNI + certverifiering mot self.host, dvs värdnamnet) körs oförändrat.
 class _PinnedHTTPConnection(http.client.HTTPConnection):
-    def connect(self):
-        self.sock = socket.create_connection(
-            (_resolve_public_ip(self.host), self.port), self.timeout, self.source_address)
-        if self._tunnel_host:
-            self._tunnel()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _pinned_create_connection
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def connect(self):
-        sock = socket.create_connection(
-            (_resolve_public_ip(self.host), self.port), self.timeout, self.source_address)
-        if self._tunnel_host:
-            self.sock = sock
-            self._tunnel()
-            sock = self.sock
-        # server_hostname=self.host -> SNI och certkontroll mot värdnamnet, inte IP:n.
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _pinned_create_connection
 
 
 class _PinnedHTTPHandler(urllib.request.HTTPHandler):
@@ -340,7 +346,12 @@ class _PinnedHTTPHandler(urllib.request.HTTPHandler):
 
 class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
     def https_open(self, req):
-        return self.do_open(_PinnedHTTPSConnection, req)
+        # Skicka vidare handlerns SSL-context precis som stdlib gör (annars ignoreras
+        # en egen context tyst). check_hostname finns bara som attribut i Python < 3.12.
+        kw = {"context": self._context}
+        if getattr(self, "_check_hostname", None) is not None:
+            kw["check_hostname"] = self._check_hostname
+        return self.do_open(_PinnedHTTPSConnection, req, **kw)
 
 
 def _build_fetch_opener(scheme):

@@ -8,6 +8,8 @@ import urllib.parse
 import urllib.request
 
 from .config import setting_str, mem0_enabled
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -78,6 +80,7 @@ def mem0_search(query, limit=6, timeout=12):
         data = _mem0_call("POST", "memories/search/",
                           _mem0_scope({"query": query, "limit": limit}), timeout=timeout)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return []
     out = []
     for it in _mem0_items(data):
@@ -95,6 +98,7 @@ def mem0_add(messages):
         _mem0_call("POST", "memories/", _mem0_scope({"messages": messages}))
         return True
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return False
 
 
@@ -106,6 +110,7 @@ def mem0_list(limit=100):
         data = _mem0_call("GET", "memories/",
                           query=_mem0_scope({"page_size": limit}))
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return []
     out = []
     for it in _mem0_items(data):
@@ -133,6 +138,7 @@ def mem0_delete(memory_id):
         _mem0_call("DELETE", "memories/%s/" % urllib.parse.quote(mid, safe=""))
         return True
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return False
 
 
@@ -144,6 +150,7 @@ def mem0_clear():
         _mem0_call("DELETE", "memories/", query=_mem0_scope({}))
         return True
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return False
 
 

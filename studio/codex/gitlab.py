@@ -18,6 +18,8 @@ from .gitops import (_git, git_auth_env, git_available, git_current_branch, git_
                      git_remote_info)
 from .github import (code_repos_root, local_repo_state, local_repos,
                      _rmtree_force, remove_local_repo, repo_dir_name)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 _repos_cache = {"at": 0, "items": []}
 _repos_lock = threading.Lock()
@@ -248,6 +250,7 @@ def gitlab_create_mr(title, body, target_branch=None, source_branch=None):
         try:
             msg = json.loads(e.read().decode("utf-8")).get("message", "")
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             msg = ""
         return False, "GitLab HTTP %d: %s" % (e.code, msg or "kunde inte skapa Merge Request")
     except Exception as e:
@@ -298,6 +301,7 @@ def gitlab_create_issue(title, description="", labels=None, project_slug=None):
         try:
             msg = json.loads(e.read().decode("utf-8")).get("message", "")
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             msg = ""
         return False, "GitLab HTTP %d: %s" % (e.code, msg or "kunde inte skapa issue")
     except Exception as e:
@@ -329,6 +333,7 @@ def extract_findings_from_text(text):
                 if res:
                     return res
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
 
     # Underrubriker som hör till ett fynd och INTE ska brytas ut till ett nytt issue
@@ -436,6 +441,7 @@ def gitlab_list_issues(project_slug=None, state="opened", max_items=200):
                     break
                 page = int(next_page)
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             break
     return all_issues
 

@@ -8,6 +8,8 @@ Ger Codex och Ollama Studio direkt tillgång till:
 """
 import os
 import re
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 # Roten för projektets agenter (.agents/)
 AGENTS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), ".agents")
@@ -42,6 +44,7 @@ def get_skill(name):
             with open(skill_file, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return None
     return None
 
@@ -72,6 +75,7 @@ def get_agent(name):
             with open(agent_file, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return None
     return None
 
@@ -102,6 +106,7 @@ def get_workflow(name):
             with open(wf_file, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             return None
     return None
 

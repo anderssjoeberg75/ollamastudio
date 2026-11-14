@@ -7,6 +7,8 @@ import json
 import threading
 
 from ..config import CODE_MODES, CODE_MODE_LABELS, code_mode
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # ---- Godkännanden: agenten frågar, webbläsaren svarar -----------------------
@@ -74,6 +76,7 @@ class RepeatGuard:
         try:
             sig = (name, json.dumps(args, sort_keys=True, ensure_ascii=False))
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             sig = (name, repr(args))
         if sig == self.last:
             self.count += 1

@@ -10,6 +10,8 @@ import subprocess
 import time
 
 from ..config import setting_bool, setting_str
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 _docker_cache_time = 0
@@ -35,6 +37,7 @@ def docker_available(force_refresh=False):
                              stdin=subprocess.DEVNULL)
         _docker_cached_status = (res.returncode == 0)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         _docker_cached_status = False
 
     _docker_cache_time = now

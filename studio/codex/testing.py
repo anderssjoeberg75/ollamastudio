@@ -9,6 +9,8 @@ import re
 import shlex
 import subprocess
 from ..config import code_workspace_root
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 def find_test_runner(root=None):
@@ -49,6 +51,7 @@ def find_test_runner(root=None):
                     if res.returncode == 0:
                         return toks + ["-q"], "python_pytest"
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     pass
 
     # 2. Node / NPM-projekt

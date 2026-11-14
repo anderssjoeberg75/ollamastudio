@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import threading
 import time
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 def find_agy_bin():
@@ -19,6 +21,7 @@ def find_agy_bin():
         if cfg_path and os.path.isfile(cfg_path):
             return cfg_path
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
 
     env_path = os.environ.get("AGY_PATH")
@@ -165,6 +168,7 @@ class AntigravityStream:
                 from .config import code_workspace_root
                 ws = code_workspace_root()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 ws = None
 
         cwd = None
@@ -197,6 +201,7 @@ class AntigravityStream:
                 try:
                     data = json.loads(line)
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     continue
 
                 step = data.get("step_update") or {}
@@ -228,6 +233,7 @@ class AntigravityStream:
                 try:
                     err_text = self.proc.stderr.read() or ""
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     pass
                 if not err_text:
                     rc = self.proc.poll()
@@ -248,10 +254,12 @@ class AntigravityStream:
             try:
                 self.proc.terminate()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
             try:
                 self.proc.wait(timeout=2)
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
 
 

@@ -14,6 +14,8 @@ from studio.runtime import actual_gpu
 from studio.sysinfo import nvidia_gpus
 from studio.config import hf_auto_enabled, hf_enabled, hf_token
 from studio.huggingface_bridge import HF, HF_FALLBACK_LIMIT, _pull_error_text
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 class ModelRoutes(BaseHandler):
@@ -29,6 +31,7 @@ class ModelRoutes(BaseHandler):
                 # instans ska inte hålla upp pollningen i 8 s.
                 return b, self._upstream_get("/api/ps", base=b["url"], timeout=3)
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 return b, None
 
         models = []
@@ -55,6 +58,7 @@ class ModelRoutes(BaseHandler):
                 if found is not None:
                     m["gpu_actual"] = found
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             pass
         return {"models": models}
 
@@ -156,6 +160,7 @@ class ModelRoutes(BaseHandler):
                 try:
                     msg = json.loads(line.decode("utf-8", errors="replace"))
                 except Exception:
+                    _log.debug("ignored exception", exc_info=True)
                     msg = None
                 if isinstance(msg, dict):
                     if msg.get("error"):
@@ -171,6 +176,7 @@ class ModelRoutes(BaseHandler):
             try:
                 upstream.close()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
         if not success and not error:
             error = "Nedladdningen slutfördes inte."

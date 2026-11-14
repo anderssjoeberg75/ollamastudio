@@ -10,6 +10,8 @@ import secrets
 import sqlite3
 import sys
 import threading
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # Appens identitet och de miljövariabler som styr själva servern.
@@ -59,10 +61,12 @@ DB_PATH = os.environ.get(
 try:
     import soup_train as TRAIN          # AI-träning
 except Exception:                        # pragma: no cover
+    _log.debug("ignored exception", exc_info=True)
     TRAIN = None
 try:
     import huggingface as HF            # Hugging Face-sök
 except Exception:                        # pragma: no cover
+    _log.debug("ignored exception", exc_info=True)
     HF = None
 
 
@@ -340,6 +344,7 @@ def train_workspace_root(create=False):
     try:
         path = os.path.realpath(path)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return None
     if create:
         try:
@@ -385,6 +390,7 @@ def code_workspace_root():
     try:
         root = os.path.realpath(os.path.expanduser(p))
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return None
     return root if os.path.isdir(root) else None
 

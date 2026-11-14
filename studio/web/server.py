@@ -66,6 +66,8 @@ from studio.websearch import now_context
 from studio.scheduler import (
     schedule_delete, schedule_get, schedule_list, schedule_run_job_async,
     schedule_save, start_scheduler)
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
@@ -294,6 +296,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                                             wm["model"] = "WhiteRabbitNeo-2.5-Qwen-7B"
                                         models_list.append(wm)
                             except Exception:
+                                _log.debug("ignored exception", exc_info=True)
                                 pass
 
                         from studio.antigravity_bridge import antigravity_models
@@ -330,6 +333,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         try:
             data = json.loads(raw.decode("utf-8") or "{}")
         except Exception:
+            _log.debug("ignored exception", exc_info=True)
             data = {}
         name = (data.get("name") or "").strip()
 
@@ -428,6 +432,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             try:
                 self.wfile.flush()
             except Exception:
+                _log.debug("ignored exception", exc_info=True)
                 pass
             if result.get("restart"):
                 # Svara klart först, starta sedan om strax efter så klienten hinner
@@ -656,6 +661,7 @@ def _local_ips():
         ips.append(s.getsockname()[0])
         s.close()
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     return ips
 
@@ -690,6 +696,7 @@ def main():
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         pass
     # Initiera den lokala inställningsdatabasen (SQLite)
     try:
@@ -701,6 +708,7 @@ def main():
         urllib.request.urlopen(OLLAMA_URL + "/api/version", timeout=3).read()
         ollama_ok = True
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         ollama_ok = False
 
     try:
@@ -763,17 +771,24 @@ def main():
     else:
         print(" Codex:          AV (slå på under ⚙ Inställningar + välj arbetsyta)")
     print("")
-    print(" Öppna i webbläsaren från en annan dator:")
-    for ip in _local_ips():
-        print("     http://%s:%d" % (ip, LISTEN_PORT))
-    print("     http://<serverns-namn>:%d" % LISTEN_PORT)
+    if is_loopback_host(LISTEN_HOST):
+        # Bunden till loopback: LAN-adresser går inte att nå, visa bara den lokala.
+        local = "[::1]" if LISTEN_HOST.strip() == "::1" else "127.0.0.1"
+        print(" Öppna i webbläsaren på den här datorn:")
+        print("     http://%s:%d" % (local, LISTEN_PORT))
+        print("")
+        print(" Nåbar bara från den här datorn. Öppna på nätverket med:")
+        print("     OLLAMA_STUDIO_HOST=0.0.0.0 OLLAMA_STUDIO_TOKEN=<hemligt>")
+    else:
+        print(" Öppna i webbläsaren från en annan dator:")
+        for ip in _local_ips():
+            print("     http://%s:%d" % (ip, LISTEN_PORT))
+        print("     http://<serverns-namn>:%d" % LISTEN_PORT)
     print("")
     _warn = access_warning_lines(LISTEN_HOST, LISTEN_PORT, TOKEN)
     if _warn:
         for _ln in _warn:
             print(" " + _ln)
-    elif not TOKEN:
-        print(" TIPS: sätt OLLAMA_STUDIO_TOKEN=<hemligt> om du vill kräva lösenord.")
     print(" Avsluta med Ctrl+C.")
     print("=" * 60)
     start_scheduler()

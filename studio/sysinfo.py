@@ -10,6 +10,8 @@ import threading
 import time
 
 from . import backends
+from studio.logging_util import get_logger as _get_logger
+_log = _get_logger(__name__)
 
 
 # --------------------------------------------------------------------------
@@ -34,6 +36,7 @@ def read_mem():
         avail = kb("MemAvailable")
         return total, total - avail
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return None, None
 
 
@@ -58,6 +61,7 @@ def read_cpu_percent():
                 pct = round((1 - di / dt) * 100, 1)
         return pct
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return None
 
 
@@ -66,6 +70,7 @@ def read_loadavg():
         with open("/proc/loadavg") as f:
             return [float(x) for x in f.read().split()[:3]]
     except Exception:
+        _log.debug("ignored exception", exc_info=True)
         return None
 
 
