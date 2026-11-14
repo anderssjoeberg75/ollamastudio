@@ -81,8 +81,16 @@ def run_in_sandbox(toks, cwd, timeout=120, env=None, output_cap=20000):
     # -v: montera lokal arbetsyta
     # -w /workspace: arbetskatalog i containern
     # --rm: städa upp containern efter körning
+    # Hardening: cap resources and block privilege escalation. Network and
+    # capabilities are left intact on purpose so that security-testing tools
+    # (nmap raw sockets etc.) still work; isolate further per deployment if the
+    # sandbox is only used for building/running untrusted code.
     cmd = [
         "docker", "run", "--rm", "-i",
+        "--security-opt", "no-new-privileges",
+        "--pids-limit", "512",
+        "--memory", "2g", "--memory-swap", "2g",
+        "--cpus", "2",
         "-v", f"{abs_cwd}:/workspace",
         "-w", "/workspace",
     ]

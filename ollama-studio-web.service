@@ -20,11 +20,15 @@ Restart=on-failure
 RestartSec=3
 
 # --- Inställningar (ändra efter behov) ---
-Environment=OLLAMA_STUDIO_HOST=0.0.0.0
+# Default är 127.0.0.1 (bara denna dator). Web-UI:t kan köra kommandon, läsa/skriva
+# filer och starta säkerhetstester, så öppna det på nätverket ENDAST tillsammans med
+# en token. Avkommentera båda raderna nedan för att exponera det med lösenord:
+# Environment=OLLAMA_STUDIO_HOST=0.0.0.0
+# Environment=OLLAMA_STUDIO_TOKEN=byt-till-nagot-hemligt
+Environment=OLLAMA_STUDIO_HOST=127.0.0.1
 Environment=OLLAMA_STUDIO_PORT=8080
 Environment=OLLAMA_URL=http://localhost:11434
-# Rekommenderas starkt på ett nätverk – kräver ett lösenord för att hantera modeller:
-# Environment=OLLAMA_STUDIO_TOKEN=byt-till-nagot-hemligt
+# Sätter du HOST=0.0.0.0 utan token genereras en token automatiskt och skrivs i loggen.
 # Kör du en Ollama-instans per GPU (se ollama-gpu@.service, eller ollama-gpu1-tuned.service)?
 # Lista dem här som "label,url,gpu ; label,url,gpu". Etiketten är fri text och
 # visas i GPU-väljaren i chatten.

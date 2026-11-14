@@ -6,6 +6,9 @@ import os
 import urllib.request
 
 from .config import OLLAMA_URL
+from .logging_util import get_logger
+
+log = get_logger("ollamastudio.backends")
 
 
 # --------------------------------------------------------------------------
@@ -109,6 +112,14 @@ def select_optimal_backend(preferred_url=None, task=None):
 
     if preferred_url and _backend_is_alive(preferred_url):
         return preferred_url
+
+    # Fail loud: a pentest task whose dedicated backend is down would otherwise be
+    # routed silently to a general model that refuses. Warn so the operator notices.
+    if task == "pentest":
+        log.warning(
+            "WhiteRabbitNeo-backenden (%s) svarar inte – säkerhetstestet kan hamna "
+            "hos en allmän modell som vägrar. Starta WhiteRabbitNeo på port 11436.",
+            preferred_url or "http://127.0.0.1:11436")
 
     # Auto-upptäckt: om vi har en instans på port 11434 eller 8080
     known_urls = {b.get("url") or "" for b in backends_list}

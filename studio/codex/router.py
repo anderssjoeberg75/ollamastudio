@@ -100,7 +100,19 @@ def classify_task(text="", labels=""):
     combined = f"{labels} {text}".lower()
 
     # 1. Pentest (Penetrationstestning mot nätverk och API:er)
-    if re.search(r'\b(pentest\w*|penetration[ -]?test\w*|red[ -]?team\w*|nmap|nuclei|ffuf|sqlmap|nikto|active_scan|whiterabbit\w*)\b', combined):
+    # Verktygsnamn och entydiga termer (sv + en). "säkerhetstest" och
+    # "sårbarhetsskanning" avser aktiv testning – kod-/SAST-granskning fångas av
+    # regel 2 nedan och ordnas efter denna.
+    if re.search(r'\b(pentest\w*|penetration[ -]?test\w*|penetrationstest\w*|red[ -]?team\w*|'
+                 r'nmap|nuclei|ffuf|sqlmap|nikto|active_scan|whiterabbit\w*|'
+                 r'säkerhetstest\w*|security[ -]?test\w*|sårbarhetsskann\w*|sårbarhetsscann\w*|'
+                 r'vuln\w*scan\w*|portskann\w*|port[ -]?scan\w*|recon\w*)\b', combined):
+        return "pentest"
+    # Aktiv skanning formulerad som verb + mål ("skanna min sajt", "testa
+    # säkerheten på webbplatsen") -> pentest, men inte "granska koden".
+    if re.search(r'\b(skanna\w*|scanna\w*|testa säkerhet\w*|angrip\w*|penetrera\w*|attack\w*)\b'
+                 r'[^.\n]*\b(sajt\w*|webbplats\w*|site|webbsajt\w*|domän\w*|url|servern?|'
+                 r'nätverk\w*|endpoint\w*|api\b|api:?er|mål(server)?\w*|host\w*|port\w*|ip)\b', combined):
         return "pentest"
 
     # 2. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)
@@ -193,7 +205,10 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
                 pentest_m = m
                 break
         if not pentest_m:
-            pentest_m = "whiterabbitneo"
+            # WhiteRabbitNeo är inte installerad: fall tillbaka till en installerad
+            # lokal modell i stället för att peka på en modell som inte finns (vilket
+            # tyst skulle misslyckas vid körning).
+            pentest_m = default_local
         reason = (
             "WhiteRabbitNeo vald för penetrationstest (specialiserad för offensive security och utan begränsande säkerhetsfilter)."
             if "whiterabbit" in pentest_m.lower() else

@@ -840,7 +840,7 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
                     status_cb("Fynd #%s åtgärdat, commitat%s och stängt i repot!" % (iid, push_msg))
         else:
             low_resp = (resp_text or "").lower()
-            if any(k in low_resp for k in ("redan_åtgärdad", "already_resolved", "redan åtgärdat", "redan löst", "redan implementerats", "inte längre ett problem")):
+            if any(k in low_resp for k in ("already_fixed", "already_resolved", "redan_åtgärdad", "redan åtgärdat", "redan löst", "redan implementerats", "inte längre ett problem")):
                 _comment_repo_issue(
                     iid,
                     f"Automatisk verifiering (modell {chosen_model}): Detta fynd är redan åtgärdat eller överflödigt i källkoden. Stänger issue.",
