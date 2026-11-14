@@ -266,10 +266,31 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 try:
                     data = self._upstream_get(upstream)
                     if path == "/api/models" and isinstance(data, dict):
+                        models_list = list(data.get("models") or [])
+                        # Om WhiteRabbitNeo körs på port 11436 (eller i en annan backend)
+                        # och inte redan finns med i primärbackendens lista, hämta den
+                        from studio.llama_bridge import llama_server_models
+                        from studio.backends import select_optimal_backend
+                        wr_url = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+                        if wr_url and wr_url != _backends.PRIMARY["url"]:
+                            try:
+                                wr_models = llama_server_models(wr_url, timeout=1.5)
+                                existing_names = {m.get("name") for m in models_list}
+                                for wm in wr_models:
+                                    if wm.get("name") not in existing_names:
+                                        # Ge ett tydligt namn och tag
+                                        if wm.get("name") == "whiterabbitneo":
+                                            wm["name"] = "WhiteRabbitNeo-2.5-Qwen-7B"
+                                            wm["model"] = "WhiteRabbitNeo-2.5-Qwen-7B"
+                                        models_list.append(wm)
+                            except Exception:
+                                pass
+
                         from studio.antigravity_bridge import antigravity_models
                         extra = antigravity_models()
                         if extra:
-                            data["models"] = extra + (data.get("models") or [])
+                            models_list = extra + models_list
+                        data["models"] = models_list
                     return self._send_json(data)
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 502)
@@ -577,7 +598,12 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             opts = data.get("options")
             opts = opts if isinstance(opts, dict) and opts else None
             # Välj backend (GPU-instans) att köra chatten på
-            base = backend_url(data.get("backend"))
+            backend_choice = data.get("backend")
+            if not backend_choice and "whiterabbit" in model.lower():
+                from studio.backends import select_optimal_backend
+                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+            else:
+                base = backend_url(backend_choice)
             # Vad är klockan? Modellen vet inte – tala om det (först i listan, så
             # den ligger kvar även när minne och sökträffar läggs till).
             if chat_time_enabled():
