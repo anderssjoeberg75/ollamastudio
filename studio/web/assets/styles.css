@@ -31,15 +31,15 @@
   --preview-canvas: #E5E3DC;
   --preview-border: #D5D3CC;
 
-  --fg: #18181B;
-  --fg-muted: #52525B;
-  --fg-subtle: #71717A;
-  --fg-faint: #A1A1AA;
+  --fg: #09090B;
+  --fg-muted: #27272A;
+  --fg-subtle: #3F3F46;
+  --fg-faint: #4B4B52;
   --fg-invert: #FFFFFF;
-  --text: #18181B;
-  --subtle: #71717A;
-  --muted: #52525B;
-  --faint: #A1A1AA;
+  --text: #09090B;
+  --subtle: #3F3F46;
+  --muted: #27272A;
+  --faint: #4B4B52;
 
   --border: rgba(0, 0, 0, 0.1);
   --border-strong: rgba(0, 0, 0, 0.2);
@@ -1296,10 +1296,11 @@ html, body {
   line-height: 1.45;
 }
 .meta {
-  color: var(--fg-faint);
+  color: #3F3F46;
   font-size: 11.5px;
   margin-top: 6px;
   font-family: var(--font-mono);
+  font-weight: 500;
 }
 .meta.live {
   color: #000000 !important;
@@ -1443,4 +1444,21 @@ textarea {
 .banner,
 #ghStatusBanner {
   color: #000000 !important;
+}
+
+/* Ensure secondary text, metadata, and hints have high contrast across the entire site */
+.meta,
+.desc,
+.pull-name,
+.hint,
+.sp-badge,
+.cost-widget-sub,
+.mem-label,
+.session-pill .sp-badge,
+[style*="color:var(--fg-faint)"],
+[style*="color:var(--faint)"],
+[style*="color:var(--fg-subtle)"],
+[style*="color:var(--subtle)"] {
+  color: #3F3F46 !important;
+  font-weight: 500;
 }
