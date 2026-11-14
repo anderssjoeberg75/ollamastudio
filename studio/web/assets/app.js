@@ -4295,8 +4295,14 @@ function toggleTrustWrites() {
 
 function popoutPreview() {
   const iframe = document.getElementById('previewIframe');
-  if (iframe && iframe.src) {
+  if (iframe && iframe.src && iframe.src !== 'about:blank') {
     window.open(iframe.src, '_blank');
+  } else if (iframe && iframe.srcdoc) {
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(iframe.srcdoc);
+      w.document.close();
+    }
   } else {
     const code = document.getElementById('previewCodePre');
     const w = window.open('', '_blank');
@@ -4304,6 +4310,109 @@ function popoutPreview() {
       w.document.write('<pre style="font-family:monospace;padding:16px;">' + (code.textContent || 'No code to preview') + '</pre>');
       w.document.close();
     }
+  }
+}
+
+// Interactive Pane Resizing (Drag to resize width and height)
+function initPaneResizers() {
+  const previewPane = document.getElementById('previewPane');
+  const resizeHandle = document.getElementById('previewResizeHandle');
+  const splitResizer = document.getElementById('previewSplitResizer');
+  const previewStage = document.getElementById('previewStage');
+  const terminalBottom = document.getElementById('terminalBottomPane');
+
+  // Restore saved sizes
+  try {
+    const savedW = localStorage.getItem('os_preview_width');
+    if (savedW && previewPane) previewPane.style.width = savedW + 'px';
+    const savedH = localStorage.getItem('os_preview_stage_height');
+    if (savedH && previewStage) {
+      previewStage.style.flex = 'none';
+      previewStage.style.height = savedH + 'px';
+    }
+  } catch(e) {}
+
+  // 1. Horizontal Width Resizer (Drag left border of preview pane)
+  if (resizeHandle && previewPane) {
+    let isResizingW = false;
+    let startX = 0;
+    let startW = 0;
+
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isResizingW = true;
+      startX = e.clientX;
+      startW = previewPane.getBoundingClientRect().width;
+      resizeHandle.classList.add('active');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      // Disable iframe mouse events during drag so mouse isn't captured
+      const ifr = document.getElementById('previewIframe');
+      if (ifr) ifr.style.pointerEvents = 'none';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isResizingW) return;
+      const dx = startX - e.clientX; // dragging left increases width
+      const newW = Math.max(280, Math.min(window.innerWidth * 0.85, startW + dx));
+      previewPane.style.width = newW + 'px';
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isResizingW) {
+        isResizingW = false;
+        resizeHandle.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        const ifr = document.getElementById('previewIframe');
+        if (ifr) ifr.style.pointerEvents = '';
+        try {
+          localStorage.setItem('os_preview_width', Math.round(previewPane.getBoundingClientRect().width).toString());
+        } catch(e) {}
+      }
+    });
+  }
+
+  // 2. Vertical Height Splitter (Drag between preview canvas and bottom terminal/chat)
+  if (splitResizer && previewStage && previewPane) {
+    let isResizingH = false;
+    let startY = 0;
+    let startH = 0;
+
+    splitResizer.addEventListener('mousedown', (e) => {
+      isResizingH = true;
+      startY = e.clientY;
+      startH = previewStage.getBoundingClientRect().height;
+      splitResizer.classList.add('active');
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+      const ifr = document.getElementById('previewIframe');
+      if (ifr) ifr.style.pointerEvents = 'none';
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isResizingH) return;
+      const dy = e.clientY - startY; // dragging down increases preview stage height
+      const paneH = previewPane.getBoundingClientRect().height - 48 - 6; // minus topbar and resizer
+      const newH = Math.max(120, Math.min(paneH - 100, startH + dy));
+      previewStage.style.flex = 'none';
+      previewStage.style.height = newH + 'px';
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isResizingH) {
+        isResizingH = false;
+        splitResizer.classList.remove('active');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        const ifr = document.getElementById('previewIframe');
+        if (ifr) ifr.style.pointerEvents = '';
+        try {
+          localStorage.setItem('os_preview_stage_height', Math.round(previewStage.getBoundingClientRect().height).toString());
+        } catch(e) {}
+      }
+    });
   }
 }
 
@@ -4515,6 +4624,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupTermInputListeners('termInputTerminal', 'termOutputTerminal');
   setupTermInputListeners('termInputShell', 'termOutputShell');
   setupDockChatListeners();
+  initPaneResizers();
 });
 
 // Also run immediately in case DOM is already loaded
@@ -4522,6 +4632,7 @@ setTimeout(() => {
   setupTermInputListeners('termInputTerminal', 'termOutputTerminal');
   setupTermInputListeners('termInputShell', 'termOutputShell');
   setupDockChatListeners();
+  initPaneResizers();
 }, 100);
 
 function setupDockChatListeners() {

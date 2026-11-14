@@ -404,6 +404,9 @@
 
   <!-- ====== 3. RIGHT PREVIEW & DEVTOOLS PANE ====== -->
   <aside class="preview" id="previewPane">
+    <!-- Resize handle to adjust pane width -->
+    <div class="preview-resize-handle" id="previewResizeHandle" title="Dra för att ändra bredd"></div>
+
     <div class="preview-topbar">
       <div class="preview-tabs">
         <button class="prev-tab active" id="tabPrevPreview" onclick="setPreviewTab('preview')">PREVIEW</button>
@@ -434,6 +437,9 @@
       <iframe class="preview-iframe" id="previewIframe" style="display:none" sandbox="allow-scripts allow-forms allow-modals"></iframe>
       <pre id="previewCodePre" style="display:none;width:100%;height:100%;margin:0;padding:12px;overflow:auto;font-family:var(--font-mono);font-size:12px;background:var(--bg-raised);color:var(--fg)"></pre>
     </div>
+
+    <!-- Vertical Split Resizer between Preview Canvas & Bottom Dock -->
+    <div class="preview-split-resizer" id="previewSplitResizer" title="Dra för att ändra höjd"></div>
 
     <!-- Bottom DevTools Terminal Dock -->
     <div class="terminal-bottom-pane" id="terminalBottomPane">

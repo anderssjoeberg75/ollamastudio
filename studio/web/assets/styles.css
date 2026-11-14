@@ -890,8 +890,10 @@ html, body {
    3. RIGHT PREVIEW & DEVTOOLS PANE (Floating Window)
    ------------------------------------------------------------ */
 .preview {
+  position: relative;
   width: 480px;
-  min-width: 320px;
+  min-width: 280px;
+  max-width: 85vw;
   flex-shrink: 0;
   height: calc(100vh - 24px);
   border-radius: var(--radius-window);
@@ -903,10 +905,41 @@ html, body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 0.2s var(--ease-out);
 }
 .app.preview-collapsed .preview {
   display: none !important;
+}
+
+/* Horizontal resize handle on the left edge of preview pane */
+.preview-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 50;
+  background: transparent;
+  transition: background 0.15s;
+}
+.preview-resize-handle:hover,
+.preview-resize-handle.active {
+  background: rgba(124, 92, 255, 0.35);
+}
+
+/* Vertical splitter between preview stage and terminal bottom dock */
+.preview-split-resizer {
+  height: 6px;
+  min-height: 6px;
+  background: var(--border);
+  cursor: ns-resize;
+  z-index: 40;
+  transition: background 0.15s;
+  position: relative;
+}
+.preview-split-resizer:hover,
+.preview-split-resizer.active {
+  background: var(--accent);
 }
 
 .preview-topbar {
