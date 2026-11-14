@@ -4275,7 +4275,7 @@ async function executeDockChat(userText) {
   const uRow = document.createElement('div');
   uRow.className = 'term-line cmd';
   uRow.style.color = 'var(--fg)';
-  uRow.innerHTML = `<span style="color:var(--accent);font-weight:bold">&gt; Du:</span> ${escapeHtml(userText)}`;
+  uRow.innerHTML = `<span style="color:var(--accent);font-weight:bold">&gt; Du:</span> ${esc(userText)}`;
   scrollArea.appendChild(uRow);
 
   // Add assistant placeholder row
@@ -4283,7 +4283,7 @@ async function executeDockChat(userText) {
   aRow.className = 'term-line output';
   aRow.style.marginBottom = '8px';
   const modelName = (document.getElementById('chatModel') && document.getElementById('chatModel').value) || 'Modell';
-  aRow.innerHTML = `<span style="color:#10b981;font-weight:bold">&gt; ${escapeHtml(modelName)}:</span> <span class="dock-ans">tänker…</span>`;
+  aRow.innerHTML = `<span style="color:#10b981;font-weight:bold">&gt; ${esc(modelName)}:</span> <span class="dock-ans">tänker…</span>`;
   scrollArea.appendChild(aRow);
   scrollArea.scrollTop = scrollArea.scrollHeight;
 
