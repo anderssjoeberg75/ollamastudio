@@ -37,6 +37,23 @@ class TestModelRouter(unittest.TestCase):
         )
         self.assertEqual(cat, "pentest")
 
+    def test_classify_pentest_from_natural_language(self):
+        # Naturligt formulerade säkerhetstester ska hamna i "pentest", inte "security"
+        for text in (
+            "Kör ett säkerhetstest mot min site",
+            "Skanna min webbplats efter sårbarheter",
+            "sårbarhetsskanning av api:erna",
+            "testa säkerheten på domänen example.com",
+        ):
+            self.assertEqual(classify_task(text), "pentest", text)
+
+    def test_classify_code_audit_stays_security_not_pentest(self):
+        # Kod-/SAST-granskning är inte ett aktivt pentest
+        self.assertEqual(
+            classify_task("Granska koden för sårbarheter och fixa SQL injection"),
+            "security",
+        )
+
     def test_select_best_model_for_pentest_hardcoded_local(self):
         # Pentest ska ALLTID välja lokal Llama-modell även när moln (Antigravity/Claude) är aktivt
         with patch("studio.codex.router.antigravity_available", return_value=True):
@@ -145,8 +162,8 @@ class TestSchedulerAutoFix(unittest.TestCase):
 
     @patch("studio.codex.testing.run_project_tests", return_value=(True, "312 passed", ""))
     @patch("studio.scheduler._run_single_headless_pass")
-    @patch("studio.codex.gitlab.gitlab_list_issues")
-    @patch("studio.codex.gitlab.gitlab_close_issue")
+    @patch("studio.scheduler._list_repo_issues")
+    @patch("studio.scheduler._close_repo_issue")
     @patch("studio.codex.gitops.git_diff_text")
     @patch("studio.codex.gitops.git_commit_all")
     @patch("studio.codex.gitops.git_push")

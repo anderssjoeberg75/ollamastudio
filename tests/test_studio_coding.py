@@ -38,7 +38,7 @@ class TestStudioCodingFeatures(unittest.TestCase):
         ws_write_file("hint.py", "def hello_world():\n    print('hi')\n")
         with self.assertRaises(ValueError) as ctx:
             ws_edit_file("hint.py", "def hello_world_typo():\n    print('hi')", "pass")
-        self.assertIn("Närmaste rader i filen just nu", str(ctx.exception))
+        self.assertIn("Nearest lines in the file right now", str(ctx.exception))
 
     def test_edit_file_batch(self):
         ws_write_file("batch.py", "x = 1\ny = 2\nz = 3\n")

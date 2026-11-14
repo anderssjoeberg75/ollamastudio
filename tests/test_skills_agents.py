@@ -56,12 +56,12 @@ class TestSkillsAgentsIntegration(unittest.TestCase):
     def test_agent_tool_exec(self):
         # 1. agent-verktyget
         out, meta = agent_tool_exec("agent", {"name": "python-reviewer"})
-        self.assertIn("Instruktioner för agent python-reviewer", out)
+        self.assertIn("Instructions for agent python-reviewer", out)
         self.assertEqual(meta["summary"], "agent: python-reviewer")
 
         # 2. skill-verktyget
         out, meta = agent_tool_exec("skill", {"name": "tdd-workflow"})
-        self.assertIn("Instruktioner för skill tdd-workflow", out)
+        self.assertIn("Instructions for skill tdd-workflow", out)
         self.assertEqual(meta["summary"], "skill: tdd-workflow")
 
         # 3. workflow-verktyget
@@ -71,7 +71,7 @@ class TestSkillsAgentsIntegration(unittest.TestCase):
 
         # 4. listning
         out_list, _ = agent_tool_exec("agent", {"name": "list"})
-        self.assertIn("Specialistagenter", out_list)
+        self.assertIn("Specialist agents", out_list)
 
     def test_router_includes_agent_and_skill(self):
         res = select_best_model_for_task("Här finns SQL injection och tokenläcka", labels="security")
