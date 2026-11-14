@@ -4478,7 +4478,7 @@ function updateTelemetry(stats) {
   } catch(e) {}
 }
 
-// Calculate and render Saved vs OpenAI Cost
+// Calculate and render Saved vs Anthropic (Claude 3.5 Sonnet) Cost in SEK (kronor)
 function updateSavedCost(currentConvoTokens) {
   try {
     const el = document.getElementById('savedCostAmount');
@@ -4487,11 +4487,20 @@ function updateSavedCost(currentConvoTokens) {
     let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
     // If convo has tokens, accumulate with stored baseline
     let totalAll = cumTokens + (currentConvoTokens || 0);
-    // Average OpenAI GPT-4o cost ~$5.00 per 1M tokens ($0.000005 per token)
-    let saved = (totalAll * 0.000005);
-    // Minimum nice initial baseline if newly opened
-    if (saved < 0.01) saved = 0.00;
-    el.textContent = '$' + saved.toFixed(2);
+    // Anthropic Claude 3.5 Sonnet benchmark cost:
+    // Blended average: ~$9.00 USD per 1M tokens ($3.00 input, $15.00 output -> ~$0.000009 USD/token)
+    // USD to SEK rate: ~10.50 kr per USD
+    // -> ~0.0000945 SEK per token (~94.50 kr per 1M tokens)
+    let savedSEK = totalAll * 0.0000945;
+    if (savedSEK < 0.01) savedSEK = 0.0;
+    
+    // Format nicely in Swedish Kronor (SEK), e.g. "124,50 kr" or "1 250 kr"
+    if (savedSEK >= 1000) {
+      el.textContent = Math.round(savedSEK).toLocaleString('sv-SE') + ' kr';
+    } else {
+      el.textContent = savedSEK.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' kr';
+    }
+    el.title = `${totalAll.toLocaleString()} tokens bearbetade lokalt (~${(totalAll * 0.000009).toFixed(2)} USD sparat jämfört med Anthropic Claude 3.5 Sonnet)`;
   } catch(e) {}
 }
 
