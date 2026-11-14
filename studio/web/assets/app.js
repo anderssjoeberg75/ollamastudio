@@ -40,6 +40,59 @@ function applyPrefs(){
   populateChatModels(); populateBackends(); populateCodeModels();
   if(typeof updateChatWarning==='function') updateChatWarning();
   if(typeof updateSavedCost==='function') updateSavedCost();
+
+  // Synka konversationer från SQLite om tillgängliga
+  if(P.conversations){
+    try {
+      const parsed = JSON.parse(P.conversations);
+      if(Array.isArray(parsed) && parsed.length >= conversations.length){
+        conversations = parsed;
+        persistConvos(false); // spara lokalt utan att posta tillbaka
+        renderConvoSelect();
+      }
+    }catch(e){}
+  }
+  if(P.active_convo && (!currentConvoId || currentConvoId !== P.active_convo)){
+    const c = conversations.find(x=>x.id === P.active_convo);
+    if(c){
+      chatMessages = JSON.parse(JSON.stringify(c.messages || []));
+      currentConvoId = c.id;
+      setActiveConvo(c.id, false);
+      renderChat();
+      renderConvoSelect();
+    }
+  }
+
+  // Synka Codex-meddelanden från SQLite
+  if(P.code_messages && (!codeMessages || !codeMessages.length)){
+    try {
+      const parsedCode = JSON.parse(P.code_messages);
+      if(Array.isArray(parsedCode) && parsedCode.length){
+        codeMessages = parsedCode;
+        saveCodeMsgs(false);
+        restoreCodeLog();
+      }
+    }catch(e){}
+  }
+
+  // Synka UI dimensioner och tema från SQLite
+  if(P.theme){
+    document.documentElement.setAttribute('data-theme', P.theme);
+    try { localStorage.setItem('os_theme', P.theme); } catch(e){}
+  }
+  if(P.preview_width){
+    const previewPane = document.getElementById('previewPane');
+    if(previewPane) previewPane.style.width = P.preview_width + 'px';
+    try { localStorage.setItem('os_preview_width', P.preview_width); } catch(e){}
+  }
+  if(P.preview_height){
+    const previewStage = document.getElementById('previewStage');
+    if(previewStage){
+      previewStage.style.flex = 'none';
+      previewStage.style.height = P.preview_height + 'px';
+      try { localStorage.setItem('os_preview_stage_height', P.preview_height); } catch(e){}
+    }
+  }
 }
 let systemTimer = null;    // intervall för System-vyn
 let lastSystem = null;     // senaste /api/system (för VRAM-varning i chatten)
@@ -1434,10 +1487,11 @@ function loadConvos(){
   try{ conversations = JSON.parse(localStorage.getItem('os_convos') || '[]'); }catch(e){ conversations = []; }
   if(!Array.isArray(conversations)) conversations = [];
 }
-function persistConvos(){
+function persistConvos(syncDb = true){
   try{
     conversations = conversations.slice(0, 50);
     localStorage.setItem('os_convos', JSON.stringify(conversations));
+    if (syncDb) savePrefDebounced('conversations', JSON.stringify(conversations), 1000);
   }catch(e){}
 }
 function renderConvoSelect(){
@@ -1472,9 +1526,16 @@ function saveCurrentConvo(){
   setActiveConvo(currentConvoId);
   renderConvoSelect();
 }
-function setActiveConvo(id){
-  try{ if(id) localStorage.setItem('os_active_convo', id);
-       else localStorage.removeItem('os_active_convo'); }catch(e){}
+function setActiveConvo(id, syncDb = true){
+  try{
+    if(id) {
+      localStorage.setItem('os_active_convo', id);
+      if (syncDb) savePref('active_convo', id);
+    } else {
+      localStorage.removeItem('os_active_convo');
+      if (syncDb) savePref('active_convo', '');
+    }
+  }catch(e){}
 }
 function restoreActiveConvo(){
   let id = '';
@@ -2120,8 +2181,12 @@ async function testMem0(){
 let codeMessages = [];
 let codeController = null;
 const CODE_MSGS_KEY = 'os_code_msgs';
-function saveCodeMsgs(){
-  try{ localStorage.setItem(CODE_MSGS_KEY, JSON.stringify(codeMessages.slice(-40))); }catch(e){}
+function saveCodeMsgs(syncDb = true){
+  try{
+    const slice = codeMessages.slice(-40);
+    localStorage.setItem(CODE_MSGS_KEY, JSON.stringify(slice));
+    if (syncDb) savePrefDebounced('code_messages', JSON.stringify(slice), 1000);
+  }catch(e){}
 }
 function loadCodeMsgs(){
   try{ const a = JSON.parse(localStorage.getItem(CODE_MSGS_KEY) || '[]');
@@ -2161,7 +2226,10 @@ function clearCode(){
   codeWrites = [];
   planNode = null;
   updateModeBar();
-  try{ localStorage.removeItem(CODE_MSGS_KEY); }catch(e){}
+  try{
+    localStorage.removeItem(CODE_MSGS_KEY);
+    savePref('code_messages', '');
+  }catch(e){}
   if(box) box.innerHTML = '<div class="chat-empty">Ask Codex to inspect the code, modify a file, or run '
     + 'tests. It only works within the directory above, and <b>Permission</b> controls what it may '
     + 'do without confirmation.</div>';
@@ -4368,7 +4436,9 @@ function initPaneResizers() {
         const ifr = document.getElementById('previewIframe');
         if (ifr) ifr.style.pointerEvents = '';
         try {
-          localStorage.setItem('os_preview_width', Math.round(previewPane.getBoundingClientRect().width).toString());
+          const wVal = Math.round(previewPane.getBoundingClientRect().width).toString();
+          localStorage.setItem('os_preview_width', wVal);
+          savePrefDebounced('preview_width', wVal, 800);
         } catch(e) {}
       }
     });
@@ -4410,7 +4480,9 @@ function initPaneResizers() {
         const ifr = document.getElementById('previewIframe');
         if (ifr) ifr.style.pointerEvents = '';
         try {
-          localStorage.setItem('os_preview_stage_height', Math.round(previewStage.getBoundingClientRect().height).toString());
+          const hVal = Math.round(previewStage.getBoundingClientRect().height).toString();
+          localStorage.setItem('os_preview_stage_height', hVal);
+          savePrefDebounced('preview_height', hVal, 800);
         } catch(e) {}
       }
     });
@@ -4693,7 +4765,10 @@ function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'light';
   const next = current === 'light' ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', next);
-  try { localStorage.setItem('os_theme', next); } catch(e){}
+  try {
+    localStorage.setItem('os_theme', next);
+    savePref('theme', next);
+  } catch(e){}
   toast('Theme switched to ' + next);
 }
 

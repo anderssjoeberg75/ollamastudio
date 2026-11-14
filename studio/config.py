@@ -154,7 +154,13 @@ _PREFS_KEYS = {"chat_model", "chat_backend", "chat_system", "chat_temp", "chat_c
                "chat_websearch", "chat_memory", "code_model",
                "train_form",       # AI-träningens formulär (JSON)
                "hide_too_big",     # dölj modeller som inte får plats på hårdvaran
-               "cum_tokens"}       # Ackumulerat antal tokens (får aldrig nollas)
+               "cum_tokens",       # Ackumulerat antal tokens (får aldrig nollas)
+               "conversations",    # Sparade chattkonversationer (JSON)
+               "active_convo",     # ID för aktiv konversation
+               "code_messages",    # Codex-konversation (JSON)
+               "preview_width",    # Preview-fönstrets bredd (px)
+               "preview_height",   # Preview-stegens höjd (px)
+               "theme"}            # Gränssnittstema (light / dark)
 
 
 def prefs_all():
