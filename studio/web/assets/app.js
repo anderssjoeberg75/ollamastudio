@@ -110,11 +110,22 @@ function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 const TITLES = {models:'My Models', discover:'Discover / Install', chat:'Chat', system:'System / GPU', settings:'Settings', code:'Codex', train:'AI Training'};
 function showView(v){
   for(const k of ['models','discover','chat','system','settings','code','train']){
-    document.getElementById('nav-'+k).classList.toggle('active', v===k);
-    document.getElementById('view-'+k).classList.toggle('hidden', v!==k);
+    const navBtn = document.getElementById('nav-'+k);
+    if(navBtn) navBtn.classList.toggle('active', v===k);
+    const viewEl = document.getElementById('view-'+k);
+    if(viewEl) viewEl.classList.toggle('hidden', v!==k);
   }
-  document.getElementById('title').textContent = TITLES[v] || '';
-  if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>document.getElementById('chatInput').focus(), 0); }
+  const titleEl = document.getElementById('title');
+  if(titleEl) titleEl.textContent = TITLES[v] || '';
+  const sesTitle = document.getElementById('activeSessionTitle');
+  if(sesTitle) sesTitle.textContent = v === 'chat' ? (currentConvoId ? 'session' : 'new session') : v;
+
+  if(v==='models'){
+    if(lastModels && lastModels.length) renderModels(lastModels);
+    else refresh();
+  }
+  if(v==='discover'){ renderCatalog(); }
+  if(v==='chat'){ populateChatModels(); renderConvoSelect(); renderChat(); updateChatWarning(); setTimeout(()=>{ const ci = document.getElementById('chatInput'); if(ci) ci.focus(); }, 0); }
   if(v==='settings'){ loadSettingsForm(); }
   if(v==='code'){
     updateCodeView();
