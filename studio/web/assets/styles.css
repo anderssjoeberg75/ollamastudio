@@ -61,11 +61,11 @@
   --danger: #DC2626;
 
   /* ---- ROBURFORMAAI GLASS & WINDOW DESIGN SYSTEM ---- */
-  --ath-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0.38) 45%), rgba(244, 244, 242, 0.48);
-  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.44) 45%), rgba(250, 249, 246, 0.52);
-  --ath-shadow: 0 20px 45px -20px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --ath-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.20) 45%), rgba(244, 244, 242, 0.35);
+  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.50), rgba(255, 255, 255, 0.25) 45%), rgba(250, 249, 246, 0.38);
+  --ath-shadow: 0 20px 45px -20px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.8);
   --ath-rim: rgba(255, 255, 255, 0.8);
-  --ath-blur: blur(24px) saturate(140%);
+  --ath-blur: blur(28px) saturate(150%);
 
   /* ---- RADII (RoburformaAI Modern Curves) ---- */
   --r-xs: 6px;
@@ -134,11 +134,11 @@
   --danger: #EF4444;
 
   /* ---- ROBURFORMAAI GLASS & WINDOW DESIGN SYSTEM (Dark) ---- */
-  --ath-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015) 45%), rgba(16, 21, 34, 0.42);
-  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01) 45%), rgba(11, 15, 24, 0.48);
-  --ath-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  --ath-rim: rgba(255, 255, 255, 0.12);
-  --ath-blur: blur(24px) saturate(140%);
+  --ath-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01) 45%), rgba(16, 21, 34, 0.30);
+  --ath-glass-panel: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.008) 45%), rgba(11, 15, 24, 0.35);
+  --ath-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --ath-rim: rgba(255, 255, 255, 0.08);
+  --ath-blur: blur(28px) saturate(150%);
 }
 
 * { box-sizing: border-box; }
@@ -599,15 +599,7 @@ html, body {
   user-select: none;
 }
 .welcome-poly-bg {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.85;
-  z-index: 0;
-}
-.welcome-poly-bg svg {
-  width: 100%;
-  height: 100%;
+  display: none !important;
 }
 
 .welcome-brand {
@@ -898,11 +890,11 @@ html, body {
   gap: 2px;
 }
 
-/* Canvas stage with warm putty limestone tone */
+/* Canvas stage with matching glass tone */
 .preview-stage {
   flex: 1 1 52%;
   min-height: 220px;
-  background: var(--preview-canvas);
+  background: var(--ath-glass-panel);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -916,7 +908,7 @@ html, body {
   align-items: center;
   text-align: center;
   gap: 8px;
-  color: #78756C;
+  color: var(--fg-muted);
   user-select: none;
 }
 .pe-heading {
@@ -929,7 +921,7 @@ html, body {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.45;
-  color: #8C887E;
+  color: var(--fg-subtle);
 }
 .preview-iframe {
   width: 100%;
@@ -944,7 +936,7 @@ html, body {
   min-height: 180px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-raised);
+  background: var(--ath-glass);
 }
 .term-tabs-header {
   height: 36px;
@@ -954,7 +946,10 @@ html, body {
   gap: 2px;
   padding: 0 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
+  background: rgba(255, 255, 255, 0.25);
+}
+[data-theme="dark"] .term-tabs-header {
+  background: rgba(0, 0, 0, 0.2);
 }
 .term-tab {
   font-family: var(--font-sans);
@@ -980,7 +975,7 @@ html, body {
   flex-direction: column;
   overflow: hidden;
   padding: 10px 12px;
-  background: var(--bg-raised);
+  background: transparent;
 }
 .term-pane {
   display: flex;
