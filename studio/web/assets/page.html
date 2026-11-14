@@ -85,16 +85,16 @@
             <span class="mem-pct" id="memPct">11%</span>
             <svg class="mem-donut" viewBox="0 0 36 36">
               <path class="donut-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-              <path class="donut-fg" stroke-dasharray="11, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+              <path class="donut-fg" id="memDonutFg" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
             </svg>
           </div>
         </div>
 
         <div class="sidebar-bottom-bar">
-          <span class="sb-tab"><i class="ph ph-gear"></i> Tab</span>
+          <button class="sb-tab-btn" onclick="newConversation()" title="New session (Tab)"><i class="ph ph-plus"></i> <span>Tab</span></button>
           <span class="grow"></span>
           <button class="iconbtn sm" id="nav-settings" onclick="showView('settings')" title="Settings"><i class="ph ph-gear"></i></button>
-          <button class="iconbtn sm" onclick="clearCurrentChat()" title="Clear chat"><i class="ph ph-x"></i></button>
+          <button class="iconbtn sm" onclick="clearChatConfirm()" title="Clear chat"><i class="ph ph-x"></i></button>
           <a class="iconbtn sm" href="https://github.com/anderssjoeberg75/ollamastudio" target="_blank" title="GitHub"><i class="ph ph-github-logo"></i></a>
         </div>
       </div>

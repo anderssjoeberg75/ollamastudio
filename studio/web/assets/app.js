@@ -1319,6 +1319,11 @@ async function sendChat(){
               secs: (msg.total_duration||0)/1e9,
               gpu: (document.getElementById('chatBackend').value || '')
             };
+            try {
+              let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
+              cumTokens += (msg.eval_count || 0);
+              localStorage.setItem('os_cum_tokens', cumTokens.toString());
+            } catch(e) {}
           }
           if(msg.error){ chatMessages[idx].content += '\n[Error: '+msg.error+']'; }
         }catch(e){}
@@ -4101,20 +4106,57 @@ function updateTelemetry(stats) {
       }
     }
 
-    // 5. Total tokens / memory widget in sidebar
+    // 5. Total tokens / memory widget & donut in sidebar
     const memPct = document.getElementById('memPct');
-    if (memPct) {
-      const maxCtx = parseInt(ctxVal, 10) || 8192;
-      let totalTokens = 0;
-      chatMessages.forEach(m => {
-        if (m.stats && m.stats.tokens) totalTokens += m.stats.tokens;
-        else if (m.content) totalTokens += Math.round(m.content.length / 4);
-      });
-      const pct = Math.min(100, Math.round((totalTokens / maxCtx) * 100));
-      memPct.textContent = pct + '%';
-    }
+    const donutFg = document.getElementById('memDonutFg');
+    const maxCtx = parseInt(ctxVal, 10) || 8192;
+    let totalTokens = 0;
+    (chatMessages || []).forEach(m => {
+      if (m.stats && m.stats.tokens) totalTokens += m.stats.tokens;
+      else if (m.content) totalTokens += Math.round(m.content.length / 4);
+    });
+    const pct = Math.min(100, Math.max(0, Math.round((totalTokens / maxCtx) * 100)));
+    if (memPct) memPct.textContent = pct + '%';
+    if (donutFg) donutFg.setAttribute('stroke-dasharray', pct + ', 100');
+
+    // 6. Cumulative Saved vs OpenAI Cost Widget
+    updateSavedCost(totalTokens);
   } catch(e) {}
 }
+
+// Calculate and render Saved vs OpenAI Cost
+function updateSavedCost(currentConvoTokens) {
+  try {
+    const el = document.getElementById('savedCostAmount');
+    if (!el) return;
+    // Track total cumulative tokens processed locally
+    let cumTokens = parseInt(localStorage.getItem('os_cum_tokens') || '0', 10);
+    // If convo has tokens, accumulate with stored baseline
+    let totalAll = cumTokens + (currentConvoTokens || 0);
+    // Average OpenAI GPT-4o cost ~$5.00 per 1M tokens ($0.000005 per token)
+    let saved = (totalAll * 0.000005);
+    // Minimum nice initial baseline if newly opened
+    if (saved < 0.01) saved = 0.00;
+    el.textContent = '$' + saved.toFixed(2);
+  } catch(e) {}
+}
+
+// Compact context helper: trims middle chat history while preserving system & last turns
+function compactContext() {
+  if (!chatMessages || chatMessages.length <= 4) {
+    toast('Context is already compact');
+    return;
+  }
+  const oldCount = chatMessages.length;
+  // Keep first message (often instructions/context) and last 3 messages
+  const compacted = [chatMessages[0], { role: 'system', content: '[Earlier conversation compacted to save context memory]' }, ...chatMessages.slice(-3)];
+  chatMessages = compacted;
+  renderChat();
+  saveCurrentConvo();
+  updateTelemetry();
+  toast('Context compacted from ' + oldCount + ' to ' + chatMessages.length + ' messages');
+}
+
 
 // Update GPU VRAM percentage from /api/system
 async function updateVramTelemetry() {
