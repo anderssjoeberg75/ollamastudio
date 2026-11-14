@@ -3932,70 +3932,181 @@ function togglePreviewPane() {
 }
 
 function setPreviewTab(tab) {
-  document.querySelectorAll('.acc-tab').forEach(t => t.classList.remove('active'));
-  const btn = document.getElementById(tab === 'code' ? 'accTabCode' : 'accTabPreview');
-  if (btn) btn.classList.add('active');
-  const canvas = document.getElementById('previewContent');
-  if (canvas) {
-    if (tab === 'code') {
-      canvas.innerHTML = '<div style="padding:16px; font-family:monospace; font-size:12px; color:var(--text); white-space:pre-wrap;">// Code view\n// Generated artifacts and files will appear here.</div>';
+  const tabPrev = document.getElementById('tabPrevPreview');
+  const tabCode = document.getElementById('tabPrevCode');
+  const emptyEl = document.getElementById('previewEmpty');
+  const iframeEl = document.getElementById('previewIframe');
+  const codePre = document.getElementById('previewCodePre');
+
+  if (tab === 'code') {
+    if (tabPrev) tabPrev.classList.remove('active');
+    if (tabCode) tabCode.classList.add('active');
+    if (emptyEl) emptyEl.style.display = 'none';
+    if (iframeEl) iframeEl.style.display = 'none';
+    if (codePre) {
+      codePre.style.display = 'block';
+      if (!codePre.textContent.trim()) {
+        codePre.textContent = '// Code view\n// Generated artifacts, HTML, CSS and script files appear here.';
+      }
+    }
+  } else {
+    if (tabCode) tabCode.classList.remove('active');
+    if (tabPrev) tabPrev.classList.add('active');
+    if (codePre) codePre.style.display = 'none';
+    if (iframeEl && iframeEl.src && iframeEl.src !== 'about:blank') {
+      iframeEl.style.display = 'block';
+      if (emptyEl) emptyEl.style.display = 'none';
     } else {
-      canvas.innerHTML = `
-        <div class="empty-preview">
-          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <path d="M3 9h18M9 21V9"/>
-          </svg>
-          <h4>nothing to render.</h4>
-          <p>ask the agent to build a page...<br>e.g. "build a pricing page with three tiers."</p>
-        </div>
-      `;
+      if (emptyEl) emptyEl.style.display = 'flex';
+      if (iframeEl) iframeEl.style.display = 'none';
     }
   }
 }
 
 function setPreviewDevice(device) {
-  document.querySelectorAll('.dock-icon-btn').forEach(b => b.classList.remove('active'));
-  const activeBtn = event && event.currentTarget;
-  if (activeBtn) activeBtn.classList.add('active');
-  const canvas = document.getElementById('previewContent');
-  if (!canvas) return;
+  const stage = document.getElementById('previewStage');
+  if (!stage) return;
   if (device === 'mobile') {
-    canvas.style.maxWidth = '375px';
-    canvas.style.margin = '0 auto';
-    canvas.style.boxShadow = '0 0 0 1px var(--border), 0 10px 25px rgba(0,0,0,0.1)';
-    canvas.style.borderRadius = '16px';
+    stage.style.maxWidth = '375px';
+    stage.style.margin = '0 auto';
+    stage.style.border = '1px solid var(--border)';
+    stage.style.borderRadius = '16px';
   } else if (device === 'tablet') {
-    canvas.style.maxWidth = '768px';
-    canvas.style.margin = '0 auto';
-    canvas.style.boxShadow = '0 0 0 1px var(--border), 0 10px 25px rgba(0,0,0,0.1)';
-    canvas.style.borderRadius = '8px';
+    stage.style.maxWidth = '768px';
+    stage.style.margin = '0 auto';
+    stage.style.border = '1px solid var(--border)';
+    stage.style.borderRadius = '8px';
   } else {
-    canvas.style.maxWidth = '';
-    canvas.style.margin = '';
-    canvas.style.boxShadow = '';
-    canvas.style.borderRadius = '';
+    stage.style.maxWidth = '';
+    stage.style.margin = '';
+    stage.style.border = '';
+    stage.style.borderRadius = '';
+  }
+}
+
+let currentAgentMode = 'auto';
+let trustWritesActive = false;
+
+function setAgentMode(mode) {
+  currentAgentMode = mode;
+  document.querySelectorAll('.comp-chip').forEach(c => {
+    if (c.onclick && c.onclick.toString().includes('setAgentMode')) {
+      if (c.onclick.toString().includes("'" + mode + "'")) c.classList.add('active');
+      else c.classList.remove('active');
+    }
+  });
+  if (mode === 'ide') {
+    showView('code');
+  } else {
+    showView('chat');
+  }
+  toast('Mode set to ' + mode.toUpperCase());
+}
+
+function toggleTrustWrites() {
+  trustWritesActive = !trustWritesActive;
+  const btn = event && event.currentTarget;
+  if (btn) {
+    if (trustWritesActive) {
+      btn.classList.add('active');
+      btn.innerHTML = '<i class="ph ph-lock-open" style="color:var(--green)"></i> <span>Trust writes (ON)</span>';
+      toast('Trust writes enabled: file edits will apply automatically');
+    } else {
+      btn.classList.remove('active');
+      btn.innerHTML = '<i class="ph ph-lock"></i> <span>Trust writes</span>';
+      toast('Trust writes disabled');
+    }
+  }
+}
+
+function popoutPreview() {
+  const iframe = document.getElementById('previewIframe');
+  if (iframe && iframe.src) {
+    window.open(iframe.src, '_blank');
+  } else {
+    const code = document.getElementById('previewCodePre');
+    const w = window.open('', '_blank');
+    if (w && code) {
+      w.document.write('<pre style="font-family:monospace;padding:16px;">' + (code.textContent || 'No code to preview') + '</pre>');
+      w.document.close();
+    }
+  }
+}
+
+function refreshPreview() {
+  const iframe = document.getElementById('previewIframe');
+  if (iframe && iframe.src) {
+    iframe.src = iframe.src;
+    toast('Preview refreshed');
+  } else {
+    toast('Nothing to refresh');
   }
 }
 
 function switchTermDock(dockName) {
-  document.querySelectorAll('.term-tab').forEach(t => t.classList.remove('active'));
-  const btn = event && event.currentTarget;
-  if (btn) btn.classList.add('active');
-  const body = document.getElementById('termDockBody');
-  if (!body) return;
-  if (dockName === 'terminal') {
-    body.innerHTML = '<span class="prompt">$ </span><span class="cursor"></span>';
-  } else if (dockName === 'sandbox') {
-    body.innerHTML = '<span style="color:var(--text-sub);">[sandbox: isolated environment active]</span>';
-  } else if (dockName === 'backend') {
-    body.innerHTML = '<span style="color:var(--text-sub);">[backend: ollama-studio api connected on :8085]</span>';
-  } else if (dockName === 'shell') {
-    body.innerHTML = '<span class="prompt">bash-5.2$ </span><span class="cursor"></span>';
-  } else if (dockName === 'log') {
-    body.innerHTML = '<span style="color:var(--text-sub);">[agent: ready and awaiting instruction]</span>';
+  const tabs = {
+    terminal: 'termTabTerminal',
+    sandbox: 'termTabSandbox',
+    backend: 'termTabBackend',
+    shell: 'termTabShell',
+    agentlog: 'termTabAgentLog'
+  };
+  const panes = {
+    terminal: 'termPaneTerminal',
+    sandbox: 'termPaneSandbox',
+    backend: 'termPaneBackend',
+    shell: 'termPaneShell',
+    agentlog: 'termPaneAgentLog'
+  };
+
+  Object.keys(tabs).forEach(k => {
+    const btn = document.getElementById(tabs[k]);
+    const p = document.getElementById(panes[k]);
+    if (k === dockName) {
+      if (btn) btn.classList.add('active');
+      if (p) { p.classList.add('active'); p.style.display = 'block'; }
+    } else {
+      if (btn) btn.classList.remove('active');
+      if (p) { p.classList.remove('active'); p.style.display = 'none'; }
+    }
+  });
+
+  if (dockName === 'backend') {
+    fetchBackendLogs();
   }
 }
+
+async function fetchBackendLogs() {
+  const pre = document.getElementById('backendLogPre');
+  if (!pre) return;
+  try {
+    const r = await fetch('/api/system', {headers: headers(false)});
+    if (r.ok) {
+      const s = await r.json();
+      let lines = ['[system] Ollama Studio backend active'];
+      if (s.gpus && s.gpus.length) {
+        s.gpus.forEach((g, idx) => {
+          lines.push(`[gpu ${idx}] ${g.name} | VRAM: ${g.mem_used_mb || 0}MB / ${g.mem_total_mb || 0}MB | Temp: ${g.temp || 0}°C`);
+          if (g.procs && g.procs.length) {
+            g.procs.forEach(pr => {
+              lines.push(`  └─ pid ${pr.pid}: ${pr.name} (${pr.mem_mb} MB)`);
+            });
+          }
+        });
+      }
+      pre.innerHTML = '<code>' + esc(lines.join('\n')) + '</code>';
+    }
+  } catch(e) {}
+}
+
+function clearTerminalOutput() {
+  const activePane = document.querySelector('.term-pane.active pre code');
+  if (activePane) {
+    activePane.innerHTML = '$ <span class="term-cursor">█</span>';
+    toast('Terminal output cleared');
+  }
+}
+
 
 function toggleTheme() {
   const current = document.documentElement.getAttribute('data-theme') || 'light';
