@@ -4218,6 +4218,7 @@ function switchTermDock(dockName) {
   currentTermDock = dockName;
   const tabs = {
     terminal: 'termTabTerminal',
+    chat: 'termTabChat',
     sandbox: 'termTabSandbox',
     backend: 'termTabBackend',
     shell: 'termTabShell',
@@ -4225,6 +4226,7 @@ function switchTermDock(dockName) {
   };
   const panes = {
     terminal: 'termPaneTerminal',
+    chat: 'termPaneChat',
     sandbox: 'termPaneSandbox',
     backend: 'termPaneBackend',
     shell: 'termPaneShell',
@@ -4254,66 +4256,108 @@ function focusCurrentTermInput() {
   if (currentTermDock === 'terminal') {
     const inp = document.getElementById('termInputTerminal');
     if (inp) inp.focus();
+  } else if (currentTermDock === 'chat') {
+    const inp = document.getElementById('termInputChat');
+    if (inp) inp.focus();
   } else if (currentTermDock === 'shell') {
     const inp = document.getElementById('termInputShell');
     if (inp) inp.focus();
   }
 }
 
-async function executeTerminalCommand(cmd, outputTargetId) {
-  const scrollArea = document.getElementById(outputTargetId);
-  if (!cmd || !scrollArea) return;
+// Chat execution in dock
+let dockChatHistory = [];
+async function executeDockChat(userText) {
+  const scrollArea = document.getElementById('termOutputChat');
+  if (!userText || !scrollArea) return;
 
-  // Add cmd line
-  const cmdRow = document.createElement('div');
-  cmdRow.className = 'term-line cmd';
-  cmdRow.textContent = `$ ${cmd}`;
-  scrollArea.appendChild(cmdRow);
+  // Add user row
+  const uRow = document.createElement('div');
+  uRow.className = 'term-line cmd';
+  uRow.style.color = 'var(--fg)';
+  uRow.innerHTML = `<span style="color:var(--accent);font-weight:bold">&gt; Du:</span> ${escapeHtml(userText)}`;
+  scrollArea.appendChild(uRow);
+
+  // Add assistant placeholder row
+  const aRow = document.createElement('div');
+  aRow.className = 'term-line output';
+  aRow.style.marginBottom = '8px';
+  const modelName = (document.getElementById('chatModel') && document.getElementById('chatModel').value) || 'Modell';
+  aRow.innerHTML = `<span style="color:#10b981;font-weight:bold">&gt; ${escapeHtml(modelName)}:</span> <span class="dock-ans">tänker…</span>`;
+  scrollArea.appendChild(aRow);
   scrollArea.scrollTop = scrollArea.scrollHeight;
 
+  const ansSpan = aRow.querySelector('.dock-ans');
+
+  dockChatHistory.push({ role: 'user', content: userText });
+  if (dockChatHistory.length > 10) dockChatHistory = dockChatHistory.slice(-10);
+
   try {
-    const r = await fetch('/api/codex/terminal/run', {
+    const model = (document.getElementById('chatModel') && document.getElementById('chatModel').value) || '';
+    const res = await fetch('/api/chat', {
       method: 'POST',
       headers: headers(true),
-      body: JSON.stringify({ cmd })
+      body: JSON.stringify({
+        model: model,
+        messages: dockChatHistory,
+        stream: false
+      })
     });
-    const res = await r.json();
-    const outRow = document.createElement('div');
-    outRow.className = res.ok ? 'term-line output' : 'term-line error';
-    outRow.textContent = res.output !== undefined ? res.output : (res.error || 'Command failed');
-    scrollArea.appendChild(outRow);
+    const data = await res.json();
+    let reply = (data && data.message && data.message.content) || (data && data.response) || data.error || 'Inget svar.';
+    ansSpan.textContent = reply;
+    dockChatHistory.push({ role: 'assistant', content: reply });
   } catch (err) {
-    const errRow = document.createElement('div');
-    errRow.className = 'term-line error';
-    errRow.textContent = `[error] ${err.message || 'Execution error'}`;
-    scrollArea.appendChild(errRow);
+    ansSpan.textContent = '[Fel: ' + err.message + ']';
+    ansSpan.style.color = '#ef4444';
   }
-
   scrollArea.scrollTop = scrollArea.scrollHeight;
 }
 
 function clearTerminalOutput() {
-  const targets = ['termOutputTerminal', 'termOutputSandbox', 'termOutputBackend', 'termOutputShell', 'termOutputAgentLog'];
+  const targets = ['termOutputTerminal', 'termOutputChat', 'termOutputSandbox', 'termOutputBackend', 'termOutputShell', 'termOutputAgentLog'];
   targets.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
-      el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[system]</span> Cleared.</div>';
+      if (id === 'termOutputChat') {
+        el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[chat]</span> Snabbchatt rensad.</div>';
+        dockChatHistory = [];
+      } else {
+        el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[system]</span> Cleared.</div>';
+      }
     }
   });
-  toast('Terminal output cleared');
+  toast('Terminal & Chat output cleared');
 }
 
 // Terminal keyboard listeners for interactive typing & history
 document.addEventListener('DOMContentLoaded', () => {
   setupTermInputListeners('termInputTerminal', 'termOutputTerminal');
   setupTermInputListeners('termInputShell', 'termOutputShell');
+  setupDockChatListeners();
 });
 
 // Also run immediately in case DOM is already loaded
 setTimeout(() => {
   setupTermInputListeners('termInputTerminal', 'termOutputTerminal');
   setupTermInputListeners('termInputShell', 'termOutputShell');
+  setupDockChatListeners();
 }, 100);
+
+function setupDockChatListeners() {
+  const inp = document.getElementById('termInputChat');
+  if (!inp || inp._boundChat) return;
+  inp._boundChat = true;
+
+  inp.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      const val = inp.value.trim();
+      if (!val) return;
+      inp.value = '';
+      await executeDockChat(val);
+    }
+  });
+}
 
 function setupTermInputListeners(inputId, outputId) {
   const inp = document.getElementById(inputId);

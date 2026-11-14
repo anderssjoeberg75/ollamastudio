@@ -438,6 +438,7 @@
     <div class="terminal-bottom-pane" id="terminalBottomPane">
       <div class="term-tabs-header">
         <button class="term-tab active" id="termTabTerminal" onclick="switchTermDock('terminal')"><i class="ph ph-terminal-window"></i> Terminal</button>
+        <button class="term-tab" id="termTabChat" onclick="switchTermDock('chat')"><i class="ph ph-chat-teardrop-dots"></i> Chat</button>
         <button class="term-tab" id="termTabSandbox" onclick="switchTermDock('sandbox')"><i class="ph ph-shield-check"></i> Sandbox</button>
         <button class="term-tab" id="termTabBackend" onclick="switchTermDock('backend')"><i class="ph ph-cpu"></i> Backend</button>
         <button class="term-tab" id="termTabShell" onclick="switchTermDock('shell')"><i class="ph ph-terminal"></i> Shell</button>
@@ -453,6 +454,15 @@
           <div class="term-input-row">
             <span class="term-prompt">$</span>
             <input type="text" class="term-cmd-input" id="termInputTerminal" autocomplete="off" spellcheck="false" placeholder="" autofocus>
+          </div>
+        </div>
+        <div class="term-pane" id="termPaneChat" style="display:none">
+          <div class="term-scroll" id="termOutputChat">
+            <div class="term-line welcome"><span class="term-sys">[chat]</span> Snabbchatt med aktiv modell (t.ex. ChatGPT-stil). Ställ frågor direkt här.</div>
+          </div>
+          <div class="term-input-row">
+            <span class="term-prompt" style="color:var(--accent)"><i class="ph-bold ph-chat-circle-dots"></i></span>
+            <input type="text" class="term-cmd-input" id="termInputChat" autocomplete="off" spellcheck="false" placeholder="Ställ en fråga till modellen...">
           </div>
         </div>
         <div class="term-pane" id="termPaneSandbox" style="display:none">
