@@ -3352,9 +3352,9 @@ function populateBackends(){
     const saved = uiPrefs.chat_backend || '';
     if(cur && labels.includes(cur)) sel.value = cur;              // behåll aktivt val
     else if(saved && labels.includes(saved)) sel.value = saved;  // ihågkommet val (databas)
-    sel.style.display=''; lbl.style.display='';
+    sel.style.display=''; if(lbl) lbl.style.display='';
   }else{
-    sel.style.display='none'; lbl.style.display='none';
+    sel.style.display='none'; if(lbl) lbl.style.display='none';
   }
 }
 
