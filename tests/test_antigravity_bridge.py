@@ -14,16 +14,16 @@ class TestAntigravityBridge(unittest.TestCase):
 
     def test_format_convo_prompt(self):
         messages = [
-            {"role": "system", "content": "Du är en kodassistent."},
-            {"role": "user", "content": "Skriv en funktion."},
-            {"role": "assistant", "content": "Här är den."},
-            {"role": "user", "content": "VERKTYGSRESULTAT:\nOK"}
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write a function."},
+            {"role": "assistant", "content": "Here it is."},
+            {"role": "user", "content": "TOOL RESULT:\nOK"}
         ]
         prompt = format_convo_prompt(messages)
-        self.assertIn("### SYSTEM INSTRUKTIONER:\nDu är en kodassistent.", prompt)
-        self.assertIn("### ANVÄNDARE:\nSkriv en funktion.", prompt)
-        self.assertIn("### ASSISTENT (CODEX):\nHär är den.", prompt)
-        self.assertIn("### ANVÄNDARE:\nVERKTYGSRESULTAT:\nOK", prompt)
+        self.assertIn("### SYSTEM INSTRUCTIONS:\nYou are a coding assistant.", prompt)
+        self.assertIn("### USER:\nWrite a function.", prompt)
+        self.assertIn("### ASSISTANT (CODEX):\nHere it is.", prompt)
+        self.assertIn("### USER:\nTOOL RESULT:\nOK", prompt)
 
     def test_antigravity_models_contains_gemini_and_claude(self):
         with patch("studio.antigravity_bridge.antigravity_available", return_value=True):

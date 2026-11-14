@@ -84,17 +84,17 @@ def run_command(cmd, force=False):
     gäller: ingen shell, ingen kedjning, kör i arbetsytan, timeout och utskriftstak."""
     root = code_workspace_root() or os.getcwd()
     if not code_run_enabled() and not force:
-        return False, "Kommandokörning är avstängd (slå på under ⚙ Inställningar)"
+        return False, "Command execution is disabled (enable it under ⚙ Settings)"
     if not force and not code_run_allowed(cmd):
-        return False, ("Kommandot är inte tillåtet enligt allowlist. Tillåtna prefix: "
+        return False, ("The command is not allowed by the allowlist. Allowed prefixes: "
                        + ", ".join(code_run_allowlist()))
     if force and (not (cmd or "").strip() or _SHELL_META.search(cmd or "")):
         # Även ett godkänt kommando får inte kedja/omdirigera – vi kör aldrig via shell.
-        return False, "Kommandot innehåller tecken som inte tillåts (; & | < > `)"
+        return False, "The command contains characters that are not allowed (; & | < > `)"
     try:
         toks = _split_cmd(cmd)
     except ValueError as e:
-        return False, "Kunde inte tolka kommandot: %s" % e
+        return False, "Could not parse the command: %s" % e
     env = dict(os.environ)
     # Rensa bort känsliga API-nycklar och tokens så subprocesser inte kan komma åt dem
     for k in list(env.keys()):
@@ -113,14 +113,14 @@ def run_command(cmd, force=False):
                            timeout=code_run_timeout(), env=env,
                            stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return False, "Kommandot avbröts (timeout efter %ds)" % code_run_timeout()
+        return False, "The command was aborted (timeout after %ds)" % code_run_timeout()
     except FileNotFoundError:
-        return False, "Programmet hittades inte: %s" % toks[0]
+        return False, "Program not found: %s" % toks[0]
     except Exception as e:
         return False, str(e)
     out = (p.stdout or "") + (("\n" + p.stderr) if p.stderr else "")
     out = out.strip()
     if len(out) > CODE_RUN_OUTPUT_CAP:
-        out = out[:CODE_RUN_OUTPUT_CAP] + "\n… (avkortat)"
+        out = out[:CODE_RUN_OUTPUT_CAP] + "\n… (truncated)"
     header = "exit %d" % p.returncode
     return (p.returncode == 0), header + ("\n" + out if out else "")

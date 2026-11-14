@@ -119,15 +119,15 @@ def format_convo_prompt(messages):
         role = m.get("role", "user")
         content = str(m.get("content") or "")
         if role == "system":
-            lines.append(f"### SYSTEM INSTRUKTIONER:\n{content}\n")
+            lines.append(f"### SYSTEM INSTRUCTIONS:\n{content}\n")
         elif role == "assistant":
-            lines.append(f"### ASSISTENT (CODEX):\n{content}\n")
+            lines.append(f"### ASSISTANT (CODEX):\n{content}\n")
         elif role == "user":
-            lines.append(f"### ANVÄNDARE:\n{content}\n")
+            lines.append(f"### USER:\n{content}\n")
         else:
             lines.append(f"### {role.upper()}:\n{content}\n")
 
-    lines.append("### ASSISTENT (CODEX):\n")
+    lines.append("### ASSISTANT (CODEX):\n")
     return "\n".join(lines)
 
 
@@ -142,8 +142,8 @@ class AntigravityStream:
         self.bin_path = find_agy_bin()
         if not self.bin_path:
             raise FileNotFoundError(
-                "Antigravity CLI (agy) hittades inte på servern. "
-                "Säkerställ att 'agy' är installerat i PATH eller sätt miljövariabeln AGY_PATH."
+                "Antigravity CLI (agy) was not found on the server. "
+                "Make sure 'agy' is installed in PATH or set the AGY_PATH environment variable."
             )
 
         # Plocka ut det råa modellnamnet, t.ex. 'gemini-3.8-flash-medium' ur 'antigravity:gemini-3.8-flash-medium'
@@ -234,7 +234,7 @@ class AntigravityStream:
                     if rc not in (None, 0):
                         err_text = f"Processen agy avslutades med felkod {rc}."
                 if err_text:
-                    login_hint = "\n\n*Kör `agy auth login` på servern för att logga in.*" if ("login" in err_text.lower() or "auth" in err_text.lower()) else ""
+                    login_hint = "\n\n*Run `agy auth login` on the server to log in.*" if ("login" in err_text.lower() or "auth" in err_text.lower()) else ""
                     chunk = json.dumps({
                         "message": {"role": "assistant", "content": f"\n⚠️ **Antigravity-fel:** {err_text.strip()}{login_hint}"}
                     }, ensure_ascii=False)

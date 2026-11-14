@@ -170,10 +170,10 @@ class TestWebSearchParsing(unittest.TestCase):
             "https://ex.se/a")
 
     def test_extract_query(self):
-        self.assertEqual(w.extract_search_query("SÖK: Sveriges folkmängd 2025"),
-                         "Sveriges folkmängd 2025")
-        self.assertEqual(w.extract_search_query("**SÖK:** vädret imorgon"), "vädret imorgon")
-        self.assertEqual(w.extract_search_query("sök:  Bitcoin pris\nannat"), "Bitcoin pris")
+        self.assertEqual(w.extract_search_query("SEARCH: population of Sweden 2025"),
+                         "population of Sweden 2025")
+        self.assertEqual(w.extract_search_query("**SEARCH:** weather tomorrow"), "weather tomorrow")
+        self.assertEqual(w.extract_search_query("search:  Bitcoin price\nother"), "Bitcoin price")
 
     def test_context_and_footer(self):
         res = [{"title": "T", "url": "https://e.se", "snippet": "S"}]
@@ -181,9 +181,9 @@ class TestWebSearchParsing(unittest.TestCase):
         self.assertIn("[1] T", ctx)
         self.assertIn("https://e.se", ctx)
         foot = w.search_footer("q", res)
-        self.assertIn("webbsökning", foot)
+        self.assertIn("web search", foot)
         self.assertIn("[T](https://e.se)", foot)
-        self.assertIn("hittades", w.format_search_context([]))
+        self.assertIn("were found", w.format_search_context([]))
 
     def test_parse_ddg_html(self):
         page = ('<div><a rel="nofollow" class="result__a" '
@@ -282,7 +282,7 @@ class TestMem0Parsing(unittest.TestCase):
     def test_context(self):
         ctx = w.mem0_context(["heter Anders", "gillar kaffe"])
         self.assertIn("- heter Anders", ctx)
-        self.assertIn("minns du", ctx.lower())
+        self.assertIn("you remember about the user", ctx.lower())
 
 
 class _DBTest(unittest.TestCase):
@@ -481,14 +481,14 @@ class TestCodeAssistant(_DBTest):
     def test_write_tools_need_an_approved_run(self):
         # Utan körning (ctx) finns bara läsverktygen.
         txt, meta = w.agent_tool_exec("write_file", {"path": "x.py", "content": "1"})
-        self.assertIn("bara användas i en Codex-körning", txt)
+        self.assertIn("can only be used inside a Codex run", txt)
         self.assertFalse(os.path.exists(os.path.join(self.ws, "x.py")))
 
         events = []
         # "full" = fria händer: skrivningen sker utan att någon fråga ställs.
         run = w.AgentRun(events.append, "full")
         txt, meta = w.agent_tool_exec("write_file", {"path": "x.py", "content": "1\n"}, run)
-        self.assertIn("OK: skrev", txt)
+        self.assertIn("OK: wrote", txt)
         self.assertTrue(meta.get("wrote"))
         self.assertEqual(run.writes, ["x.py"])
         self.assertFalse([e for e in events if e["type"] == "ask"])
@@ -509,7 +509,7 @@ class TestCodeAssistant(_DBTest):
         t.start()
         txt, meta = w.agent_tool_exec("write_file", {"path": "nej.py", "content": "x"}, run)
         t.join(5)
-        self.assertIn("NEKAT", txt)
+        self.assertIn("DENIED", txt)
         self.assertTrue(meta.get("denied"))
         self.assertEqual(run.denied, 1)
         self.assertFalse(os.path.exists(os.path.join(self.ws, "nej.py")))
@@ -532,7 +532,7 @@ class TestCodeAssistant(_DBTest):
                                    {"path": "app.py", "old_text": "return 1",
                                     "new_text": "return 7"}, run)
         t.join(5)
-        self.assertIn("OK: ändrade", txt)
+        self.assertIn("OK: edited", txt)
         with open(os.path.join(self.ws, "app.py"), encoding="utf-8") as f:
             self.assertIn("return 7", f.read())
         # "Tillåt alltid" gäller resten av körningen – nästa gång ställs ingen fråga.
@@ -561,13 +561,13 @@ class TestCodeAssistant(_DBTest):
         # Kedjning blockeras ändå – vi kör aldrig via shell.
         ok, out = w.run_command("pytest; rm -rf /", force=True)
         self.assertFalse(ok)
-        self.assertIn("tillåts", out)
+        self.assertIn("not allowed", out)
 
     def test_commands_stay_off_until_the_master_switch_is_on(self):
         w.settings_set({"code_run_enabled": False, "code_permission": "full"})
         run = w.AgentRun(lambda ev: None, "full")
         txt, _ = w.agent_tool_exec("run_command", {"cmd": "pytest"}, run)
-        self.assertIn("avstängd", txt)
+        self.assertIn("disabled", txt)
 
     def test_todo_becomes_a_plan_for_the_ui(self):
         run = w.AgentRun(lambda ev: None, "ask")
@@ -582,12 +582,12 @@ class TestCodeAssistant(_DBTest):
         run = w.AgentRun(lambda ev: None, "full")
         txt, _ = w.agent_tool_exec("edit_file", {"path": "finns_inte.py",
                                                  "old_text": "a", "new_text": "b"}, run)
-        self.assertIn("finns inte", txt)
+        self.assertIn("does not exist", txt)
         self.assertIn("write_file", txt)      # säg vad man ska göra i stället
 
     def test_unknown_tool_lists_the_real_ones(self):
         txt, _ = w.agent_tool_exec("hitta_på", {})
-        self.assertIn("Okänt verktyg", txt)
+        self.assertIn("Unknown tool", txt)
         self.assertIn("edit_file", txt)
 
     def test_read_file_returns_a_window_not_the_whole_file(self):
@@ -636,7 +636,7 @@ class TestCodeAssistant(_DBTest):
             w.ws_search("(oavslutad", regex=True)
         # …och verktyget rapporterar felet i stället för att spricka
         txt, _ = w.agent_tool_exec("search", {"query": "(oavslutad", "regex": True})
-        self.assertIn("Ogiltigt reguljärt uttryck", txt)
+        self.assertIn("Invalid regular expression", txt)
 
     def test_agent_options_set_a_real_context_window(self):
         # Utan num_ctx kör Ollama på sin standard (ofta 2048) och tappar tyst
@@ -659,7 +659,7 @@ class TestCodeAssistant(_DBTest):
         self.assertLessEqual(len(out), 1000)      # taket ska hålla, markören inräknad
         self.assertTrue(out.startswith("BÖRJAN"))
         self.assertTrue(out.endswith("SLUTET"))     # felmeddelanden står ofta sist
-        self.assertIn("utelämnade", out)
+        self.assertIn("omitted", out)
         self.assertEqual(w.cap_tool_result("kort", cap=1000), "kort")
 
     def test_pruning_drops_oldest_tool_results_first(self):
@@ -679,7 +679,7 @@ class TestCodeAssistant(_DBTest):
         # Ett beskuret resultat är fortfarande igenkännbart som ett verktygsresultat.
         results = [m["content"] for m in pruned if w.is_tool_result(m)]
         self.assertEqual(len(results), 6)
-        self.assertIn("borttaget", results[0])
+        self.assertIn("removed", results[0])
         self.assertNotIn("borttaget", results[-1])
         # Ryms allt rörs ingenting.
         small = [{"role": "system", "content": "kort"}, result(0)]
@@ -701,7 +701,7 @@ class TestCodeAssistant(_DBTest):
         # Det senaste resultatet finns kvar, fast nedkortat – inte bortkastat.
         last = pruned[-1]["content"]
         self.assertTrue(w.is_tool_result(pruned[-1]))
-        self.assertIn("utelämnade", last)
+        self.assertIn("omitted", last)
         self.assertTrue(last.endswith("y"))                    # slutet bevarat
 
     def test_result_cap_never_eats_the_whole_window(self):
@@ -754,24 +754,24 @@ class TestCodeAssistant(_DBTest):
 
         # 1. En glob som inte matchar NÅGON fil är något annat än "inga träffar".
         txt, _ = w.agent_tool_exec("search", {"query": "System / GPU", "glob": ".html"})
-        self.assertIn("matchade INGA filer", txt)
-        self.assertIn("med stjärna", txt)                  # säger hur man rättar det
+        self.assertIn("matched NO files", txt)
+        self.assertIn("with an asterisk", txt)                  # säger hur man rättar det
 
         # 2. Fel versaler → förslag med ignore_case
         txt, _ = w.agent_tool_exec("search", {"query": "SYSTEM / GPU"})
-        self.assertIn("versaler", txt)
+        self.assertIn("capitalization", txt)
         self.assertIn('"ignore_case": true', txt)
         self.assertIn("sida.html", txt)                    # och var det finns
 
         # 3. Fel mellanrum → förslag med ett mönster som tål skiljetecken
         txt, _ = w.agent_tool_exec("search", {"query": "system /gpu"})
-        self.assertIn("skiljetecken och mellanrum", txt)
+        self.assertIn("punctuation and spacing", txt)
         self.assertIn('"regex": true', txt)
         self.assertIn("sida.html", txt)
 
         # 4. Finns det verkligen inte får man råd, inte ett tomt besked.
         txt, _ = w.agent_tool_exec("search", {"query": "finns-inte-nånstans-alls"})
-        self.assertIn("sökte i", txt)
+        self.assertIn("searched", txt)
         self.assertIn("tree", txt)
 
     def test_search_reports_what_it_skipped(self):
@@ -837,7 +837,7 @@ class TestCodeAssistant(_DBTest):
         self.assertIn("berakna_moms", txt)
         # Och ett ärligt besked när det inte finns
         txt, _ = w.agent_tool_exec("find_symbol", {"name": "finns_inte_alls"})
-        self.assertIn("Hittade ingen definition", txt)
+        self.assertIn("No definition of", txt)
         self.assertIn("search", txt)                       # säger vad man gör i stället
 
     def test_project_brief_is_small_enough_for_the_context(self):
@@ -848,7 +848,7 @@ class TestCodeAssistant(_DBTest):
                             "".join("def f%d_%d():\n    pass\n\n\n" % (i, j)
                                     for j in range(20)))
         brief = az.project_brief()
-        self.assertTrue(brief.startswith("PROJEKTET"))
+        self.assertTrue(brief.startswith("THE PROJECT"))
         self.assertLessEqual(len(brief), 1400)
         self.assertIn("find_symbol", brief)                # pekar mot uppslaget
         # …men indexet självt är stort, och ligger UTANFÖR prompten
@@ -860,7 +860,7 @@ class TestCodeAssistant(_DBTest):
                         .startswith("1"))
         w.ws_write_file("ny.py", "def bar():\n    pass\n")
         txt, _ = w.agent_tool_exec("find_symbol", {"name": "foo"})
-        self.assertIn("Hittade ingen definition", txt)     # cachen släpptes
+        self.assertIn("No definition of", txt)     # cachen släpptes
         self.assertIn("bar", w.agent_tool_exec("find_symbol", {"name": "bar"})[0])
 
     def test_run_allowlist(self):
@@ -1092,7 +1092,7 @@ class TestCodexAgentLoop(_DBTest):
             self.assertLessEqual(sum(len(m["content"]) for m in msgs), budget)
         # Sista anropet ska ha hunnit beskära något – annars testar vi inget.
         last = TestCodexAgentLoop.seen[-1]["messages"]
-        self.assertTrue(any("beskuret" in m["content"] for m in last))
+        self.assertTrue(any("truncated" in m["content"] for m in last))
 
     def test_a_long_run_is_not_cut_off_at_the_old_limit(self):
         # Förut stannade agenten efter 25 varv mitt i arbetet. Nu håller den på
@@ -1392,13 +1392,13 @@ class TestPageReading(unittest.TestCase):
     # ---- kontexten till modellen ----
     def test_context_marks_page_text(self):
         ctx = w.format_search_context([{"title": "T", "url": "https://x.se",
-                                        "snippet": "utdrag", "text": "sidans text"}])
-        self.assertIn("Från sidan:", ctx)
-        self.assertIn("sidans text", ctx)
+                                        "snippet": "excerpt", "text": "page text"}])
+        self.assertIn("From the page:", ctx)
+        self.assertIn("page text", ctx)
         self.assertIn("https://x.se", ctx)
 
     def test_context_without_results(self):
-        self.assertIn("Inga användbara webbträffar", w.format_search_context([]))
+        self.assertIn("No useful web results", w.format_search_context([]))
 
 
 class TestExcerptAndCache(unittest.TestCase):
@@ -1500,29 +1500,29 @@ class TestClockContext(unittest.TestCase):
         except AttributeError:
             pass
 
-    def test_format_now_is_swedish(self):
-        # 2026-09-09 14:32 lokal tid (Europe/Stockholm)
+    def test_format_now_is_english(self):
+        # 2026-09-09 14:32 local time (Europe/Stockholm)
         ts = time.mktime((2026, 9, 9, 14, 32, 0, 0, 0, -1))
-        self.assertEqual(w.format_now(ts), "onsdag 9 september 2026, klockan 14:32")
+        self.assertEqual(w.format_now(ts), "Wednesday 9 September 2026, 14:32")
 
     def test_format_now_covers_all_weekdays_and_months(self):
-        self.assertEqual(len(w.SWEDISH_WEEKDAYS), 7)
-        self.assertEqual(len(w.SWEDISH_MONTHS), 12)
-        for month in range(1, 13):             # ingen indexering utanför listan
+        self.assertEqual(len(w.WEEKDAYS), 7)
+        self.assertEqual(len(w.MONTHS), 12)
+        for month in range(1, 13):             # no indexing outside the list
             ts = time.mktime((2026, month, 1, 12, 0, 0, 0, 0, -1))
-            self.assertIn(w.SWEDISH_MONTHS[month - 1], w.format_now(ts))
+            self.assertIn(w.MONTHS[month - 1], w.format_now(ts))
 
     def test_now_context_has_date_and_warns_about_stale_knowledge(self):
         ts = time.mktime((2026, 9, 9, 14, 32, 0, 0, 0, -1))
         text = w.now_context(ts)
-        self.assertIn("onsdag 9 september 2026", text)
-        self.assertIn("klockan 14:32", text)
-        self.assertIn("Din träningsdata är äldre", text)   # varning mot att gissa
-        self.assertIn("gissa aldrig", text)
+        self.assertIn("Wednesday 9 September 2026", text)
+        self.assertIn("14:32", text)
+        self.assertIn("Your training data is older", text)   # warn against guessing
+        self.assertIn("never guess", text)
 
     def test_websearch_instructions_carry_the_date(self):
         for text in (w.websearch_instruction(), w.websearch_answer_instruction()):
-            self.assertIn("Just nu är det", text)
+            self.assertIn("Right now it is", text)
         self.assertIn(w.WEBSEARCH_MARKER, w.websearch_instruction())
 
 
@@ -1582,7 +1582,7 @@ class TestChatClock(_DBTest):
         self.assertTrue(w.chat_time_enabled())
         msgs = self._chat()
         self.assertEqual(msgs[0]["role"], "system")
-        self.assertIn("Just nu är det", msgs[0]["content"])
+        self.assertIn("Right now it is", msgs[0]["content"])
         self.assertEqual(msgs[-1]["content"], "vilken dag är det?")   # frågan är orörd
 
     def test_can_be_turned_off(self):
@@ -1594,7 +1594,7 @@ class TestChatClock(_DBTest):
         msgs = self._chat(websearch=True)
         systems = [m["content"] for m in msgs if m["role"] == "system"]
         self.assertTrue(any(w.WEBSEARCH_MARKER in c for c in systems))
-        self.assertTrue(all("Just nu är det" in c for c in systems if w.WEBSEARCH_MARKER in c))
+        self.assertTrue(all("Right now it is" in c for c in systems if w.WEBSEARCH_MARKER in c))
 
 
 class TestModelSearch(_DBTest):

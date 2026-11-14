@@ -36,7 +36,7 @@ def ws_resolve(rel):
     om något ligger utanför roten (path-jail)."""
     root = code_workspace_root()
     if not root:
-        raise ValueError("Ingen arbetsyta är konfigurerad")
+        raise ValueError("No workspace is configured")
     raw = (rel or "").strip()
     # Strippa eventuell enhetsbokstav på Windows (t.ex. C:\ vägar)
     if len(raw) >= 2 and raw[1] == ":" and raw[0].isalpha():
@@ -45,7 +45,7 @@ def ws_resolve(rel):
     rel = raw.lstrip("/\\")
     full = os.path.realpath(os.path.join(root, rel))
     if full != root and not full.startswith(root + os.sep):
-        raise ValueError("Sökvägen ligger utanför arbetsytan")
+        raise ValueError("The path is outside the workspace")
     return full
 
 
@@ -82,7 +82,7 @@ def ws_read_file(rel, start=None, end=None, window=None):
     veta hur den bläddrar vidare."""
     full = ws_resolve(rel)
     if not os.path.isfile(full):
-        raise ValueError("Ingen fil: " + rel)
+        raise ValueError("No such file: " + rel)
     win = CODE_READ_LINES if window is None else max(1, int(window))
     try:
         first = max(1, int(start)) if start else 1
@@ -116,7 +116,7 @@ def ws_search(query, max_results=40, regex=False, ignore_case=False, glob=None):
     "*.py") – annars drunknar träfflistan och taket slår i innan rätt fil hittas."""
     root = code_workspace_root()
     if not root:
-        raise ValueError("Ingen arbetsyta")
+        raise ValueError("No workspace")
     q = (query or "").strip()
     if not q:
         return {"query": q, "hits": []}
@@ -124,7 +124,7 @@ def ws_search(query, max_results=40, regex=False, ignore_case=False, glob=None):
         try:
             pat = re.compile(q, re.IGNORECASE if ignore_case else 0)
         except re.error as e:
-            raise ValueError("Ogiltigt reguljärt uttryck: %s" % e)
+            raise ValueError("Invalid regular expression: %s" % e)
         match = lambda line: pat.search(line) is not None      # noqa: E731
     elif ignore_case:
         low = q.lower()
@@ -195,7 +195,7 @@ def ws_write_file(rel, content, mode="overwrite"):
     går att backa (även i fria händer-läget)."""
     full = ws_resolve(rel)
     if content is None:
-        raise ValueError("Inget innehåll")
+        raise ValueError("No content")
     is_append = str(mode or "").strip().lower() == "append"
     existed = os.path.isfile(full)
     old = ""
@@ -205,7 +205,7 @@ def ws_write_file(rel, content, mode="overwrite"):
 
     new_content = (old + content) if (is_append and existed) else content
     if len(new_content.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
-        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
+        raise ValueError("Content too large (>%d B)" % CODE_MAX_EDIT_BYTES)
 
     parent = os.path.dirname(full)
     if parent:
@@ -226,9 +226,9 @@ def ws_edit_file(rel, old_text, new_text):
     annars vet vi inte vilken som menades."""
     full = ws_resolve(rel)
     if not os.path.isfile(full):
-        raise ValueError("Ingen fil: " + rel)
+        raise ValueError("No such file: " + rel)
     if os.path.getsize(full) > CODE_MAX_EDIT_BYTES:
-        raise ValueError("Filen är för stor att ändra i ett svep (>%d B)" % CODE_MAX_EDIT_BYTES)
+        raise ValueError("The file is too large to edit in one pass (>%d B)" % CODE_MAX_EDIT_BYTES)
     if not old_text:
         raise ValueError("old_text saknas – ange texten som ska bytas ut")
     with open(full, "r", encoding="utf-8", errors="replace") as f:
@@ -251,17 +251,17 @@ def ws_edit_file(rel, old_text, new_text):
                 hits = 1
                 norm_new = norm_new.strip()
             elif s_hits > 1:
-                raise ValueError("Fuzzy träff på %r finns %d gånger i %s – ta med fler omgivande rader så den blir unik" % (norm_old[:40], s_hits, rel))
+                raise ValueError("Fuzzy match for %r occurs %d times in %s - include more surrounding lines to make it unique" % (norm_old[:40], s_hits, rel))
         if hits == 0:
             snippet = _closest_snippet(norm_cur, norm_old)
-            hint = ("\nNärmaste rader i filen just nu:\n" + snippet) if snippet else ""
-            raise ValueError("Hittade inte texten i %s – den måste stämma exakt, tecken för tecken.%s" % (rel, hint))
+            hint = ("\nNearest lines in the file right now:\n" + snippet) if snippet else ""
+            raise ValueError("Could not find the text in %s - it must match exactly, character for character.%s" % (rel, hint))
     if hits > 1:
-        raise ValueError("Texten finns %d gånger i %s – ta med fler omgivande rader så den blir unik" % (hits, rel))
+        raise ValueError("The text occurs %d times in %s - include more surrounding lines to make it unique" % (hits, rel))
 
     updated = norm_cur.replace(match_used, norm_new, 1)
     if len(updated.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
-        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
+        raise ValueError("Content too large (>%d B)" % CODE_MAX_EDIT_BYTES)
     with open(full, "w", encoding="utf-8") as f:
         f.write(updated)
     rel_path = _ws_rel(full)
@@ -275,10 +275,10 @@ def ws_edit_file_batch(rel, edits):
     """Applicera en lista med kirurgiska sök-och-ersätt ändringar [{old_text, new_text}, ...]
     i filen sekventiellt i ett enda svep."""
     if not isinstance(edits, list) or not edits:
-        raise ValueError("edits måste vara en icke-tom lista med {old_text, new_text}")
+        raise ValueError("edits must be a non-empty list of {old_text, new_text}")
     full = ws_resolve(rel)
     if not os.path.isfile(full):
-        raise ValueError("Ingen fil: " + rel)
+        raise ValueError("No such file: " + rel)
     with open(full, "r", encoding="utf-8", errors="replace") as f:
         cur = f.read()
 
@@ -289,12 +289,12 @@ def ws_edit_file_batch(rel, edits):
 
     for i, ed in enumerate(edits):
         if not isinstance(ed, dict):
-            errors.append("edit %d: måste vara ett objekt med old_text och new_text" % i)
+            errors.append("edit %d: must be an object with old_text and new_text" % i)
             continue
         old = str(ed.get("old_text", ed.get("old", "")) or "").replace("\r\n", "\n")
         new = str(ed.get("new_text", ed.get("new", "")) or "").replace("\r\n", "\n")
         if not old:
-            errors.append("edit %d: old_text är tom" % i)
+            errors.append("edit %d: old_text is empty" % i)
             continue
         hits = modified.count(old)
         if hits == 0:
@@ -303,19 +303,19 @@ def ws_edit_file_batch(rel, edits):
                 modified = modified.replace(old_s, new.strip(), 1)
                 applied_count += 1
                 continue
-            errors.append("edit %d: hittade inte %r" % (i, old[:40]))
+            errors.append("edit %d: could not find %r" % (i, old[:40]))
             continue
         if hits > 1:
-            errors.append("edit %d: texten %r finns %d gånger (måste vara unik)" % (i, old[:40], hits))
+            errors.append("edit %d: the text %r occurs %d times (must be unique)" % (i, old[:40], hits))
             continue
         modified = modified.replace(old, new, 1)
         applied_count += 1
 
     if errors:
-        raise ValueError("; ".join(errors) + (" (applicerade %d ändringar innan felet)" % applied_count if applied_count else ""))
+        raise ValueError("; ".join(errors) + (" (applied %d changes before the error)" % applied_count if applied_count else ""))
 
     if len(modified.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
-        raise ValueError("För stort innehåll (>%d B)" % CODE_MAX_EDIT_BYTES)
+        raise ValueError("Content too large (>%d B)" % CODE_MAX_EDIT_BYTES)
 
     with open(full, "w", encoding="utf-8") as f:
         f.write(modified)
@@ -373,17 +373,17 @@ def undo_file(rel):
                 idx = i
                 break
         if idx is None:
-            return False, "Det finns inget att ångra för %s" % (rel or "(tom sökväg)")
+            return False, "There is nothing to undo for %s" % (rel or "(empty path)")
         item = _undo_stack.pop(idx)
     try:
         full = ws_resolve(item["path"])
         if item["before"] is None:
             if os.path.isfile(full):
                 os.remove(full)
-            return True, "Tog bort %s igen (filen fanns inte innan)" % item["path"]
+            return True, "Removed %s again (the file did not exist before)" % item["path"]
         with open(full, "w", encoding="utf-8") as f:
             f.write(item["before"])
-        return True, "Återställde %s till innehållet före ändringen" % item["path"]
+        return True, "Restored %s to the content before the change" % item["path"]
     except Exception as e:
         return False, str(e)
 

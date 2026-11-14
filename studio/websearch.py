@@ -30,16 +30,16 @@ from .config import setting_str, websearch_enabled, websearch_pages
 # säger uttryckligen att allt färskare än kunskapsgränsen ska sökas upp.
 # Serverns lokala tid används (sätt TZ i tjänstefilen om den ligger fel).
 # --------------------------------------------------------------------------
-SWEDISH_WEEKDAYS = ("måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag")
-SWEDISH_MONTHS = ("januari", "februari", "mars", "april", "maj", "juni",
-                  "juli", "augusti", "september", "oktober", "november", "december")
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTHS = ("January", "February", "March", "April", "May", "June",
+          "July", "August", "September", "October", "November", "December")
 
 
 def format_now(ts=None):
-    """Svensk datum- och tidssträng, t.ex. "onsdag 9 september 2026, klockan 14:32"."""
+    """English date and time string, e.g. "Wednesday 9 September 2026, 14:32"."""
     t = time.localtime(time.time() if ts is None else ts)
-    return "%s %d %s %d, klockan %02d:%02d" % (
-        SWEDISH_WEEKDAYS[t.tm_wday], t.tm_mday, SWEDISH_MONTHS[t.tm_mon - 1],
+    return "%s %d %s %d, %02d:%02d" % (
+        WEEKDAYS[t.tm_wday], t.tm_mday, MONTHS[t.tm_mon - 1],
         t.tm_year, t.tm_hour, t.tm_min)
 
 
@@ -47,31 +47,31 @@ def now_context(ts=None):
     """Systemmeddelandet som talar om för modellen vad klockan är."""
     zone = time.strftime("%Z", time.localtime(time.time() if ts is None else ts)).strip()
     return (
-        "Just nu är det %s%s. Utgå från det när användaren frågar om datum, tid, "
-        "veckodag, årtal, ålder eller hur långt det är kvar till något – räkna ut "
-        "svaret i stället för att säga att du inte vet vilken dag det är.\n"
-        "Din träningsdata är äldre än dagens datum. Gäller frågan pågående "
-        "tävlingar, nyheter, priser, väder, resultat eller vem som innehar en "
-        "position just nu: gissa aldrig utifrån minnet. Säg att du inte har "
-        "aktuell information (eller sök på nätet om det är påslaget), och blanda "
-        "inte ihop årets upplaga med en tidigare."
+        "Right now it is %s%s. Use that when the user asks about date, time, "
+        "weekday, year, age or how long until something - compute the answer "
+        "instead of saying you do not know what day it is.\n"
+        "Your training data is older than today's date. If the question concerns ongoing "
+        "competitions, news, prices, weather, results or who currently holds a "
+        "position: never guess from memory. Say that you do not have "
+        "current information (or search the web if that is enabled), and do not "
+        "confuse this year's edition with an earlier one."
         % (format_now(ts), (" (%s)" % zone) if zone else ""))
 
 
 # Marker som modellen ombeds skriva när den vill söka. Måste börja en rad.
-WEBSEARCH_MARKER = "SÖK:"
+WEBSEARCH_MARKER = "SEARCH:"
 
 # System-instruktion i steg 1: låt modellen svara direkt ELLER be om sökning.
 WEBSEARCH_INSTRUCTION = (
-    "Du har tillgång till webbsökning. Om du kan besvara användarens senaste fråga "
-    "säkert och korrekt med din egen kunskap: gör det direkt, som vanligt. "
-    "Om du är osäker, saknar aktuell information, eller frågan gäller nyheter, priser, "
-    "väder, sport, personer eller händelser som kan ha ändrats efter din kunskapsgräns: "
-    "svara då med EXAKT en enda rad som börjar med \"" + WEBSEARCH_MARKER + " \" följt av "
-    "en kort, effektiv sökfråga – och skriv absolut inget annat. "
-    "Skriv sökfrågan på det språk där svaret troligast finns – ofta engelska för "
-    "sport, teknik och internationella nyheter. "
-    "Exempel: " + WEBSEARCH_MARKER + " Sveriges folkmängd 2025"
+    "You have access to web search. If you can answer the user's latest question "
+    "safely and correctly with your own knowledge: do it directly, as usual. "
+    "If you are unsure, lack current information, or the question concerns news, prices, "
+    "weather, sports, people or events that may have changed after your knowledge cutoff: "
+    "respond with EXACTLY one single line starting with \"" + WEBSEARCH_MARKER + " \" followed by "
+    "a short, effective search query - and write nothing else at all. "
+    "Write the search query in the language where the answer is most likely found - often English for "
+    "sports, technology and international news. "
+    "Example: " + WEBSEARCH_MARKER + " population of Sweden 2025"
 )
 
 
@@ -81,12 +81,12 @@ def websearch_instruction():
 
 # System-instruktion i steg 2: svara utifrån sökträffarna.
 WEBSEARCH_ANSWER_INSTRUCTION = (
-    "Du är en hjälpsam assistent. Besvara användarens senaste fråga med hjälp av "
-    "webbsökresultaten nedan. Sammanfatta med egna ord på svenska och hänvisa till "
-    "källorna som [1], [2] osv där det passar. Texten under \"Från sidan\" är hämtad "
-    "direkt från källan – läs den noga och svara med namn och siffror därifrån, även "
-    "om de skiljer sig från vad du minns. Står svaret inte i materialet, säg det "
-    "ärligt och gissa inte."
+    "You are a helpful assistant. Answer the user's latest question using "
+    "the web search results below. Summarize in your own words in English and cite "
+    "the sources as [1], [2] etc where appropriate. The text under \"From the page\" is taken "
+    "directly from the source - read it carefully and answer with names and numbers from there, even "
+    "if they differ from what you remember. If the answer is not in the material, say so "
+    "honestly and do not guess."
 )
 
 
@@ -377,28 +377,28 @@ def enrich_results(results, pages=3, query="", timeout=PAGE_FETCH_TIMEOUT,
 def format_search_context(results):
     """Bygg system-texten med sökträffar som matas in i modellen (steg 2)."""
     if not results:
-        return ("Inga användbara webbträffar hittades. Säg ärligt att du inte kunde "
-                "hitta aktuell information om detta.")
-    lines = ["Webbsökresultat. Där det står \"Från sidan\" är texten hämtad direkt "
-             "från källan – använd den i första hand, och citera siffror och namn "
-             "därifrån i stället för att minnas dem."]
+        return ("No useful web results were found. Say honestly that you could not "
+                "find current information about this.")
+    lines = ["Web search results. Where it says \"From the page\" the text is taken directly "
+             "from the source - use it first, and cite numbers and names "
+             "from there instead of recalling them."]
     for i, r in enumerate(results, 1):
         block = "[%d] %s\n%s" % (i, r["title"], r["url"])
         if r.get("snippet"):
             block += "\n" + r["snippet"]
         if r.get("text"):
-            block += "\nFrån sidan:\n" + r["text"]
+            block += "\nFrom the page:\n" + r["text"]
         lines.append(block)
     return "\n\n".join(lines)
 
 
 def search_footer(query, results):
     """Fotnot som läggs sist i svaret så att det syns att en sökning gjordes."""
-    parts = ["\n\n🌐 *Det här svaret togs fram efter en webbsökning (DuckDuckGo) på:* "
+    parts = ["\n\n🌐 *This answer was produced after a web search (DuckDuckGo) for:* "
              "“%s”" % query]
     if results:
         parts.append("")
-        parts.append("**Källor:**")
+        parts.append("**Sources:**")
         for i, r in enumerate(results, 1):
             parts.append("%d. [%s](%s)" % (i, r["title"] or r["url"], r["url"]))
     return "\n".join(parts)

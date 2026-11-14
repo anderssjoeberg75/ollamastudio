@@ -170,12 +170,12 @@ def analyze(root=None, force=False):
 def summary_line(info):
     """En rad för UI:t – vad analysen hittade."""
     if not info:
-        return "Ingen arbetsyta att analysera."
+        return "No workspace to analyze."
     langs = sorted(info["langs"].items(), key=lambda kv: -kv[1])[:3]
-    langtext = ", ".join("%s (%d)" % (l, n) for l, n in langs) or "inga kända språk"
-    return ("%d filer · %s · %d funktioner/klasser hittade%s"
+    langtext = ", ".join("%s (%d)" % (l, n) for l, n in langs) or "no known languages"
+    return ("%d files · %s · %d functions/classes found%s"
             % (info["files"], langtext, info["symbol_count"],
-               " (taket nåddes)" if info["truncated"] else ""))
+               " (cap reached)" if info["truncated"] else ""))
 
 
 def project_brief(info=None, cap=1400):
@@ -188,21 +188,21 @@ def project_brief(info=None, cap=1400):
     if not info or not info["files"]:
         return ""
     langs = sorted(info["langs"].items(), key=lambda kv: -kv[1])[:4]
-    parts = ["PROJEKTET (analyserat när arbetsytan valdes):"]
-    parts.append("- %d filer, %s." % (info["files"],
-                 ", ".join("%s x%d" % (l, n) for l, n in langs) or "okänt språk"))
+    parts = ["THE PROJECT (analyzed when the workspace was selected):"]
+    parts.append("- %d files, %s." % (info["files"],
+                 ", ".join("%s x%d" % (l, n) for l, n in langs) or "unknown language"))
     if info["key_files"]:
-        parts.append("- Nyckelfiler: %s." % ", ".join(info["key_files"][:8]))
+        parts.append("- Key files: %s." % ", ".join(info["key_files"][:8]))
     tops = sorted(info["top_dirs"].items(), key=lambda kv: -kv[1])[:8]
     if tops:
-        parts.append("- Toppnivå: %s." % ", ".join("%s (%d)" % (d, n) for d, n in tops))
+        parts.append("- Top level: %s." % ", ".join("%s (%d)" % (d, n) for d, n in tops))
     # De filer som innehåller mest kod är oftast de som betyder något.
     biggest = sorted(info["symbols"].items(), key=lambda kv: -len(kv[1]))[:6]
     if biggest:
-        parts.append("- Mest kod i: %s."
+        parts.append("- Most code in: %s."
                      % ", ".join("%s (%d def)" % (p, len(v)) for p, v in biggest))
-    parts.append("- Använd TOOL find_symbol {\"name\": \"...\"} för att hitta var något "
-                 "definieras, i stället för att leta igenom filer.")
+    parts.append("- Use TOOL find_symbol {\"name\": \"...\"} to find where something "
+                 "is defined, instead of searching through files.")
     text = "\n".join(parts)
     return text[:cap]
 

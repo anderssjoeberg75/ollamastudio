@@ -20,13 +20,13 @@ def code_char_budget():
 # Svämmar fönstret över kastar Ollama det ÄLDSTA – alltså systemprompten med
 # verktygen – och modellen slutar tyst följa protokollet. Vi kortar hellre ned de
 # äldsta verktygsresultaten själva, så systemprompt och frågor alltid ligger kvar.
-TOOL_RESULT_PREFIX = "VERKTYGSRESULTAT"
+TOOL_RESULT_PREFIX = "TOOL RESULT"
 CODE_TOOL_RESULT_CAP = 12000     # tak per verktygsresultat som matas till modellen
 # Behåll prefixet: en beskuren post ska fortfarande gå att känna igen som ett
 # verktygsresultat (annars ser en andra beskärningsrunda den inte), och modellen
 # ska förstå att det HAR funnits ett resultat här – inte att steget aldrig hände.
-_PRUNED_NOTE = (TOOL_RESULT_PREFIX + " (beskuret):\n(äldre resultat borttaget för att spara "
-                "plats i kontexten – kör verktyget igen om du behöver innehållet)")
+_PRUNED_NOTE = (TOOL_RESULT_PREFIX + " (truncated):\n(older result removed to save "
+                "space in the context - run the tool again if you need the content)")
 
 
 def code_result_cap():
@@ -42,7 +42,7 @@ def cap_tool_result(text, cap=CODE_TOOL_RESULT_CAP):
     text = text or ""
     if len(text) <= cap:
         return text
-    tmpl = "\n\n… (%d tecken utelämnade i mitten) …\n\n"
+    tmpl = "\n\n… (%d characters omitted in the middle) …\n\n"
     # Räkna med markörens längd i taket – annars blir resultatet längre än cap,
     # och den som budgeterar utifrån cap får inte det den bad om.
     reserve = len(tmpl % len(text))          # övre gräns för markören

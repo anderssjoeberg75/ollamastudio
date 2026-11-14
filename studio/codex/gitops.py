@@ -21,9 +21,9 @@ def _git(args, timeout=30, extra_env=None, cwd=None):
     """Kör git i arbetsytans rot (eller `cwd`). Returnerar (returkod, stdout, stderr)."""
     root = cwd or code_workspace_root()
     if not root:
-        return 1, "", "Ingen arbetsyta"
+        return 1, "", "No workspace"
     if not git_available():
-        return 1, "", "git är inte installerat på servern"
+        return 1, "", "git is not installed on the server"
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"   # fråga aldrig efter lösenord interaktivt
     env["GCM_INTERACTIVE"] = "never"   # förhindra interaktiva dialoger från Git Credential Manager
@@ -34,7 +34,7 @@ def _git(args, timeout=30, extra_env=None, cwd=None):
                            timeout=timeout, env=env)
         return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
     except subprocess.TimeoutExpired:
-        return 1, "", "git tog för lång tid (timeout)"
+        return 1, "", "git took too long (timeout)"
     except Exception as e:
         return 1, "", str(e)
 
@@ -152,7 +152,7 @@ def git_diff_text(path=None):
     if path:
         args += ["--", path]
     rc, out, err = _git(args)
-    return out if rc == 0 else ("FEL: " + err)
+    return out if rc == 0 else ("ERROR: " + err)
 
 
 def git_create_branch(name):
@@ -176,7 +176,7 @@ def git_commit_all(message):
         ident = ["-c", "user.email=ollama-studio@localhost", "-c", "user.name=Ollama Studio"]
     rc, out, err = _git(ident + ["commit", "-m", message])
     if rc != 0:
-        return False, (err or out or "commit misslyckades")
+        return False, (err or out or "commit failed")
     return True, (out or "commit ok")
 
 
@@ -217,7 +217,7 @@ def _authed_gitlab_push_url(host, slug, token, scheme="http"):
 def git_push(branch=None):
     branch = (branch or git_current_branch() or "").strip()
     if not branch:
-        return False, "Ingen gren att pusha"
+        return False, "No branch to push"
     info = git_remote_info()
     provider = info.get("provider") if info else ""
     token = ""
@@ -246,5 +246,5 @@ def git_push(branch=None):
 
     err = _sanitize(err)
     out = _sanitize(out)
-    return (rc == 0), (err or out or ("pushade " + branch))
+    return (rc == 0), (err or out or ("pushed " + branch))
 

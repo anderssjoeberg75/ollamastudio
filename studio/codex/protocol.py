@@ -26,37 +26,37 @@ from .workspace import (CODE_READ_LINES, ws_current, ws_diff, ws_edit_file,
 def _tools_help(mode):
     """Verktygslistan i systemprompten – beskriver även vad som kräver lov."""
     if mode == "full":
-        note = ("Du har fria händer: skrivningar, kommandon och git körs direkt utan att "
-                "användaren tillfrågas. Var därför försiktig och verifiera med tester.")
+        note = ("You have free rein: writes, commands and git run directly without asking "
+                "the user. Be careful and verify with tests.")
     elif mode == "auto_edit":
-        note = ("Filändringar skrivs direkt utan att fråga. Kommandon och git-åtgärder "
-                "måste användaren godkänna – den kan säga nej.")
+        note = ("File changes are written directly without asking. Commands and git actions "
+                "must be approved by the user - they can say no.")
     else:
-        note = ("Varje skrivning, kommando och git-åtgärd måste användaren godkänna först. "
-                "Får du NEKAT: gör inte om samma sak – föreslå något annat eller fråga.")
+        note = ("Every write, command and git action must be approved by the user first. "
+                "If you are DENIED: do not repeat the same thing - propose something else or ask.")
     return note
 
 
 AGENT_TOOLS_TEXT = (
     "  TOOL list_dir {\"path\": \".\"}\n"
-    "  TOOL tree {}                              (alla filer i projektet)\n"
-    "  TOOL read_file {\"path\": \"fil.py\", \"start\": 1}   (ett radfönster i taget)\n"
+    "  TOOL tree {}                              (all files in the project)\n"
+    "  TOOL read_file {\"path\": \"file.py\", \"start\": 1}   (one line window at a time)\n"
     "  TOOL search {\"query\": \"text\", \"glob\": \"*.py\", \"regex\": false, "
     "\"ignore_case\": false}\n"
-    "  TOOL find_symbol {\"name\": \"funktionsnamn\"}   (var något definieras)\n"
-    "  TOOL agent {\"name\": \"python-reviewer\"}        (ladda specialistagent: build-error-resolver, architect, code-simplifier, m.fl.)\n"
-    "  TOOL skill {\"name\": \"tdd-workflow\"}           (ladda metodik/skill: verification-loop, security-review, m.fl.)\n"
-    "  TOOL workflow {\"name\": \"build-fix\"}           (ladda arbetsflöde: quality-gate, plan, m.fl.)\n"
-    "  TOOL edit_file {\"path\": \"fil.py\", \"old_text\": \"exakt text som finns\", "
-    "\"new_text\": \"det den ska bli\"}\n"
-    "  TOOL write_file {\"path\": \"ny.py\", \"content\": \"hela filens innehåll\"}\n"
+    "  TOOL find_symbol {\"name\": \"function_name\"}   (where something is defined)\n"
+    "  TOOL agent {\"name\": \"python-reviewer\"}        (load specialist agent: build-error-resolver, architect, code-simplifier, etc.)\n"
+    "  TOOL skill {\"name\": \"tdd-workflow\"}           (load methodology/skill: verification-loop, security-review, etc.)\n"
+    "  TOOL workflow {\"name\": \"build-fix\"}           (load workflow: quality-gate, plan, etc.)\n"
+    "  TOOL edit_file {\"path\": \"file.py\", \"old_text\": \"exact existing text\", "
+    "\"new_text\": \"what it should become\"}\n"
+    "  TOOL write_file {\"path\": \"new.py\", \"content\": \"the entire file content\"}\n"
     "  TOOL run_command {\"cmd\": \"pytest\"}\n"
     "  TOOL git_status {}\n"
-    "  TOOL git_diff {\"path\": \"fil.py\"}\n"
-    "  TOOL git_branch {\"name\": \"min-gren\"}\n"
-    "  TOOL git_commit {\"message\": \"Vad ändringen gör\"}\n"
-    "  TOOL create_issue {\"title\": \"Rubrik\", \"description\": \"Beskrivning\", \"labels\": \"security,P1\"}\n"
-    "  TOOL todo {\"items\": [\"Läs koden\", \"Ändra X\", \"Kör testerna\"]}\n"
+    "  TOOL git_diff {\"path\": \"file.py\"}\n"
+    "  TOOL git_branch {\"name\": \"my-branch\"}\n"
+    "  TOOL git_commit {\"message\": \"What the change does\"}\n"
+    "  TOOL create_issue {\"title\": \"Title\", \"description\": \"Description\", \"labels\": \"security,P1\"}\n"
+    "  TOOL todo {\"items\": [\"Read the code\", \"Change X\", \"Run the tests\"]}\n"
 )
 
 
@@ -92,54 +92,6 @@ def agent_system_prompt(mode=None, task=None, lang="en"):
     # Projektöversikten läggs FÖRST: vet agenten vad det är för projekt slipper den
     # bränna steg på att lista mappar, och svaren blir konkreta från början.
     brief = project_brief()
-    if lang == "sv":
-        return (
-            (brief + "\n\n" if brief else "") +
-            "Du är Codex, en kodagent som arbetar i en avgränsad projektmapp (arbetsytan). "
-            "Svara på svenska.\n\n"
-            "ARBETSSÄTT (följ ordningen):\n"
-            "1. Ta reda på fakta först – läs och sök i koden innan du ändrar något. Gissa aldrig "
-            "hur en fil ser ut.\n"
-            "2. Är uppgiften i flera steg: lägg upp en plan med TOOL todo och håll den uppdaterad.\n"
-            "3. Gör ändringen med edit_file (byt ut en exakt textbit) eller write_file (ny/liten fil). "
-            "Använd edit_file för stora filer – skriv aldrig om en hel fil i onödan.\n"
-            "4. Verifiera: kör tester eller linters med run_command när det går.\n"
-            "5. Sammanfatta kort på svenska vad du gjorde och vad användaren bör titta på.\n\n"
-            "VERKTYG – skriv EXAKT en rad som börjar med `TOOL ` följt av namn och ett JSON-objekt, "
-            "och inget annat på den raden. Ett verktyg i taget; du får resultatet och kan sedan "
-            "använda fler:\n" + AGENT_TOOLS_TEXT + "\n"
-            "REGLER:\n"
-            "- " + _tools_help(mode) + "\n"
-            "- Alla sökvägar är relativa till arbetsytan. Du kommer inte utanför den.\n"
-            "- edit_file kräver att old_text finns exakt en gång. Ta med omgivande rader så det blir "
-            "unikt, och kopiera texten ordagrant ur read_file (utan radnumren).\n"
-            "- read_file ger " + str(CODE_READ_LINES) + " rader åt gången. Behöver du mer, läs "
-            "vidare med \"start\" – läs inte om samma rader.\n"
-            "- search: smalna av med \"glob\" (t.ex. \"*.py\") när träffarna blir för många, och "
-            "sätt \"regex\": true för mönster. Börja BRETT – en glob som inte matchar något ser "
-            "likadan ut som noll träffar.\n"
-            "- Hittar du inte en text: den kan stavas med andra versaler eller mellanrum än "
-            "användaren skrev. Sökverktyget föreslår ett nytt anrop när det händer – följ det "
-            "i stället för att svara att texten inte finns.\n"
-            "- Frågor om hur APPEN beter sig (en knapp, en vy, ett menyval) besvaras i koden, "
-            "inte i dokumentationen. Sök i källfiler först; .md-filer beskriver bara.\n"
-            "- Kontexten är begränsad. Läs det du behöver, inte hela projektet.\n"
-            "- Du har gott om steg – ta dem du behöver för att bli KLAR. Men upprepa aldrig ett "
-            "verktygsanrop du redan fått svar på; resultatet blir detsamma.\n"
-            "- När du ombeds granska kod (säkerhetsgranskning, buggar eller ponytail/förenklings-audit):\n"
-            "  1. Skapa ETT SEPARAT issue för VARJE enskilt fynd via TOOL create_issue (samla ALDRIG flera punkter i ett issue).\n"
-            "  2. Beskrivningen (`description`) SKA innehålla så utförliga instruktioner att vem som helst kan åtgärda/förenkla koden direkt:\n"
-            "     - ### Plats & Berörd kod (filnamn, funktion, radnummer)\n"
-            "     - ### Problem / Överarbetning / Risk (vad är problemet, risken, onödig komplexitet eller död kod)\n"
-            "     - ### Steg-för-steg åtgärdsplan & Kodexempel (konkret kod hur det ska fixas/tas bort/förenklas med före/efter)\n"
-            "     - ### Acceptanskriterier & Verifiering (hur man testar att det är löst och att tester passerar)\n"
-            "- Vid specifika moment: ta stöd av specialistagenter eller skills via `TOOL agent` (71 st, t.ex. "
-            "python-reviewer, build-error-resolver, architect, code-simplifier) eller `TOOL skill` (338 st, t.ex. "
-            "tdd-workflow, verification-loop, security-review) för att ladda metodik och krav.\n"
-            "- Uppfinn inga verktyg och kör inga verktyg du inte fått resultat för.\n"
-            "- När du är klar: skriv svaret som vanlig text utan TOOL-rad."
-        )
-
     return (
         (brief + "\n\n" if brief else "") +
         "You are Codex, an autonomous coding and security agent working in the workspace repository. "
@@ -182,17 +134,17 @@ AGENT_SYSTEM = agent_system_prompt("ask")
 
 # Skisslage: ingen arbetsyta – inga verktyg, ingen disk. Bara kod-chatt.
 AGENT_SYSTEM_SCRATCH = (
-    "Du är en kodassistent (Codex) utan filåtkomst. Svara på svenska och hjälp användaren "
-    "att skriva och förklara kod. Du kan INTE läsa eller spara filer i något projekt. "
-    "När du föreslår kod, lägg varje fil i ett block så att den blir lätt att kopiera:\n"
-    "*** FIL: förslag/sökväg.py\n"
-    "<hela filens innehåll>\n"
-    "*** SLUT\n"
-    "Använd inga TOOL-rader – det finns inga verktyg i det här läget."
+    "You are a coding assistant (Codex) without file access. Respond in English and help the "
+    "user write and explain code. You CANNOT read or save files in any project. "
+    "When you propose code, put each file in a block so it is easy to copy:\n"
+    "*** FILE: suggestion/path.py\n"
+    "<the entire file content>\n"
+    "*** END\n"
+    "Do not use any TOOL lines - there are no tools in this mode."
 )
 
 _TOOL_HEAD_RE = re.compile(r'(?:^|\n)[ \t>*-]*TOOL[:\s]+([A-Za-z_]\w*)[ \t]*')
-_EDIT_RE = re.compile(r'^\*\*\* ?FIL:\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?SLUT\s*$|\Z)',
+_EDIT_RE = re.compile(r'^\*\*\* ?(?:FILE|FIL):\s*(.+?)\s*\n(.*?)(?:^\*\*\* ?(?:END|SLUT)\s*$|\Z)',
                       re.MULTILINE | re.DOTALL)
 AGENT_TOOL_NAMES = {"list_dir", "tree", "read_file", "search", "find_symbol",
                     "edit_file", "write_file", "replace_file_content", "replace_file", "write_to_file",
@@ -358,18 +310,18 @@ def _search_dead_end(query, glob, result, was_regex, was_ci):
     """
     # En glob som inte matchar NÅGON fil är något helt annat än "inga träffar".
     if glob and not result.get("scanned"):
-        return ("\n(Globen %r matchade INGA filer alls – sök om utan \"glob\", eller "
-                "kontrollera mönstret: \"*.py\" med stjärna, inte \".py\".)" % glob)
+        return ("\n(The glob %r matched NO files at all - search again without \"glob\", or "
+                "check the pattern: \"*.py\" with an asterisk, not \".py\".)" % glob)
 
     tries = []
     if not was_ci:
-        tries.append(("versaler", {"query": query, "ignore_case": True},
+        tries.append(("capitalization", {"query": query, "ignore_case": True},
                       dict(regex=was_regex, ignore_case=True)))
     if not was_regex:
         words = re.findall(r"\w+", query, re.UNICODE)
         if len(words) > 1:
             loose = r"\W+".join(re.escape(w) for w in words)
-            tries.append(("skiljetecken och mellanrum",
+            tries.append(("punctuation and spacing",
                           {"query": loose, "regex": True, "ignore_case": True},
                           dict(regex=True, ignore_case=True, _query=loose)))
     for why, suggest, kw in tries:
@@ -380,17 +332,17 @@ def _search_dead_end(query, glob, result, was_regex, was_ci):
             continue
         if alt["hits"]:
             where = ", ".join(sorted({h["path"] for h in alt["hits"]})[:4])
-            return ("\n(Inga exakta träffar – men %d rader matchar om %s inte spelar roll, "
-                    "i %s. Kör: TOOL search %s)"
+            return ("\n(No exact hits - but %d lines match if %s does not matter, "
+                    "in %s. Run: TOOL search %s)"
                     % (len(alt["hits"]), why, where,
                        json.dumps(suggest, ensure_ascii=False)))
-    return ("\n(sökte i %d filer. Prova färre ord, \"ignore_case\": true, eller "
-            "TOOL tree {} för att se vad som finns.)" % result.get("scanned", 0))
+    return ("\n(searched %d files. Try fewer words, \"ignore_case\": true, or "
+            "TOOL tree {} to see what exists.)" % result.get("scanned", 0))
 
 
 def _denied(what):
-    return ("NEKAT: användaren sa nej till %s. Gör inte om samma sak – föreslå ett annat "
-            "sätt, eller fråga användaren vad hen vill i stället." % what)
+    return ("DENIED: the user said no to %s. Do not repeat the same thing - propose another "
+            "way, or ask the user what they want instead." % what)
 
 
 def _norm_todo(items):
@@ -422,21 +374,21 @@ def agent_tool_exec(name, args, ctx=None):
     try:
         if name == "list_dir":
             r = ws_list_dir(args.get("path", "."))
-            txt = "Mapp %s:\n%s" % (r["path"],
-                  "\n".join(["[D] " + d for d in r["dirs"]] + r["files"]) or "(tom)")
+            txt = "Folder %s:\n%s" % (r["path"],
+                  "\n".join(["[D] " + d for d in r["dirs"]] + r["files"]) or "(empty)")
             return txt, {"summary": "%d mappar, %d filer" % (len(r["dirs"]), len(r["files"]))}
 
         if name == "tree":
             files = ws_tree()
-            return ("Filer i arbetsytan:\n" + ("\n".join(files) or "(tom)"),
+            return ("Files in the workspace:\n" + ("\n".join(files) or "(empty)"),
                     {"summary": "%d filer" % len(files)})
 
         if name == "read_file":
             r = ws_read_file(args.get("path", ""), args.get("start"), args.get("end"))
-            more = ("\n… fortsätter till rad %d. Läs vidare med "
+            more = ("\n… continues to line %d. Read on with "
                     "TOOL read_file {\"path\": \"%s\", \"start\": %d}"
                     % (r["total"], r["path"], r["end"] + 1)) if r["more"] else ""
-            return ("Fil %s (rad %d–%d av %d):\n%s%s" % (
+            return ("File %s (line %d-%d of %d):\n%s%s" % (
                     r["path"], r["start"], r["end"], r["total"], r["content"], more),
                     {"summary": "rad %d–%d av %d" % (r["start"], r["end"], r["total"])})
 
@@ -448,49 +400,49 @@ def agent_tool_exec(name, args, ctx=None):
             lines = ["%s:%d: %s" % (h["path"], h["line"], h["text"]) for h in r["hits"]]
             tail = ""
             if r.get("truncated"):
-                tail = ("\n… (taket på %d träffar nåddes – sök smalare, t.ex. med "
+                tail = ("\n… (the cap of %d hits was reached - search more narrowly, e.g. with "
                         "\"glob\": \"*.py\")" % len(r["hits"]))
             elif not r["hits"]:
                 tail = _search_dead_end(args.get("query", ""),
                                         args.get("glob") or args.get("path"), r,
                                         bool(args.get("regex")),
                                         bool(args.get("ignore_case")))
-            return ("Sökträffar för %r:\n%s%s" % (r["query"],
-                    "\n".join(lines) or "(inga)", tail),
+            return ("Search hits for %r:\n%s%s" % (r["query"],
+                    "\n".join(lines) or "(none)", tail),
                     {"summary": "%d träffar" % len(r["hits"])})
 
         if name == "find_symbol":
             q = (args.get("name") or args.get("symbol") or args.get("query") or "").strip()
             if not q:
-                return "FEL: name saknas", {"summary": "fel: name saknas"}
+                return "ERROR: name missing", {"summary": "fel: name saknas"}
             hits = find_symbol(q)
             if not hits:
-                return ("Hittade ingen definition av %r. Prova search, eller en del av "
-                        "namnet – uppslaget täcker toppnivåns funktioner och klasser."
+                return ("No definition of %r found. Try search, or a part of "
+                        "the name - the index covers top-level functions and classes."
                         % q, {"summary": "0 träffar"})
             lines = ["%s:%d  %s (%s)" % (h["path"], h["line"], h["name"], h["kind"])
                      for h in hits]
-            return ("%r definieras här:\n%s" % (q, "\n".join(lines)),
+            return ("%r is defined here:\n%s" % (q, "\n".join(lines)),
                     {"summary": "%d träffar" % len(hits)})
 
         if name == "git_status":
             info = git_status_info()
             if not info.get("repo"):
-                return "Arbetsytan är inte ett git-repo.", {"summary": "inget repo"}
-            return ("Gren: %s · %d ändrade filer:\n%s" % (
-                    info["branch"], info["changed"], "\n".join(info["files"]) or "(inga)"),
+                return "The workspace is not a git repo.", {"summary": "inget repo"}
+            return ("Branch: %s · %d changed files:\n%s" % (
+                    info["branch"], info["changed"], "\n".join(info["files"]) or "(none)"),
                     {"summary": "%d ändrade" % info["changed"]})
 
         if name == "git_diff":
             d = git_diff_text(args.get("path"))
-            return ("Diff:\n" + (d or "(inga ändringar)"))[:8000], {"summary": "diff"}
+            return ("Diff:\n" + (d or "(no changes)"))[:8000], {"summary": "diff"}
 
         if name == "todo":
             items = _norm_todo(args.get("items") or args.get("todos") or args.get("plan"))
             if not items:
-                return "FEL: items saknas (en lista med punkter)", {"summary": "tom plan"}
+                return "ERROR: items missing (a list of bullet points)", {"summary": "tom plan"}
             done = sum(1 for i in items if i["done"])
-            return ("Planen är noterad och visas för användaren:\n"
+            return ("The plan is noted and shown to the user:\n"
                     + "\n".join(("[x] " if i["done"] else "[ ] ") + i["text"] for i in items),
                     {"summary": "%d/%d klara" % (done, len(items)), "todo": items})
 
@@ -498,51 +450,51 @@ def agent_tool_exec(name, args, ctx=None):
             ag_name = (args.get("name") or args.get("agent") or "").strip()
             if not ag_name or ag_name.lower() in ("list", "all"):
                 agents = list_agents()
-                return ("Specialistagenter (%d st tillgängliga):\n%s\nAnropa med: TOOL agent {\"name\": \"...\"}"
+                return ("Specialist agents (%d available):\n%s\nCall with: TOOL agent {\"name\": \"...\"}"
                         % (len(agents), ", ".join(agents[:40]) + ("..." if len(agents) > 40 else "")),
                         {"summary": "%d agenter" % len(agents)})
             content = get_agent(ag_name)
             if not content:
                 similar = [a for a in list_agents() if ag_name.lower() in a.lower()]
-                hint = (" Förslag: " + ", ".join(similar[:5])) if similar else ""
-                return ("Hittade inte agenten %r.%s" % (ag_name, hint), {"summary": "agent saknas"})
-            return ("Instruktioner för agent %s:\n%s" % (ag_name, content[:8000]),
+                hint = (" Suggestions: " + ", ".join(similar[:5])) if similar else ""
+                return ("Could not find the agent %r.%s" % (ag_name, hint), {"summary": "agent saknas"})
+            return ("Instructions for agent %s:\n%s" % (ag_name, content[:8000]),
                     {"summary": "agent: " + ag_name})
 
         if name == "skill":
             sk_name = (args.get("name") or args.get("skill") or "").strip()
             if not sk_name or sk_name.lower() in ("list", "all"):
                 skills = list_skills()
-                return ("Skills (%d st tillgängliga):\n%s\nAnropa med: TOOL skill {\"name\": \"...\"}"
+                return ("Skills (%d available):\n%s\nCall with: TOOL skill {\"name\": \"...\"}"
                         % (len(skills), ", ".join(skills[:50]) + ("..." if len(skills) > 50 else "")),
                         {"summary": "%d skills" % len(skills)})
             content = get_skill(sk_name)
             if not content:
                 similar = [s for s in list_skills() if sk_name.lower() in s.lower()]
-                hint = (" Förslag: " + ", ".join(similar[:5])) if similar else ""
-                return ("Hittade inte skillen %r.%s" % (sk_name, hint), {"summary": "skill saknas"})
-            return ("Instruktioner för skill %s:\n%s" % (sk_name, content[:8000]),
+                hint = (" Suggestions: " + ", ".join(similar[:5])) if similar else ""
+                return ("Could not find the skill %r.%s" % (sk_name, hint), {"summary": "skill saknas"})
+            return ("Instructions for skill %s:\n%s" % (sk_name, content[:8000]),
                     {"summary": "skill: " + sk_name})
 
         if name == "workflow":
             wf_name = (args.get("name") or args.get("workflow") or "").strip()
             if not wf_name or wf_name.lower() in ("list", "all"):
                 wfs = list_workflows()
-                return ("Workflows (%d st tillgängliga):\n%s\nAnropa med: TOOL workflow {\"name\": \"...\"}"
+                return ("Workflows (%d available):\n%s\nCall with: TOOL workflow {\"name\": \"...\"}"
                         % (len(wfs), ", ".join(wfs[:40]) + ("..." if len(wfs) > 40 else "")),
                         {"summary": "%d workflows" % len(wfs)})
             content = get_workflow(wf_name)
             if not content:
                 similar = [w for w in list_workflows() if wf_name.lower() in w.lower()]
-                hint = (" Förslag: " + ", ".join(similar[:5])) if similar else ""
-                return ("Hittade inte workflow %r.%s" % (wf_name, hint), {"summary": "workflow saknas"})
+                hint = (" Suggestions: " + ", ".join(similar[:5])) if similar else ""
+                return ("Could not find the workflow %r.%s" % (wf_name, hint), {"summary": "workflow saknas"})
             return ("Workflow %s:\n%s" % (wf_name, content[:8000]),
                     {"summary": "workflow: " + wf_name})
 
         # ---- Skrivande verktyg: kräver en körning (och oftast ett godkännande) ----
         if name in ("write_file", "write_to_file", "edit_file", "replace_file_content", "replace_file", "run_command", "git_branch", "git_commit", "create_issue"):
             if ctx is None:
-                return ("FEL: %s kan bara användas i en Codex-körning." % name,
+                return ("ERROR: %s can only be used inside a Codex run." % name,
                         {"summary": "ingen körning"})
 
         if name in ("write_file", "write_to_file"):
@@ -550,9 +502,9 @@ def agent_tool_exec(name, args, ctx=None):
             content = args.get("content") if args.get("content") is not None else args.get("CodeContent")
             mode = args.get("mode") or "overwrite"
             if not path:
-                return "FEL: path saknas", {"summary": "fel: path saknas"}
+                return "ERROR: path missing", {"summary": "fel: path saknas"}
             if content is None:
-                return "FEL: content saknas", {"summary": "fel: content saknas"}
+                return "ERROR: content missing", {"summary": "fel: content saknas"}
             if not isinstance(content, str):
                 content = str(content)
             before = ws_current(path)
@@ -561,13 +513,13 @@ def agent_tool_exec(name, args, ctx=None):
             preview = ws_diff(before, preview_content, path) or "(oförändrad)"
             action_desc = ("Lägga till i filen %s (append)" if is_append else "Skriva filen %s") % path
             if not ctx.ask("edit", "write:" + path, action_desc, preview):
-                return _denied("att skriva " + path), {"summary": "nekat: " + path, "denied": True}
+                return _denied("writing " + path), {"summary": "nekat: " + path, "denied": True}
             r = ws_write_file(path, content, mode=mode)
             ctx.writes.append(r["path"])
-            verb = "lade till i" if is_append else "skrev"
-            return ("OK: %s %s (%d tecken).%s" % (
+            verb = "appended to" if is_append else "wrote"
+            return ("OK: %s %s (%d characters).%s" % (
                         verb, r["path"], len(content),
-                        " Filen skapades." if r["created"] else ""),
+                        " The file was created." if r["created"] else ""),
                     {"summary": (("lade till i " if is_append else ("skapade " if r["created"] else "skrev ")) + r["path"]),
                      "path": r["path"], "diff": r["diff"], "wrote": True})
 
@@ -575,9 +527,9 @@ def agent_tool_exec(name, args, ctx=None):
             path = (args.get("path") or args.get("TargetFile") or "").strip()
             edits = args.get("edits")
             if not path:
-                return "FEL: path saknas", {"summary": "fel: path saknas"}
+                return "ERROR: path missing", {"summary": "fel: path saknas"}
             if not os.path.isfile(ws_resolve(path)):
-                return ("FEL: filen %s finns inte. Använd write_file för att skapa den." % path,
+                return ("ERROR: the file %s does not exist. Use write_file to create it." % path,
                         {"summary": "ingen fil: " + path})
 
             # 1. Batch edits
@@ -585,10 +537,10 @@ def agent_tool_exec(name, args, ctx=None):
                 cur = ws_current(path)
                 preview = "Batch edits (%d stycken)" % len(edits)
                 if not ctx.ask("edit", "edit:" + path, "Ändra i filen %s (%d ändringar)" % (path, len(edits)), preview):
-                    return _denied("att ändra " + path), {"summary": "nekat: " + path, "denied": True}
+                    return _denied("editing " + path), {"summary": "nekat: " + path, "denied": True}
                 r = ws_edit_file_batch(path, edits)
                 ctx.writes.append(r["path"])
-                return ("OK: ändrade %s (%d ändringar applicerade)." % (r["path"], r.get("applied", len(edits))),
+                return ("OK: edited %s (%d changes applied)." % (r["path"], r.get("applied", len(edits))),
                         {"summary": "ändrade %s (%d st)" % (r["path"], r.get("applied", len(edits))), "path": r["path"],
                          "diff": r["diff"], "wrote": True})
 
@@ -604,7 +556,7 @@ def agent_tool_exec(name, args, ctx=None):
             if new_text is None:
                 new_text = args.get("ReplacementContent")
             if not old_text:
-                return ("FEL: old_text saknas – ange den exakta text som ska bytas ut (eller en lista med 'edits').",
+                return ("ERROR: old_text missing - give the exact text to replace (or a list of 'edits').",
                         {"summary": "fel: old_text saknas"})
 
             # Förhandsvisa ändringen innan vi frågar – användaren ska se vad hen godkänner.
@@ -616,25 +568,25 @@ def agent_tool_exec(name, args, ctx=None):
                 norm_old = norm_old.strip()
                 hits = 1
             if hits != 1:
-                return (("FEL: texten finns %d gånger i %s. Den måste finnas exakt en gång – "
-                         "läs filen och ta med fler omgivande rader." % (hits, path)),
+                return (("ERROR: the text occurs %d times in %s. It must occur exactly once - "
+                         "read the file and include more surrounding lines." % (hits, path)),
                         {"summary": "ingen unik träff"})
             preview = ws_diff(norm_cur, norm_cur.replace(norm_old, str(new_text or "").replace("\r\n", "\n"), 1), path)
             if not ctx.ask("edit", "edit:" + path, "Ändra i filen %s" % path, preview):
-                return _denied("att ändra " + path), {"summary": "nekat: " + path, "denied": True}
+                return _denied("editing " + path), {"summary": "nekat: " + path, "denied": True}
             r = ws_edit_file(path, old_text, new_text)
             ctx.writes.append(r["path"])
-            return ("OK: ändrade %s." % r["path"],
+            return ("OK: edited %s." % r["path"],
                     {"summary": "ändrade " + r["path"], "path": r["path"],
                      "diff": r["diff"], "wrote": True})
 
         if name == "run_command":
             cmd = (args.get("cmd") or args.get("command") or "").strip()
             if not cmd:
-                return "FEL: cmd saknas", {"summary": "fel: cmd saknas"}
+                return "ERROR: cmd missing", {"summary": "fel: cmd saknas"}
             if not code_run_enabled():
-                return ("FEL: kommandokörning är avstängd. Användaren kan slå på den under "
-                        "⚙ Inställningar → Codex. Fortsätt utan att köra kommandon.",
+                return ("ERROR: command execution is disabled. The user can enable it under "
+                        "⚙ Settings → Codex. Continue without running commands.",
                         {"summary": "körning avstängd"})
             listed = code_run_allowed(cmd)
             if not listed:
@@ -643,7 +595,7 @@ def agent_tool_exec(name, args, ctx=None):
                     if not ctx.ask("run", "run:" + cmd, "Köra kommandot: " + cmd,
                                    "Kommandot står inte på listan över tillåtna kommandon.",
                                    danger=True):
-                        return (_denied("kommandot `%s`" % cmd),
+                        return (_denied("the command `%s`" % cmd),
                                 {"summary": "nekat: " + cmd[:50], "denied": True})
             ok, out = run_command(cmd, force=not listed)
             ctx.commands += 1
@@ -654,43 +606,43 @@ def agent_tool_exec(name, args, ctx=None):
         if name == "git_branch":
             branch = (args.get("name") or args.get("branch") or "").strip()
             if not branch:
-                return "FEL: name saknas", {"summary": "fel: name saknas"}
+                return "ERROR: name missing", {"summary": "fel: name saknas"}
             if not ctx.ask("git", "branch:" + branch, "Skapa/byta till grenen %s" % branch):
-                return _denied("att byta gren"), {"summary": "nekat", "denied": True}
+                return _denied("switching branch"), {"summary": "nekat", "denied": True}
             ok, msg = git_create_branch(branch)
-            return (("OK: " if ok else "FEL: ") + msg, {"summary": msg[:60], "ok": ok})
+            return (("OK: " if ok else "ERROR: ") + msg, {"summary": msg[:60], "ok": ok})
 
         if name == "git_commit":
             message = (args.get("message") or args.get("msg") or "").strip()
             if not message:
-                return "FEL: message saknas", {"summary": "fel: message saknas"}
+                return "ERROR: message missing", {"summary": "fel: message saknas"}
             info = git_status_info()
-            detail = "Ändrade filer:\n" + ("\n".join(info.get("files") or []) or "(inga)")
+            detail = "Ändrade filer:\n" + ("\n".join(info.get("files") or []) or "(none)")
             if not ctx.ask("git", "commit", "Committa: " + message, detail):
-                return _denied("att committa"), {"summary": "nekat", "denied": True}
+                return _denied("committing"), {"summary": "nekat", "denied": True}
             ok, msg = git_commit_all(message)
-            return (("OK: " if ok else "FEL: ") + msg, {"summary": msg[:60], "ok": ok})
+            return (("OK: " if ok else "ERROR: ") + msg, {"summary": msg[:60], "ok": ok})
 
         if name == "create_issue":
             title = (args.get("title") or args.get("titel") or "").strip()
             desc = (args.get("description") or args.get("desc") or args.get("beskrivning") or "").strip()
             labels = args.get("labels") or args.get("etiketter") or "security"
             if not title:
-                return "FEL: title saknas", {"summary": "fel: title saknas"}
+                return "ERROR: title missing", {"summary": "fel: title saknas"}
             is_gh = bool(setting_str("github_token"))
             prov_name = "GitHub" if is_gh else "GitLab"
             if ctx.mode == "ask" and not ctx.ask("git", "issue:" + title, f"Skapa {prov_name} Issue: " + title, desc):
-                return _denied("att skapa issue"), {"summary": "nekat", "denied": True}
+                return _denied("creating an issue"), {"summary": "nekat", "denied": True}
             if is_gh:
                 ok, res = github_create_issue(title, desc, labels=labels)
             else:
                 ok, res = gitlab_create_issue(title, desc, labels=labels)
             if ok:
                 ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
-            return (("OK: Skapade issue %s" if ok else "FEL: %s") % res,
+            return (("OK: Created issue %s" if ok else "ERROR: %s") % res,
                     {"summary": (("✓ Issue: " if ok else "✕ ") + title)[:60], "url": res if ok else "", "ok": ok})
 
-        return ("Okänt verktyg: %s. Tillgängliga: %s"
+        return ("Unknown tool: %s. Available: %s"
                 % (name, ", ".join(sorted(AGENT_TOOL_NAMES))), {"summary": "okänt verktyg"})
     except Exception as e:
-        return "FEL: %s" % e, {"summary": "fel: %s" % e}
+        return "ERROR: %s" % e, {"summary": "fel: %s" % e}

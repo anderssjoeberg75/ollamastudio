@@ -509,68 +509,68 @@ def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
 
 
 SECURITY_AUDIT_PROMPT = (
-    "Genomför en fullständig säkerhetsgranskning av projektet enligt reglerna i .agents/skills/security-audit/SKILL.md.\n\n"
-    "ARBETSSÄTT & KRAV:\n"
-    "1. Undersök källkoden noggrant med TOOL search och TOOL read_file.\n"
-    "2. Granska autentisering, sessioner, databasfrågor, input-sanitering, tokens, API-nycklar och felmeddelanden.\n"
-    "3. FÖR VARJE ENSKILT FYND / SÅRBARHET: anropa OMEDELBART verktyget TOOL create_issue med:\n"
-    "   - title: \"[SEC-X] Beskrivande rubrik för detta specifika problem\"\n"
-    "   - description: En komplett och utförlig åtgärdsbeskrivning formaterad i markdown så vem som helst kan lösa problemet:\n"
-    "       ### Plats & Berörd kod\n"
-    "       Exakt filnamn, funktion och radnummer.\n"
-    "       ### Problem & Säkerhetsrisk\n"
-    "       Vad problemet är, varför det är en risk och potentiell konsekvens.\n"
-    "       ### Steg-för-steg åtgärdsplan & Kodexempel\n"
-    "       Exakta instruktioner och fullständiga kodexempel (före/efter) som visar exakt hur koden ska ändras.\n"
-    "       ### Acceptanskriterier & Verifiering\n"
-    "       Hur utvecklaren eller testaren kontrollerar att fixen fungerar.\n"
-    "   - labels: \"security,P1\" (eller P2/P3)\n"
-    "4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n"
-    "5. Avsluta med en kort sammanfattning av de issues som skapats."
+    "Perform a complete security audit of the project according to the rules in .agents/skills/security-audit/SKILL.md.\n\n"
+    "METHODOLOGY & REQUIREMENTS:\n"
+    "1. Examine the source code carefully with TOOL search and TOOL read_file.\n"
+    "2. Review authentication, sessions, database queries, input sanitization, tokens, API keys and error messages.\n"
+    "3. FOR EACH INDIVIDUAL FINDING / VULNERABILITY: immediately invoke the tool TOOL create_issue with:\n"
+    "   - title: \"[SEC-X] Descriptive title for this specific problem\"\n"
+    "   - description: A complete and detailed remediation report formatted in markdown so anyone can solve the problem:\n"
+    "       ### Location & Affected code\n"
+    "       Exact file name, function and line number.\n"
+    "       ### Problem & Security risk\n"
+    "       What the problem is, why it is a risk and the potential consequence.\n"
+    "       ### Step-by-step remediation plan & Code examples\n"
+    "       Exact instructions and full code examples (before/after) showing exactly how the code should change.\n"
+    "       ### Acceptance criteria & Verification\n"
+    "       How the developer or tester confirms that the fix works.\n"
+    "   - labels: \"security,P1\" (or P2/P3)\n"
+    "4. IMPORTANT: Create EXACTLY ONE separate issue per finding. NEVER put multiple findings in the same issue.\n"
+    "5. Conclude with a short summary of the issues created."
 )
 
 PENTEST_AUDIT_PROMPT = (
-    "Genomför ett disciplinerat penetrationstest (pentest) och säkerhetstestning mot projektets målmiljö och API:er "
-    "enligt .agents/skills/openclaw-redteam/SKILL.md, .agents/rules/redteam.md och relevanta SecOpsAgentKit-skills "
+    "Perform a disciplined, authorized security test against the project's target environment and APIs "
+    "according to .agents/skills/openclaw-redteam/SKILL.md, .agents/rules/redteam.md and relevant SecOpsAgentKit skills "
     "(dast-zap, dast-nuclei, dast-ffuf, webapp-sqlmap, webapp-nikto, recon-nmap).\n\n"
-    "ARBETSSÄTT & SÄKERHETSKRAV:\n"
-    "1. Identifiera exponerade endpoints, API-rutter, autentiseringsmekanismer och nätverkstjänster via kod och server.\n"
-    "2. All testning mot målservern ska ske med strikt icke-destruktiva (benign) payloads och strikt inom scoping.\n"
-    "3. FÖR VARJE ENSKILT SÅRBARHETSFYND / PENTEST-FYND: anropa OMEDELBART verktyget TOOL create_issue med:\n"
-    "   - title: \"[PENTEST-X] Beskrivande rubrik för fyndet\"\n"
-    "   - description: En fullständig rapport formaterad i markdown:\n"
-    "       ### Mål & Endpoint\n"
-    "       URL / endpoint och HTTP-metod.\n"
-    "       ### Sårbarhet & Attackvektor\n"
-    "       Beskrivning av sårbarheten, svaghet och potentiell konsekvens (CWE/OWASP).\n"
-    "       ### Bevis & Reproduktionssteg (PoC)\n"
-    "       Hur sårbarheten påvisades på ett säkert sätt.\n"
-    "       ### Åtgärdsförslag\n"
-    "       Konkret åtgärdsplan för hur systemet säkras.\n"
-    "   - labels: \"security,pentest,P1\" (eller P2/P3)\n"
-    "4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n"
-    "5. Avsluta med en kort sammanfattning av genomförda pentest-moment."
+    "METHODOLOGY & SAFETY REQUIREMENTS:\n"
+    "1. Identify exposed endpoints, API routes, authentication mechanisms and network services via the code and server.\n"
+    "2. All testing against the target server must use strictly non-destructive (benign) payloads and stay strictly within scope.\n"
+    "3. FOR EACH INDIVIDUAL VULNERABILITY / SECURITY-TEST FINDING: immediately invoke the tool TOOL create_issue with:\n"
+    "   - title: \"[SECTEST-X] Descriptive title for the finding\"\n"
+    "   - description: A complete report formatted in markdown:\n"
+    "       ### Target & Endpoint\n"
+    "       URL / endpoint and HTTP method.\n"
+    "       ### Vulnerability & Attack vector\n"
+    "       Description of the vulnerability, weakness and potential consequence (CWE/OWASP).\n"
+    "       ### Evidence & Reproduction steps (PoC)\n"
+    "       How the vulnerability was demonstrated in a safe way.\n"
+    "       ### Remediation proposal\n"
+    "       Concrete remediation plan for how the system is secured.\n"
+    "   - labels: \"security,sectest,P1\" (or P2/P3)\n"
+    "4. IMPORTANT: Create EXACTLY ONE separate issue per finding. NEVER put multiple findings in the same issue.\n"
+    "5. Conclude with a short summary of the security-test steps performed."
 )
 
 PONYTAIL_AUDIT_PROMPT = (
-    "Läs .agents/skills/ponytail-audit/SKILL.md och genomför en helkods-granskning (ponytail-audit) för att identifiera överarbetning, onödig komplexitet, duplicerad logik och död kod.\n\n"
-    "ARBETSSÄTT & KRAV:\n"
-    "1. Undersök källkoden noggrant med TOOL tree {} och TOOL search / TOOL read_file.\n"
-    "2. Identifiera ställen där standardbiblioteket kan ersätta egen kod, onödiga abstraktioner/wrappers, oanvänd kod eller överdriven komplexitet (taggar: delete, stdlib, native, reuse, yagni, shrink).\n"
-    "3. FÖR VARJE ENSKILT FYND / FÖRENKLINGSPUNKT: anropa OMEDELBART verktyget TOOL create_issue med:\n"
-    "   - title: \"[PONYTAIL-X] Beskrivande rubrik för förenklingen\"\n"
-    "   - description: En komplett och utförlig åtgärdsbeskrivning formaterad i markdown så vem som helst kan implementera förenklingen:\n"
-    "       ### Plats & Berörd kod\n"
-    "       Exakt filnamn, funktion och radnummer.\n"
-    "       ### Problem & Överarbetning / Komplexitet\n"
-    "       Varför detta är onödigt, överarbetat, duplicerat eller död kod och vilken förenklingstag som gäller (delete/stdlib/native/reuse/yagni/shrink).\n"
-    "       ### Steg-för-steg förenklingsplan & Kodexempel\n"
-    "       Exakta instruktioner och fullständiga kodexempel (före/efter) som visar hur koden rensas bort eller ersätts med enklare/stdlib-kod.\n"
-    "       ### Acceptanskriterier & Verifiering\n"
-    "       Hur utvecklaren eller testaren kontrollerar att testerna fortfarande går igenom och att funktionaliteten bibehålls.\n"
-    "   - labels: \"refactor,ponytail,P2\" (eller P3)\n"
-    "4. VIKTIGT: Skapa EXAKT EN separat issue per fynd. Lägg ALDRIG flera fynd i en och samma issue.\n"
-    "5. Avsluta med en sammanfattning av hur många rader/beroenden som kan sparas."
+    "Read .agents/skills/ponytail-audit/SKILL.md and perform a whole-codebase audit (ponytail audit) to identify over-engineering, unnecessary complexity, duplicated logic and dead code.\n\n"
+    "METHODOLOGY & REQUIREMENTS:\n"
+    "1. Examine the source code carefully with TOOL tree {} and TOOL search / TOOL read_file.\n"
+    "2. Identify places where the standard library can replace custom code, unnecessary abstractions/wrappers, unused code or excessive complexity (tags: delete, stdlib, native, reuse, yagni, shrink).\n"
+    "3. FOR EACH INDIVIDUAL FINDING / SIMPLIFICATION POINT: immediately invoke the tool TOOL create_issue with:\n"
+    "   - title: \"[PONYTAIL-X] Descriptive title for the simplification\"\n"
+    "   - description: A complete and detailed remediation report formatted in markdown so anyone can implement the simplification:\n"
+    "       ### Location & Affected code\n"
+    "       Exact file name, function and line number.\n"
+    "       ### Problem & Over-engineering / Complexity\n"
+    "       Why this is unnecessary, over-engineered, duplicated or dead code and which simplification tag applies (delete/stdlib/native/reuse/yagni/shrink).\n"
+    "       ### Step-by-step simplification plan & Code examples\n"
+    "       Exact instructions and full code examples (before/after) showing how the code is removed or replaced with simpler/stdlib code.\n"
+    "       ### Acceptance criteria & Verification\n"
+    "       How the developer or tester confirms that the tests still pass and the functionality is preserved.\n"
+    "   - labels: \"refactor,ponytail,P2\" (or P3)\n"
+    "4. IMPORTANT: Create EXACTLY ONE separate issue per finding. NEVER put multiple findings in the same issue.\n"
+    "5. Conclude with a summary of how many lines/dependencies can be saved."
 )
 
 
@@ -790,7 +790,7 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
                 from .codex.skills import get_agent
                 ag_text = get_agent(rec_agent)
                 if ag_text:
-                    agent_guidance = f"\n\nSPECIALISTDIREKTIV ({rec_agent}):\n{ag_text[:1200]}\n"
+                    agent_guidance = f"\n\nSPECIALIST DIRECTIVE ({rec_agent}):\n{ag_text[:1200]}\n"
             except Exception:
                 pass
 
@@ -798,16 +798,16 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             status_cb("Åtgärdar fynd #%s ('%s') med modell %s..." % (iid, title[:35], chosen_model))
 
         fix_prompt = (
-            "Du har i uppgift att åtgärda följande fynd i källkoden:\n\n"
-            "TITEL: %s\n"
+            "Your task is to fix the following finding in the source code:\n\n"
+            "TITLE: %s\n"
             "LABELS: %s\n\n"
-            "BESKRIVNING & ÅTGÄRDSPLAN:\n%s%s\n\n"
-            "ARBETSSÄTT & KRAV:\n"
-            "1. Undersök berörd kod med TOOL read_file eller TOOL search.\n"
-            "2. Gör nödvändiga korrigeringar med TOOL edit_file eller TOOL write_file (eller *** FIL: sökväg ... *** SLUT).\n"
-            "3. Rör inte orelaterad kod. Följ YAGNI och Ponytail-principerna.\n"
-            "4. Om problemet REDAN är åtgärdat i källkoden, svara 'REDAN_ÅTGÄRDAD' och motivera kort varför ingen ändring behövs.\n"
-            "5. Avsluta med en kort sammanfattning av vad som åtgärdats."
+            "DESCRIPTION & REMEDIATION PLAN:\n%s%s\n\n"
+            "METHODOLOGY & REQUIREMENTS:\n"
+            "1. Examine the affected code with TOOL read_file or TOOL search.\n"
+            "2. Make the necessary corrections with TOOL edit_file or TOOL write_file (or *** FILE: path ... *** END).\n"
+            "3. Do not touch unrelated code. Follow the YAGNI and Ponytail principles.\n"
+            "4. If the problem is ALREADY fixed in the source code, respond 'ALREADY_FIXED' and briefly explain why no change is needed.\n"
+            "5. Conclude with a short summary of what was fixed."
             % (title, ", ".join(labels), desc, agent_guidance)
         )
 
@@ -905,21 +905,21 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     mode_instructions = {
         "safe": (
-            "SÄKERHETSNIVÅ & TESTLÄGE: SAFE (ICKE-DESTRUKTIVT)\n"
-            "- Använd uteslutande ofarliga (benign) payloads och sonderingar.\n"
-            "- Inga attacker som kan orsaka denial-of-service, dataförlust eller prestandapåverkan.\n"
-            "- Verifiera sårbarheter med säkra bevis (t.ex. läsa versionsheaders, syntaxkontroller, ofarliga strängar)."
+            "SECURITY LEVEL & TEST MODE: SAFE (NON-DESTRUCTIVE)\n"
+            "- Use exclusively harmless (benign) payloads and probes.\n"
+            "- No attacks that may cause denial-of-service, data loss or performance impact.\n"
+            "- Verify vulnerabilities with safe evidence (e.g. reading version headers, syntax checks, harmless strings)."
         ),
         "full": (
-            "SÄKERHETSNIVÅ & TESTLÄGE: FULL PENTEST (AKTIV TESTNING)\n"
-            "- Genomför fullständig aktiv säkerhetskontroll och penetrationstestning.\n"
-            "- Djupgående sårbarhetsverifiering med realistiska Proof-of-Concept (PoC) för identifierade svagheter.\n"
-            "- Verifiera bypasses, autentiseringsbrister, SQL-injektioner och input-validering."
+            "SECURITY LEVEL & TEST MODE: FULL SECURITY TEST (ACTIVE TESTING)\n"
+            "- Perform a full active security check and security testing.\n"
+            "- In-depth vulnerability verification with realistic Proof-of-Concept (PoC) for identified weaknesses.\n"
+            "- Verify bypasses, authentication flaws, SQL injections and input validation."
         ),
         "passive": (
-            "SÄKERHETSNIVÅ & TESTLÄGE: PASSIV ANALYS\n"
-            "- Endast passiv inspektion: granska källkod, HTTP-headers, TLS-certifikat, öppna tjänster och konfigurationsfiler.\n"
-            "- Skicka INGA aktiva fuzzing-, injektions- eller intrångs-payloads mot målservern."
+            "SECURITY LEVEL & TEST MODE: PASSIVE ANALYSIS\n"
+            "- Passive inspection only: review source code, HTTP headers, TLS certificates, open services and configuration files.\n"
+            "- Send NO active fuzzing, injection or intrusion payloads against the target server."
         ),
     }
 

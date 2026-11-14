@@ -156,10 +156,10 @@ class CodexRoutes(BaseHandler):
                     if verdict == "warn":
                         convo.append({"role": "assistant", "content": full})
                         convo.append({"role": "user", "content":
-                                      "%s (%s):\nDu har nu kört EXAKT samma verktygsanrop flera "
-                                      "gånger i rad. Resultatet blir detsamma igen. Gör något "
-                                      "annat: prova ett annat verktyg eller andra argument, "
-                                      "eller svara användaren med det du redan vet."
+                                      "%s (%s):\nYou have now run the EXACT same tool call several "
+                                      "times in a row. The result will be the same again. Do something "
+                                      "else: try another tool or different arguments, "
+                                      "or answer the user with what you already know."
                                       % (TOOL_RESULT_PREFIX, call["name"])})
                         self._emit({"type": "tool", "name": call["name"], "args": call["args"],
                                     "summary": "samma anrop igen – bad modellen byta spår"})

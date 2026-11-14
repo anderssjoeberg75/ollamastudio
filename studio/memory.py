@@ -165,8 +165,8 @@ def mem0_delete_request(data):
 
 def mem0_context(memories):
     """Bygg system-texten som injiceras i chatten från hämtade minnen."""
-    lines = ["Det här minns du sedan tidigare om användaren (använd om det är relevant, "
-             "hitta inte på nytt):"]
+    lines = ["This is what you remember about the user from before (use it if relevant, "
+             "do not make up new facts):"]
     for m in memories:
         lines.append("- " + m)
     return "\n".join(lines)
