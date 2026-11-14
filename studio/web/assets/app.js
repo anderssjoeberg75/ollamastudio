@@ -4054,7 +4054,12 @@ function refreshPreview() {
   }
 }
 
+let termHistory = [];
+let termHistoryIndex = -1;
+let currentTermDock = 'terminal';
+
 function switchTermDock(dockName) {
+  currentTermDock = dockName;
   const tabs = {
     terminal: 'termTabTerminal',
     sandbox: 'termTabSandbox',
@@ -4075,7 +4080,7 @@ function switchTermDock(dockName) {
     const p = document.getElementById(panes[k]);
     if (k === dockName) {
       if (btn) btn.classList.add('active');
-      if (p) { p.classList.add('active'); p.style.display = 'block'; }
+      if (p) { p.classList.add('active'); p.style.display = 'flex'; }
     } else {
       if (btn) btn.classList.remove('active');
       if (p) { p.classList.remove('active'); p.style.display = 'none'; }
@@ -4085,37 +4090,108 @@ function switchTermDock(dockName) {
   if (dockName === 'backend') {
     fetchBackendLogs();
   }
+
+  focusCurrentTermInput();
 }
 
-async function fetchBackendLogs() {
-  const pre = document.getElementById('backendLogPre');
-  if (!pre) return;
+function focusCurrentTermInput() {
+  if (currentTermDock === 'terminal') {
+    const inp = document.getElementById('termInputTerminal');
+    if (inp) inp.focus();
+  } else if (currentTermDock === 'shell') {
+    const inp = document.getElementById('termInputShell');
+    if (inp) inp.focus();
+  }
+}
+
+async function executeTerminalCommand(cmd, outputTargetId) {
+  const scrollArea = document.getElementById(outputTargetId);
+  if (!cmd || !scrollArea) return;
+
+  // Add cmd line
+  const cmdRow = document.createElement('div');
+  cmdRow.className = 'term-line cmd';
+  cmdRow.textContent = `$ ${cmd}`;
+  scrollArea.appendChild(cmdRow);
+  scrollArea.scrollTop = scrollArea.scrollHeight;
+
   try {
-    const r = await fetch('/api/system', {headers: headers(false)});
-    if (r.ok) {
-      const s = await r.json();
-      let lines = ['[system] Ollama Studio backend active'];
-      if (s.gpus && s.gpus.length) {
-        s.gpus.forEach((g, idx) => {
-          lines.push(`[gpu ${idx}] ${g.name} | VRAM: ${g.mem_used_mb || 0}MB / ${g.mem_total_mb || 0}MB | Temp: ${g.temp || 0}°C`);
-          if (g.procs && g.procs.length) {
-            g.procs.forEach(pr => {
-              lines.push(`  └─ pid ${pr.pid}: ${pr.name} (${pr.mem_mb} MB)`);
-            });
-          }
-        });
-      }
-      pre.innerHTML = '<code>' + esc(lines.join('\n')) + '</code>';
-    }
-  } catch(e) {}
+    const r = await fetch('/api/codex/terminal/run', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({ cmd })
+    });
+    const res = await r.json();
+    const outRow = document.createElement('div');
+    outRow.className = res.ok ? 'term-line output' : 'term-line error';
+    outRow.textContent = res.output !== undefined ? res.output : (res.error || 'Command failed');
+    scrollArea.appendChild(outRow);
+  } catch (err) {
+    const errRow = document.createElement('div');
+    errRow.className = 'term-line error';
+    errRow.textContent = `[error] ${err.message || 'Execution error'}`;
+    scrollArea.appendChild(errRow);
+  }
+
+  scrollArea.scrollTop = scrollArea.scrollHeight;
 }
 
 function clearTerminalOutput() {
-  const activePane = document.querySelector('.term-pane.active pre code');
-  if (activePane) {
-    activePane.innerHTML = '$ <span class="term-cursor">█</span>';
-    toast('Terminal output cleared');
-  }
+  const targets = ['termOutputTerminal', 'termOutputSandbox', 'termOutputBackend', 'termOutputShell', 'termOutputAgentLog'];
+  targets.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.innerHTML = '<div class="term-line welcome"><span class="term-sys">[system]</span> Cleared.</div>';
+    }
+  });
+  toast('Terminal output cleared');
+}
+
+// Terminal keyboard listeners for interactive typing & history
+document.addEventListener('DOMContentLoaded', () => {
+  setupTermInputListeners('termInputTerminal', 'termOutputTerminal');
+  setupTermInputListeners('termInputShell', 'termOutputShell');
+});
+
+// Also run immediately in case DOM is already loaded
+setTimeout(() => {
+  setupTermInputListeners('termInputTerminal', 'termOutputTerminal');
+  setupTermInputListeners('termInputShell', 'termOutputShell');
+}, 100);
+
+function setupTermInputListeners(inputId, outputId) {
+  const inp = document.getElementById(inputId);
+  if (!inp || inp._boundTerm) return;
+  inp._boundTerm = true;
+
+  inp.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      const val = inp.value.trim();
+      if (!val) return;
+      termHistory.push(val);
+      termHistoryIndex = termHistory.length;
+      inp.value = '';
+      await executeTerminalCommand(val, outputId);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (termHistory.length && termHistoryIndex > 0) {
+        termHistoryIndex--;
+        inp.value = termHistory[termHistoryIndex] || '';
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (termHistoryIndex < termHistory.length - 1) {
+        termHistoryIndex++;
+        inp.value = termHistory[termHistoryIndex] || '';
+      } else {
+        termHistoryIndex = termHistory.length;
+        inp.value = '';
+      }
+    } else if (e.key === 'l' && e.ctrlKey) {
+      e.preventDefault();
+      clearTerminalOutput();
+    }
+  });
 }
 
 

@@ -82,10 +82,8 @@ def run_command(cmd, force=False):
     `force` hoppar över allowlisten – används bara när användaren uttryckligen
     godkänt kommandot i rutan, eller kör i läget "fria händer". Skyddet som ALLTID
     gäller: ingen shell, ingen kedjning, kör i arbetsytan, timeout och utskriftstak."""
-    root = code_workspace_root()
-    if not root:
-        return False, "Ingen arbetsyta"
-    if not code_run_enabled():
+    root = code_workspace_root() or os.getcwd()
+    if not code_run_enabled() and not force:
         return False, "Kommandokörning är avstängd (slå på under ⚙ Inställningar)"
     if not force and not code_run_allowed(cmd):
         return False, ("Kommandot är inte tillåtet enligt allowlist. Tillåtna prefix: "

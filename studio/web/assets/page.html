@@ -429,21 +429,39 @@
         <span class="grow"></span>
         <button class="iconbtn sm" onclick="clearTerminalOutput()" title="Clear"><i class="ph ph-trash"></i></button>
       </div>
-      <div class="term-tabs-body">
+      <div class="term-tabs-body" onclick="focusCurrentTermInput()">
         <div class="term-pane active" id="termPaneTerminal">
-          <pre class="term-pre" id="terminalLogPre"><code>$ <span class="term-cursor">█</span></code></pre>
+          <div class="term-scroll" id="termOutputTerminal">
+            <div class="term-line welcome"><span class="term-sys">[system]</span> Interactive terminal connected to host. Type commands and press Enter.</div>
+          </div>
+          <div class="term-input-row">
+            <span class="term-prompt">$</span>
+            <input type="text" class="term-cmd-input" id="termInputTerminal" autocomplete="off" spellcheck="false" placeholder="" autofocus>
+          </div>
         </div>
         <div class="term-pane" id="termPaneSandbox" style="display:none">
-          <pre class="term-pre"><code>[system] sandbox guest initialized. Tool execution sandbox is active.</code></pre>
+          <div class="term-scroll" id="termOutputSandbox">
+            <div class="term-line"><span class="term-sys">[system]</span> Sandbox guest initialized. Tool execution sandbox is active.</div>
+          </div>
         </div>
         <div class="term-pane" id="termPaneBackend" style="display:none">
-          <pre class="term-pre" id="backendLogPre"><code>[system] llama-server running on 11434 (gemma4:12b) and 11436 (whiterabbitneo:7b).</code></pre>
+          <div class="term-scroll" id="termOutputBackend">
+            <pre class="term-pre" id="backendLogPre"><code>[system] Backend active. Querying status...</code></pre>
+          </div>
         </div>
         <div class="term-pane" id="termPaneShell" style="display:none">
-          <pre class="term-pre"><code>[system] interactive shell ready.</code></pre>
+          <div class="term-scroll" id="termOutputShell">
+            <div class="term-line"><span class="term-sys">[system]</span> Interactive shell session ready.</div>
+          </div>
+          <div class="term-input-row">
+            <span class="term-prompt">&gt;</span>
+            <input type="text" class="term-cmd-input" id="termInputShell" autocomplete="off" spellcheck="false" placeholder="">
+          </div>
         </div>
         <div class="term-pane" id="termPaneAgentLog" style="display:none">
-          <pre class="term-pre"><code>[system] session started. Ready for tasks.</code></pre>
+          <div class="term-scroll" id="termOutputAgentLog">
+            <div class="term-line"><span class="term-sys">[system]</span> Session started. Autonomous agent logs and tool calls stream here.</div>
+          </div>
         </div>
       </div>
     </div>
