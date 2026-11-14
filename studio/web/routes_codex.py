@@ -36,11 +36,19 @@ class CodexRoutes(BaseHandler):
         scratch = code_workspace_root() is None
         mode = code_mode()
 
+        user_texts = [str(m.get("content") or "") for m in (messages or []) if m.get("role") == "user"]
+        last_prompt = user_texts[-1] if user_texts else ""
+
+        # Om uppgiften är ett penetrationstest tvingar vi alltid WhiteRabbitNeo
+        # eftersom generella modeller vägrar penetrationstester av säkerhetspolicyer
+        from studio.codex.router import classify_task
+        task_type = classify_task(last_prompt)
+        if task_type == "pentest":
+            model = "WhiteRabbitNeo-2.5-Qwen-7B"
+
         # Om användaren valt "auto" eller ingen modell angetts: välj optimal modell med smart router
-        if not model or str(model).strip().lower() == "auto":
+        elif not model or str(model).strip().lower() == "auto":
             from studio.codex.router import select_best_model_for_task
-            user_texts = [str(m.get("content") or "") for m in (messages or []) if m.get("role") == "user"]
-            last_prompt = user_texts[-1] if user_texts else ""
             routed = select_best_model_for_task(last_prompt)
             model = routed["model"]
 
