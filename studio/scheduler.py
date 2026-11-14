@@ -417,47 +417,58 @@ def _get_active_code_model(base_url=None):
     return ""
 
 
-def _get_local_ollama_model(base_url=None):
+def _get_local_ollama_model(base_url=None, task="pentest"):
     """Hämtar alltid en lokal Llama/Ollama-modell (aldrig molnmodeller som Claude/Gemini).
 
     Krävs för penetrationstestning (pentest) eftersom molnmodeller blockerar eller
     vägrar utföra pentester p.g.a. sina strikta säkerhets- och användarpolicyer.
+    Prioriterar WhiteRabbitNeo för penetrationstest.
     """
-    base = base_url or backends.select_optimal_backend()
+    base = base_url or backends.select_optimal_backend(task=task)
     from .llama_bridge import detect_backend_type, llama_server_models
     try:
-        if detect_backend_type(base) == "llama_server":
-            models = llama_server_models(base)
-        else:
-            req = urllib.request.Request(base.rstrip("/") + "/api/tags")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-                models = data.get("models") or []
-        if models:
-            from .models import select_optimal_model
-            optimal = select_optimal_model(models, task="security")
-            if optimal:
-                return optimal
-            optimal_code = select_optimal_model(models, task="code")
-            if optimal_code:
-                return optimal_code
-            return models[0].get("name") or models[0].get("model") or ""
+        targets = [base]
+        if task == "pentest":
+            pen_b = backends.select_optimal_backend(task="pentest")
+            if pen_b and pen_b not in targets and backends._backend_is_alive(pen_b):
+                targets.insert(0, pen_b)
+
+        for b in targets:
+            if detect_backend_type(b) == "llama_server":
+                models = llama_server_models(b)
+            else:
+                req = urllib.request.Request(b.rstrip("/") + "/api/tags")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                    models = data.get("models") or []
+            if models:
+                from .models import select_optimal_model
+                optimal = select_optimal_model(models, task=task)
+                if optimal:
+                    return optimal
+                optimal_sec = select_optimal_model(models, task="security")
+                if optimal_sec:
+                    return optimal_sec
+                optimal_code = select_optimal_model(models, task="code")
+                if optimal_code:
+                    return optimal_code
+                return models[0].get("name") or models[0].get("model") or ""
     except Exception:
         pass
-    return "llama3.2:latest"
+    return "whiterabbitneo" if task == "pentest" else "llama3.2:latest"
 
 
 def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
     """Väljer den bäst lämpade modellen för en specifik granskningsuppgift.
 
-    - 'pentest': HÅRDKODAT att alltid köras med en lokal Ollama-modell (eftersom
-      molnmodeller som Claude/Gemini vägrar pentester enligt sina regler).
+    - 'pentest': HÅRDKODAT att alltid köras med en lokal modell (WhiteRabbitNeo prioriteras
+      eftersom molnmodeller som Claude/Gemini vägrar pentester enligt sina regler).
     - 'security' / 'ponytail' / 'resolve': Väljer den bästa modellen som finns att
       tillgå (Claude Sonnet 5.5 för säkerhet, Gemini Flash för snabba tester/förenklingar,
       eller bästa lokala Ollama-modell).
     """
     if task_type == "pentest":
-        return _get_local_ollama_model(base_url=base_url)
+        return _get_local_ollama_model(base_url=base_url, task="pentest")
 
     # Om användaren explicit sparat en specifik Codex-modell som inte är 'auto'
     try:
@@ -876,11 +887,17 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     base_url = backends.select_optimal_backend()
     sec_model = _get_best_model_for_task("security", text="Säkerhetsgranskning SAST", labels="security", base_url=base_url)
-    pen_model = _get_local_ollama_model(base_url=base_url)
+    pen_model = _get_local_ollama_model(base_url=base_url, task="pentest")
     pny_model = _get_best_model_for_task("ponytail", text="Ponytail förenkling", labels="ponytail", base_url=base_url)
 
+    pen_url = base_url
+    if "whiterabbit" in (pen_model or "").lower():
+        opt_p = backends.select_optimal_backend(task="pentest")
+        if opt_p and ":11436" in opt_p:
+            pen_url = opt_p
+
     if not pen_model and run_pentest:
-        return False, "Ingen Ollama-modell tillgänglig på %s för penetrationstest" % base_url, 0, 0
+        return False, "Ingen WhiteRabbitNeo eller lokal Llama-modell tillgänglig på %s för penetrationstest" % pen_url, 0, 0
 
     mode = (sec_mode or "safe").strip().lower()
     if mode not in ("safe", "full", "passive"):
@@ -909,8 +926,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     is_github = ("github.com" in project.lower()) or (setting_str("github_token") and "/" in project and not project.startswith("http://") and not project.startswith("https://"))
     provider_name = "GitHub" if is_github else "GitLab"
     if status_cb:
-        status_cb("Optimal hårdvara (%s) vald. Pentest: lokal Ollama (%s), Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."
-                  % (base_url, pen_model, sec_model, pny_model, project, provider_name))
+        status_cb("Optimal hårdvara (%s) vald. Pentest: %s på %s, Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."
+                  % (base_url, pen_model, pen_url, sec_model, pny_model, project, provider_name))
 
     if is_github:
         from studio.codex.github import github_fetch_repo
@@ -952,8 +969,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
                 )
             if status_cb:
                 srv_msg = (" mot %s" % prod_server) if prod_server else ""
-                status_cb("Kör penetrationstest (pentest, lokal Ollama-modell, läge: %s)%s (%s på %s)..." % (mode, srv_msg, pen_model, base_url))
-            pen_count, pen_err = _run_single_headless_pass(pen_prompt, pen_model, project, base_url=base_url)
+                status_cb("Kör penetrationstest (pentest, %s, läge: %s)%s på %s..." % (pen_model, mode, srv_msg, pen_url))
+            pen_count, pen_err = _run_single_headless_pass(pen_prompt, pen_model, project, base_url=pen_url)
             if pen_err:
                 errors.append("Penetrationstest: " + pen_err)
 

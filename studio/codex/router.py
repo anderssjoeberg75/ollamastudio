@@ -74,6 +74,13 @@ MODEL_MATRIX = {
         "tier": "local_reasoning",
         "strengths": ["algoritmer", "matematik", "logiska felresonemang", "pentest"],
         "best_for": ["algorithms", "math", "logical_bug", "pentest"]
+    },
+    "whiterabbitneo": {
+        "name": "WhiteRabbitNeo V3 7B (Lokal Pentest)",
+        "provider": "llama",
+        "tier": "local_pentest",
+        "strengths": ["penetrationstest", "red team", "sårbarhetsanalys", "PoC-exploits", "100% lokal", "inga säkerhetsvägran"],
+        "best_for": ["pentest", "redteam", "security_audit", "vulnerability_scan"]
     }
 }
 
@@ -176,13 +183,27 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
     default_local = local_candidate or "llama3.2"
 
     # REGELVERK:
-    # 0. Pentest: HÅRDKODAT TILL LOKAL LLAMA/OLLAMA-MODELL
+    # 0. Pentest: HÅRDKODAT TILL LOKAL MODELL – WHITERABBITNEO PRIORITERAS ALLTID
     # Molnmodeller (Claude, Gemini etc.) blockerar eller vägrar penetrationstester
-    # p.g.a. leverantörernas policyer. Därför körs pentest ALLTID på lokal modell (Llama).
+    # p.g.a. leverantörernas policyer. WhiteRabbitNeo är specialtränad utan säkerhetsvägran för pentester.
     if task_type == "pentest":
+        pentest_m = None
+        for m in (installed_names or []):
+            if "whiterabbit" in m.lower():
+                pentest_m = m
+                break
+        if not pentest_m and installed_names:
+            pentest_m = default_local
+        if not pentest_m:
+            pentest_m = "whiterabbitneo"
+        reason = (
+            "WhiteRabbitNeo vald för penetrationstest (specialiserad för offensive security och utan begränsande säkerhetsfilter)."
+            if "whiterabbit" in pentest_m.lower() else
+            "Lokal Llama-modell hårdkodad för penetrationstest (molnmodeller blockerar pentester p.g.a. policy)."
+        )
         return _decorate({
-            "model": default_local,
-            "reason": "Lokal Llama-modell hårdkodad för penetrationstest (molnmodeller blockerar pentester p.g.a. policy).",
+            "model": pentest_m,
+            "reason": reason,
             "task_type": task_type
         }, task_type)
 

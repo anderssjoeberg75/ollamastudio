@@ -94,14 +94,14 @@ def _backend_is_alive(url, timeout=0.8):
     return False
 
 
-def select_optimal_backend(preferred_url=None):
+def select_optimal_backend(preferred_url=None, task=None):
     """Väljer den mest optimala Ollama/llama-server backend/GPU-instansen som är tillgänglig.
 
     Prioriterar:
-    1. Instanser på llama-server eller GPU med optimeringar (t.ex. port 8080 eller 11436).
-    2. Instanser på nyare GPU med mer VRAM (t.ex. GPU 1 / RTX 3060 framför GPU 0 / GTX 1070).
+    1. För pentest: Instans på port 11436 eller märkt med WhiteRabbitNeo/pentest.
+    2. För kod/chatt: Instanser på port 11434 (llama-server/gemma4) eller port 8080.
     3. Auto-upptäckt: om primär URL är port 11434, kontrolleras om port 8080 (llama-server),
-       11436 eller 11435 finns på samma värd och är igång.
+       11436 (pentest/WhiteRabbitNeo) eller 11435 finns på samma värd och är igång.
     4. Faller tillbaka på primär backend om inget annat är tillgängligt.
     """
     g = globals()
@@ -122,7 +122,7 @@ def select_optimal_backend(preferred_url=None):
                 known_urls.add(u_llama)
             u_tuned = url.replace(":11434", ":11436")
             if u_tuned not in known_urls:
-                expanded.append({"label": "GPU 1 tuned", "url": u_tuned, "gpu": "1"})
+                expanded.append({"label": "Pentest (WhiteRabbitNeo)", "url": u_tuned, "gpu": "1"})
                 known_urls.add(u_tuned)
             u_gpu1 = url.replace(":11434", ":11435")
             if u_gpu1 not in known_urls:
@@ -137,20 +137,31 @@ def select_optimal_backend(preferred_url=None):
         gpu = str(b.get("gpu") or "")
         score = 0
 
-        # Llama Server (högsta prioritet när llama-server önskas framför ollama)
-        if ":8080" in url or "llama_server" in label or "llama-server" in label or (label.startswith("llama") and not label.startswith("ollama")):
-            score += 1200
-        # Port 11436 / tuned / flash attention (snabbast GPU & optimerad)
-        elif ":11436" in url or "tuned" in label or "flash" in label:
-            score += 1000
-        # Port 11435 / GPU 1 (RTX 3060 m.fl.)
-        elif ":11435" in url or "gpu 1" in label or gpu == "1":
-            score += 500
-        # Port 11434 / GPU 0 (GTX 1070 m.fl.)
-        elif ":11434" in url or "gpu 0" in label or gpu == "0":
-            score += 100
+        if task == "pentest":
+            # WhiteRabbitNeo / Port 11436 prioriteras absolut högst för penetrationstest
+            if ":11436" in url or "whiterabbit" in label or "pentest" in label:
+                score += 3000
+            elif ":8080" in url or "llama_server" in label:
+                score += 1000
+            elif ":11434" in url:
+                score += 500
+            else:
+                score += 100
         else:
-            score += 50
+            # Llama Server (högsta prioritet när llama-server önskas framför ollama)
+            if ":8080" in url or "llama_server" in label or "llama-server" in label or (label.startswith("llama") and not label.startswith("ollama")):
+                score += 1200
+            # Port 11436 / Pentest (WhiteRabbitNeo) / tuned GPU 1
+            elif ":11436" in url or "tuned" in label or "flash" in label or "pentest" in label or "whiterabbit" in label:
+                score += 1000
+            # Port 11435 / GPU 1
+            elif ":11435" in url or "gpu 1" in label or gpu == "1":
+                score += 500
+            # Port 11434 / GPU 0
+            elif ":11434" in url or "gpu 0" in label or gpu == "0":
+                score += 100
+            else:
+                score += 50
 
         scored.append((score, url))
 

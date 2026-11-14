@@ -175,9 +175,10 @@ class TestSchedulerAutoFix(unittest.TestCase):
 
     @patch("studio.scheduler.setting_str", return_value="dummy_token")
     @patch("studio.scheduler.gitlab_fetch_repo", return_value=(True, "ok", "/tmp/dummy"))
+    @patch("studio.codex.github.github_fetch_repo", return_value=(True, "ok", "/tmp/dummy"))
     @patch("studio.scheduler._run_single_headless_pass", return_value=(1, None))
     @patch("studio.backends.select_optimal_backend", return_value="http://127.0.0.1:11434")
-    def test_run_headless_audit_pentest_always_ollama(self, mock_backend, mock_pass, mock_fetch, mock_tok):
+    def test_run_headless_audit_pentest_always_ollama(self, mock_backend, mock_pass, mock_gh, mock_fetch, mock_tok):
         # Pentest ska ALLTID anropa headless pass med en lokal Ollama-modell
         # medan säkerhetsgranskning ska anropa med bästa tillgängliga molnmodell (Claude Sonnet)
         with patch("studio.codex.router.antigravity_available", return_value=True), \
