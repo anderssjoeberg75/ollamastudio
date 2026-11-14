@@ -1171,10 +1171,17 @@ function stripDataUrl(d){ return (''+d).replace(/^data:[^;]+;base64,/, ''); }
 
 function renderChat(){
   const box = document.getElementById('chatMessages');
+  const hero = document.getElementById('welcomeHero');
+  const thread = document.getElementById('chatThread');
   if(!chatMessages.length){
-    box.innerHTML = '<div class="chat-empty">Select a model and type a message to start chatting.</div>';
+    if(hero) hero.style.display = 'flex';
+    if(thread) thread.style.display = 'none';
+    if(box) box.innerHTML = '<div class="chat-empty">Select a model and type a message to start chatting.</div>';
     return;
   }
+  if(hero) hero.style.display = 'none';
+  if(thread) thread.style.display = 'flex';
+  if(!box) return;
   box.innerHTML = chatMessages.map(m=>{
     if(m.role === 'assistant'){
       const body = m.content ? mdToHtml(m.content) : '…';
@@ -1186,6 +1193,7 @@ function renderChat(){
     return '<div class="msg user">'+imgs+esc(m.content||'')+'</div>';
   }).join('');
   box.scrollTop = box.scrollHeight;
+  if(thread) thread.scrollTop = thread.scrollHeight;
 }
 
 /* ---- Markdown rendering ---- */
@@ -1268,8 +1276,8 @@ async function sendChat(){
   renderChat();
   const box = document.getElementById('chatMessages');
   const send = document.getElementById('chatSend');
-  send.textContent = 'Stop';
-  if(box.lastChild) box.lastChild.style.whiteSpace = 'pre-wrap';
+  if(send) send.innerHTML = '<span style="font-size:11px;font-weight:600">Stop</span>';
+  if(box && box.lastChild) box.lastChild.style.whiteSpace = 'pre-wrap';
 
   const backend = document.getElementById('chatBackend').value || undefined;
   chatController = new AbortController();
@@ -1350,7 +1358,8 @@ async function sendChat(){
     renderChat();
   }finally{
     chatController = null;
-    document.getElementById('chatSend').textContent = 'Send';
+    const send = document.getElementById('chatSend');
+    if(send) send.innerHTML = '<i class="ph-bold ph-arrow-up"></i>';
     saveCurrentConvo();
   }
 }

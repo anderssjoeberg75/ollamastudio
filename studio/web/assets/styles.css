@@ -687,6 +687,60 @@ html, body {
   flex-direction: column;
   gap: 16px;
 }
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+}
+.msg {
+  max-width: 82%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow-sm);
+}
+.msg.user {
+  align-self: flex-end;
+  background: var(--fg);
+  color: var(--bg);
+  border-bottom-right-radius: 3px;
+}
+.msg.assistant {
+  align-self: flex-start;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 3px;
+  white-space: normal;
+  color: var(--fg);
+}
+.msg.assistant p { margin: 0 0 8px; }
+.msg.assistant p:last-child { margin-bottom: 0; }
+.msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4 {
+  margin: 10px 0 6px; line-height: 1.3; font-family: var(--font-display); color: var(--fg);
+}
+.msg.assistant h1 { font-size: 17px; }
+.msg.assistant h2 { font-size: 15px; }
+.msg.assistant h3 { font-size: 14px; }
+.msg.assistant h4 { font-size: 13px; }
+.msg.assistant ul, .msg.assistant ol { margin: 4px 0 8px; padding-left: 20px; }
+.msg.assistant li { margin: 2px 0; }
+.msg.assistant a { color: var(--accent); }
+.msg-stats {
+  margin-top: 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-faint);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 6px;
+}
+.msg .msg-imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.msg .msg-imgs img { max-width: 170px; max-height: 170px; border-radius: 7px; display: block; }
 
 /* ------------------------------------------------------------
    FLOATING COMPOSER
