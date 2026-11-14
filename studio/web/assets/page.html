@@ -444,6 +444,11 @@
         <button class="term-tab" id="termTabShell" onclick="switchTermDock('shell')"><i class="ph ph-terminal"></i> Shell</button>
         <button class="term-tab" id="termTabAgentLog" onclick="switchTermDock('agentlog')"><i class="ph ph-activity"></i> Log</button>
         <span class="grow"></span>
+        <div class="dock-model-selector" id="dockModelSelector" title="Välj modell för Chat / Studio">
+          <i class="ph ph-cpu"></i>
+          <span id="dockModelName">–</span>
+          <select id="dockModelSelect" onchange="onDockModelSelect(this)"></select>
+        </div>
         <button class="iconbtn sm" onclick="clearTerminalOutput()" title="Clear"><i class="ph ph-trash"></i></button>
       </div>
       <div class="term-tabs-body" onclick="focusCurrentTermInput()">

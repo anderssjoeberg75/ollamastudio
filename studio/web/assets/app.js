@@ -4472,8 +4472,10 @@ function syncModelSelectors() {
     const origSelect = document.getElementById('chatModel');
     const teleSelect = document.getElementById('teleModelSelect');
     const compSelect = document.getElementById('composerModelSelect');
+    const dockSelect = document.getElementById('dockModelSelect');
     const teleName = document.getElementById('teleModelName');
     const compName = document.getElementById('composerModelName');
+    const dockName = document.getElementById('dockModelName');
     if (origSelect) {
       if (teleSelect) {
         teleSelect.innerHTML = origSelect.innerHTML;
@@ -4483,14 +4485,28 @@ function syncModelSelectors() {
         compSelect.innerHTML = origSelect.innerHTML;
         compSelect.value = origSelect.value;
       }
+      if (dockSelect) {
+        dockSelect.innerHTML = origSelect.innerHTML;
+        dockSelect.value = origSelect.value;
+      }
       const val = origSelect.value || 'No model';
       if (teleName) teleName.textContent = val;
       if (compName) compName.textContent = val;
+      if (dockName) dockName.textContent = val;
     }
   } catch(e) {}
 }
 
 function onTeleModelSelect(sel) {
+  const orig = document.getElementById('chatModel');
+  if (orig && sel) {
+    orig.value = sel.value;
+    orig.dispatchEvent(new Event('change'));
+    syncModelSelectors();
+  }
+}
+
+function onDockModelSelect(sel) {
   const orig = document.getElementById('chatModel');
   if (orig && sel) {
     orig.value = sel.value;
