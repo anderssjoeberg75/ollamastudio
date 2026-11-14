@@ -4314,14 +4314,51 @@ async function executeDockChat(userText) {
       headers: headers(true),
       body: JSON.stringify({
         model: model,
-        messages: dockChatHistory,
-        stream: false
+        messages: dockChatHistory
       })
     });
-    const data = await res.json();
-    let reply = (data && data.message && data.message.content) || (data && data.response) || data.error || 'Inget svar.';
-    ansSpan.textContent = reply;
-    dockChatHistory.push({ role: 'assistant', content: reply });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', fullReply = '';
+    ansSpan.textContent = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        try {
+          const msg = JSON.parse(line);
+          const chunk = (msg.message && msg.message.content) || msg.response || '';
+          if (chunk) {
+            fullReply += chunk;
+            ansSpan.textContent = fullReply;
+            scrollArea.scrollTop = scrollArea.scrollHeight;
+          }
+          if (msg.error) {
+            throw new Error(msg.error);
+          }
+        } catch (e) {
+          if (e.message && !e.message.includes('Unexpected') && !e.message.includes('JSON')) {
+            throw e;
+          }
+        }
+      }
+    }
+
+    if (!fullReply) {
+      ansSpan.textContent = 'Inget svar.';
+    } else {
+      dockChatHistory.push({ role: 'assistant', content: fullReply });
+    }
   } catch (err) {
     ansSpan.textContent = '[Fel: ' + err.message + ']';
     ansSpan.style.color = '#ef4444';
