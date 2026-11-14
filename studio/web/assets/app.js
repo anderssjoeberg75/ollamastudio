@@ -1375,18 +1375,33 @@ function chatOptions(){
   return o;
 }
 (function csInit(){
-  document.getElementById('csWebsearch').checked = true;
-  document.getElementById('csMemory').checked = true;
-  document.getElementById('csTempVal').textContent = document.getElementById('csTemp').value;
-  document.getElementById('csSystem').addEventListener('input', e=>savePrefDebounced('chat_system', e.target.value));
-  document.getElementById('csTemp').addEventListener('input', e=>{
-    document.getElementById('csTempVal').textContent = e.target.value; savePrefDebounced('chat_temp', e.target.value);
-  });
-  document.getElementById('csCtx').addEventListener('change', e=>savePref('chat_ctx', e.target.value));
-  document.getElementById('csWebsearch').addEventListener('change',
-    e=>savePref('chat_websearch', e.target.checked ? '1' : '0'));
-  document.getElementById('csMemory').addEventListener('change',
-    e=>savePref('chat_memory', e.target.checked ? '1' : '0'));
+  const ws = document.getElementById('csWebsearch');
+  if (ws) {
+    ws.checked = true;
+    ws.addEventListener('change', e=>savePref('chat_websearch', e.target.checked ? '1' : '0'));
+  }
+  const mem = document.getElementById('csMemory');
+  if (mem) {
+    mem.checked = true;
+    mem.addEventListener('change', e=>savePref('chat_memory', e.target.checked ? '1' : '0'));
+  }
+  const temp = document.getElementById('csTemp');
+  const tempVal = document.getElementById('csTempVal');
+  if (temp && tempVal) {
+    tempVal.textContent = temp.value;
+    temp.addEventListener('input', e=>{
+      tempVal.textContent = e.target.value;
+      savePrefDebounced('chat_temp', e.target.value);
+    });
+  }
+  const sys = document.getElementById('csSystem');
+  if (sys) {
+    sys.addEventListener('input', e=>savePrefDebounced('chat_system', e.target.value));
+  }
+  const ctx = document.getElementById('csCtx');
+  if (ctx) {
+    ctx.addEventListener('change', e=>savePref('chat_ctx', e.target.value));
+  }
 })();
 
 /* ---- Saved conversations (localStorage) ---- */
