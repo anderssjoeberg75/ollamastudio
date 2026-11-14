@@ -1,6 +1,7 @@
 """Backends – en eller flera Ollama-instanser, t.ex. en per GPU.
 
 Sätts med OLLAMA_STUDIO_BACKENDS. Utan den körs en enda backend (OLLAMA_URL)."""
+import json
 import os
 import urllib.request
 
@@ -50,7 +51,7 @@ def backend_url(label):
 
 
 def _backend_is_alive(url, timeout=0.8):
-    """Snabb kontroll om en Ollama- eller llama-server-instans svarar på nätverket."""
+    """Snabb kontroll om en Ollama- eller llama-server-instans svarar på nätverket och stöder generering/chatt."""
     if not url:
         return False
     base = url.rstrip("/")
@@ -62,12 +63,31 @@ def _backend_is_alive(url, timeout=0.8):
                 return True
     except Exception:
         pass
-    # 2. Prova llama-server endpoints (/health, /props, /v1/models)
-    for ep in ("/health", "/props", "/v1/models"):
+    # 2. Prova llama-server endpoints (/props eller /v1/models)
+    try:
+        req = urllib.request.Request(base + "/props")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status in (200, 204):
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                alias = (data.get("model_alias") or "").lower()
+                # Exkludera rena embeddings-servrar (t.ex. nomic-embed-text) från genereringsbackends
+                if "embed" in alias:
+                    return False
+                return True
+    except Exception:
+        pass
+    for ep in ("/health", "/v1/models"):
         try:
             req = urllib.request.Request(base + ep)
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if resp.status in (200, 204):
+                    if ep == "/v1/models":
+                        data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                        models = data.get("models") or data.get("data") or []
+                        # Kontrollera att det inte enbart är en embed-modell
+                        aliases = [str(m.get("name") or m.get("id") or "").lower() for m in models if isinstance(m, dict)]
+                        if aliases and all("embed" in a for a in aliases):
+                            return False
                     return True
         except Exception:
             pass

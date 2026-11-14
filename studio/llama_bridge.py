@@ -75,7 +75,7 @@ def llama_server_models(base_url, timeout=5.0):
             if isinstance(raw_list, list):
                 for item in raw_list:
                     m_id = item.get("id") if isinstance(item, dict) else str(item)
-                    if m_id:
+                    if m_id and "embed" not in m_id.lower():
                         models.append({
                             "name": m_id,
                             "model": m_id,

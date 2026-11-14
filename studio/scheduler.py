@@ -397,17 +397,21 @@ def _get_active_code_model(base_url=None):
     except Exception:
         pass
     base = base_url or backends.select_optimal_backend()
+    from .llama_bridge import detect_backend_type, llama_server_models
     try:
-        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-            models = data.get("models") or []
-            if models:
-                from .models import select_optimal_model
-                optimal = select_optimal_model(models, task="code")
-                if optimal:
-                    return optimal
-                return models[0].get("name") or models[0].get("model") or ""
+        if detect_backend_type(base) == "llama_server":
+            models = llama_server_models(base)
+        else:
+            req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                models = data.get("models") or []
+        if models:
+            from .models import select_optimal_model
+            optimal = select_optimal_model(models, task="code")
+            if optimal:
+                return optimal
+            return models[0].get("name") or models[0].get("model") or ""
     except Exception:
         pass
     return ""
@@ -465,14 +469,21 @@ def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
 
     installed_local = []
     base = base_url or backends.select_optimal_backend()
+    from .llama_bridge import detect_backend_type, llama_server_models
     try:
-        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-            for m in data.get("models") or []:
+        if detect_backend_type(base) == "llama_server":
+            for m in llama_server_models(base):
                 nm = m.get("name") or m.get("model") or ""
                 if nm:
                     installed_local.append(nm)
+        else:
+            req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                for m in data.get("models") or []:
+                    nm = m.get("name") or m.get("model") or ""
+                    if nm:
+                        installed_local.append(nm)
     except Exception:
         pass
 
@@ -608,19 +619,41 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                 setattr(ctx, "last_error", "Antigravity-fel (%s): %s" % (model, e))
                 break
         else:
-            payload = {
-                "model": model,
-                "messages": sent,
-                "stream": False,
-                "options": code_options()
-            }
-            body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                base.rstrip("/") + "/api/chat",
-                data=body,
-                method="POST",
-                headers={"Content-Type": "application/json"}
-            )
+            from .llama_bridge import detect_backend_type
+            is_llama = (detect_backend_type(base) == "llama_server")
+            if is_llama:
+                # llama-server stödjer OpenAI-kompatibla /v1/chat/completions
+                payload = {
+                    "model": model,
+                    "messages": sent,
+                    "stream": False,
+                }
+                opts = code_options() or {}
+                if "temperature" in opts:
+                    payload["temperature"] = opts["temperature"]
+                if "num_predict" in opts:
+                    payload["max_tokens"] = opts["num_predict"]
+                body = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    base.rstrip("/") + "/v1/chat/completions",
+                    data=body,
+                    method="POST",
+                    headers={"Content-Type": "application/json"}
+                )
+            else:
+                payload = {
+                    "model": model,
+                    "messages": sent,
+                    "stream": False,
+                    "options": code_options()
+                }
+                body = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    base.rstrip("/") + "/api/chat",
+                    data=body,
+                    method="POST",
+                    headers={"Content-Type": "application/json"}
+                )
             try:
                 with urllib.request.urlopen(req, timeout=300) as resp:
                     resp_obj = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
@@ -631,7 +664,11 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
                 setattr(ctx, "last_error", "Anropsfel mot %s: %s" % (base, e))
                 break
 
-            full = (resp_obj.get("message") or {}).get("content") or ""
+            if is_llama:
+                choices = resp_obj.get("choices") or []
+                full = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+            else:
+                full = (resp_obj.get("message") or {}).get("content") or ""
         if not full:
             break
 
@@ -699,14 +736,21 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
     # Hämta installerade lokala modeller för att ge till routern
     installed_local = []
     base = base_url or backends.select_optimal_backend()
+    from .llama_bridge import detect_backend_type, llama_server_models
     try:
-        req = urllib.request.Request(base.rstrip("/") + "/api/tags")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-            for m in data.get("models") or []:
+        if detect_backend_type(base) == "llama_server":
+            for m in llama_server_models(base):
                 nm = m.get("name") or m.get("model") or ""
                 if nm:
                     installed_local.append(nm)
+        else:
+            req = urllib.request.Request(base.rstrip("/") + "/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                for m in data.get("models") or []:
+                    nm = m.get("name") or m.get("model") or ""
+                    if nm:
+                        installed_local.append(nm)
     except Exception:
         pass
 
