@@ -3901,3 +3901,129 @@ refresh();
 loadPrefs();   // hämta sparade UI-val (modell, GPU, chattinställningar) från databasen
 loadCodeMsgs();   // återställ Codex-konversationen vid omladdning
 restoreCodeLog();
+
+// ==========================================
+// Accuretta Workbench UI Interactive Wiring
+// ==========================================
+function setQuickPrompt(promptText) {
+  const input = document.getElementById('chatInput');
+  if (!input) return;
+  input.value = promptText;
+  input.focus();
+}
+
+function setEffort(level) {
+  const lbl = document.getElementById('effortLabel');
+  if (lbl) lbl.textContent = level;
+  const menu = document.getElementById('effortMenu');
+  if (menu) menu.style.display = 'none';
+}
+
+function togglePreviewPane() {
+  const app = document.getElementById('app');
+  if (app) {
+    app.classList.toggle('preview-collapsed');
+  }
+}
+
+function setPreviewTab(tab) {
+  document.querySelectorAll('.acc-tab').forEach(t => t.classList.remove('active'));
+  const btn = document.getElementById(tab === 'code' ? 'accTabCode' : 'accTabPreview');
+  if (btn) btn.classList.add('active');
+  const canvas = document.getElementById('previewContent');
+  if (canvas) {
+    if (tab === 'code') {
+      canvas.innerHTML = '<div style="padding:16px; font-family:monospace; font-size:12px; color:var(--text); white-space:pre-wrap;">// Code view\n// Generated artifacts and files will appear here.</div>';
+    } else {
+      canvas.innerHTML = `
+        <div class="empty-preview">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <path d="M3 9h18M9 21V9"/>
+          </svg>
+          <h4>nothing to render.</h4>
+          <p>ask the agent to build a page...<br>e.g. "build a pricing page with three tiers."</p>
+        </div>
+      `;
+    }
+  }
+}
+
+function setPreviewDevice(device) {
+  document.querySelectorAll('.dock-icon-btn').forEach(b => b.classList.remove('active'));
+  const activeBtn = event && event.currentTarget;
+  if (activeBtn) activeBtn.classList.add('active');
+  const canvas = document.getElementById('previewContent');
+  if (!canvas) return;
+  if (device === 'mobile') {
+    canvas.style.maxWidth = '375px';
+    canvas.style.margin = '0 auto';
+    canvas.style.boxShadow = '0 0 0 1px var(--border), 0 10px 25px rgba(0,0,0,0.1)';
+    canvas.style.borderRadius = '16px';
+  } else if (device === 'tablet') {
+    canvas.style.maxWidth = '768px';
+    canvas.style.margin = '0 auto';
+    canvas.style.boxShadow = '0 0 0 1px var(--border), 0 10px 25px rgba(0,0,0,0.1)';
+    canvas.style.borderRadius = '8px';
+  } else {
+    canvas.style.maxWidth = '';
+    canvas.style.margin = '';
+    canvas.style.boxShadow = '';
+    canvas.style.borderRadius = '';
+  }
+}
+
+function switchTermDock(dockName) {
+  document.querySelectorAll('.term-tab').forEach(t => t.classList.remove('active'));
+  const btn = event && event.currentTarget;
+  if (btn) btn.classList.add('active');
+  const body = document.getElementById('termDockBody');
+  if (!body) return;
+  if (dockName === 'terminal') {
+    body.innerHTML = '<span class="prompt">$ </span><span class="cursor"></span>';
+  } else if (dockName === 'sandbox') {
+    body.innerHTML = '<span style="color:var(--text-sub);">[sandbox: isolated environment active]</span>';
+  } else if (dockName === 'backend') {
+    body.innerHTML = '<span style="color:var(--text-sub);">[backend: ollama-studio api connected on :8085]</span>';
+  } else if (dockName === 'shell') {
+    body.innerHTML = '<span class="prompt">bash-5.2$ </span><span class="cursor"></span>';
+  } else if (dockName === 'log') {
+    body.innerHTML = '<span style="color:var(--text-sub);">[agent: ready and awaiting instruction]</span>';
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'light';
+  const next = current === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('os_theme', next); } catch(e){}
+  toast('Theme switched to ' + next);
+}
+
+// Ensure theme is applied on load
+(function(){
+  try {
+    const savedTheme = localStorage.getItem('os_theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  } catch(e){}
+})();
+
+// Hook into populateChatModels to sync telemetry & composer model selectors
+const _origPopulateChatModels = typeof populateChatModels === 'function' ? populateChatModels : null;
+if (_origPopulateChatModels) {
+  populateChatModels = function() {
+    _origPopulateChatModels.apply(this, arguments);
+    try {
+      const origSelect = document.getElementById('chatModel');
+      const teleSelect = document.getElementById('teleModelSelect');
+      const compSelect = document.getElementById('composerModelSelect');
+      if (origSelect) {
+        if (teleSelect) teleSelect.innerHTML = origSelect.innerHTML;
+        if (compSelect) compSelect.innerHTML = origSelect.innerHTML;
+        if (teleSelect) teleSelect.value = origSelect.value;
+        if (compSelect) compSelect.value = origSelect.value;
+      }
+    } catch(e) {}
+  };
+}
+
