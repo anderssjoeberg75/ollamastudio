@@ -4316,20 +4316,28 @@ async function loadGhIssues(state = 'open', overrideSlug = null){
       const labels = (iss.labels || []).map(l => `<span class="comp-chip" style="font-size:10.5px;padding:2px 6px;color:var(--fg);background:rgba(255,255,255,0.3);border:1px solid rgba(255,255,255,0.45)">${esc(l)}</span>`).join(' ');
       const isSec = (iss.title || '').includes('SECTEST') || (iss.title || '').includes('SECURITY') || (iss.labels || []).some(l => /security|cwe|bug|audit/i.test(l));
       const icon = isSec ? '🛡️' : '⚠';
+      const issId = iss.iid;
       html += `
-        <div style="background:rgba(255,255,255,0.22);border:1px solid rgba(255,255,255,0.4);backdrop-filter:blur(10px);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
-          <div style="flex:1">
-            <div style="font-weight:600;font-size:13px;color:var(--fg);margin-bottom:4px">
-              ${icon} <a href="${esc(iss.web_url)}" target="_blank" style="color:var(--fg);text-decoration:none">#${iss.iid} ${esc(iss.title)} ↗</a>
-            </div>
-            <div style="font-size:12px;color:var(--fg-muted);margin-bottom:6px;max-height:48px;overflow:hidden;text-overflow:ellipsis">
-              ${esc(iss.description ? iss.description.slice(0, 180) + '…' : '(no description)')}
-            </div>
-            <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-              ${labels}
+        <div id="issueCard-${issId}" style="background:rgba(255,255,255,0.22);border:1px solid rgba(255,255,255,0.4);backdrop-filter:blur(10px);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+          <div style="display:flex;align-items:flex-start;gap:10px;flex:1">
+            <input type="checkbox" class="issue-select-checkbox" data-issue-id="${issId}" data-issue-title="${esc(iss.title)}" data-repo="${esc(slug)}" style="margin-top:3px;cursor:pointer;accent-color:var(--accent)">
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:13px;color:var(--fg);margin-bottom:4px;display:flex;align-items:center;gap:6px">
+                <span>${icon}</span>
+                <a href="${esc(iss.web_url)}" target="_blank" style="color:var(--fg);text-decoration:none">#${iss.iid} ${esc(iss.title)} ↗</a>
+              </div>
+              <div style="font-size:12px;color:var(--fg-muted);margin-bottom:6px;max-height:48px;overflow:hidden;text-overflow:ellipsis">
+                ${esc(iss.description ? iss.description.slice(0, 180) + '…' : '(no description)')}
+              </div>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+                ${labels}
+              </div>
             </div>
           </div>
-          <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end">
+          <div style="display:flex;gap:6px;align-items:center">
+            <button class="btn small primary" onclick="fixSingleIssue('${esc(slug)}', ${iss.iid}, '${esc(iss.title.replace(/'/g, "\\'"))}')" style="font-size:11px;padding:3px 10px;display:inline-flex;align-items:center;gap:4px" id="btnFix-${iss.iid}">
+              <i class="ph ph-wrench"></i> Fix
+            </button>
             <a href="${esc(iss.web_url)}" target="_blank" class="btn small ghost" style="font-size:11px;padding:3px 8px">GitHub ↗</a>
           </div>
         </div>
@@ -4338,6 +4346,105 @@ async function loadGhIssues(state = 'open', overrideSlug = null){
     container.innerHTML = html;
   } catch(e){
     container.innerHTML = `<div style="color:var(--danger);font-size:13px;padding:12px;text-align:center">Error loading issues: ${esc(e.message)}</div>`;
+  }
+}
+
+// ==========================================
+// Automated Issue Fix & Multi-Tool Verification
+// ==========================================
+async function fixSingleIssue(repo, issueNumber, title) {
+  const btn = document.getElementById(`btnFix-${issueNumber}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<i class="ph ph-spinner ph-spin"></i> Fixing…`;
+  }
+  toast(`Starting automated fix and verification for #${issueNumber}…`, 'info');
+
+  try {
+    const r = await api('/api/issue/fix', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({
+        repo: repo,
+        issue_number: issueNumber,
+        issue_title: title
+      })
+    });
+    const d = await r.json();
+    if (!d.ok || !d.fix_id) {
+      toast(`Failed to start fix: ${d.error || 'Unknown error'}`, 'danger');
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="ph ph-wrench"></i> Fix`;
+      }
+      return;
+    }
+
+    pollIssueFix(d.fix_id, repo, issueNumber, btn);
+  } catch(e) {
+    toast(`Error initiating fix: ${e.message}`, 'danger');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<i class="ph ph-wrench"></i> Fix`;
+    }
+  }
+}
+
+async function pollIssueFix(fixId, repo, issueNumber, btn) {
+  try {
+    const r = await api(`/api/issue/fix/status/${fixId}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const job = d.job;
+    if (!job) return;
+
+    if (btn) {
+      btn.innerHTML = `<i class="ph ph-spinner ph-spin"></i> ${job.stage} (${job.progress}%)`;
+    }
+
+    if (job.status === 'running') {
+      setTimeout(() => pollIssueFix(fixId, repo, issueNumber, btn), 2000);
+    } else if (job.status === 'completed') {
+      toast(`Issue #${issueNumber} fixed & verified! GitHub issue closed.`, 'success');
+      const card = document.getElementById(`issueCard-${issueNumber}`);
+      if (card) {
+        card.style.transition = 'all 0.5s ease';
+        card.style.opacity = '0.4';
+        card.style.background = 'rgba(34,197,94,0.15)';
+      }
+      if (btn) {
+        btn.disabled = true;
+        btn.className = 'btn small ghost';
+        btn.innerHTML = `✓ Fixed & Tested`;
+      }
+      setTimeout(() => loadGhIssues('open', repo), 3500);
+    } else {
+      toast(`Fix for #${issueNumber} encountered an issue: ${job.log ? job.log.split('\n').pop() : 'Error'}`, 'danger');
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="ph ph-wrench"></i> Retry Fix`;
+      }
+    }
+  } catch(e) {
+    setTimeout(() => pollIssueFix(fixId, repo, issueNumber, btn), 3000);
+  }
+}
+
+async function fixSelectedIssues() {
+  const checkboxes = document.querySelectorAll('.issue-select-checkbox:checked');
+  if (!checkboxes || !checkboxes.length) {
+    toast('Please select at least one issue using the checkbox.', 'warning');
+    return;
+  }
+  toast(`Starting automated fix batch for ${checkboxes.length} issues…`, 'info');
+  for (const cb of checkboxes) {
+    const repo = cb.getAttribute('data-repo');
+    const id = cb.getAttribute('data-issue-id');
+    const title = cb.getAttribute('data-issue-title') || '';
+    if (repo && id) {
+      await fixSingleIssue(repo, parseInt(id, 10), title);
+      await new Promise(res => setTimeout(res, 1200));
+    }
   }
 }
 

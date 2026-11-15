@@ -452,8 +452,11 @@
               <div style="font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px">
                 <i class="ph ph-warning-circle"></i> <span>Repository Issues &amp; Audit Reports</span>
               </div>
-              <div style="display:flex;gap:6px">
+              <div style="display:flex;gap:6px;align-items:center">
                 <button class="btn small ghost" onclick="loadGhIssues('open')">Open Issues</button>
+                <button class="btn small primary" id="btnFixSelectedIssues" onclick="fixSelectedIssues()" style="display:inline-flex;align-items:center;gap:4px">
+                  <i class="ph ph-wrench"></i> Fix Selected
+                </button>
                 <button class="btn small ghost" onclick="loadGhIssues('all')">All</button>
               </div>
             </div>

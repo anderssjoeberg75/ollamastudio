@@ -283,6 +283,13 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 if not run_data:
                     return self._send_json({"error": "Run not found"}, 404)
                 return self._send_json({"ok": True, "run": run_data})
+            if path.startswith("/api/issue/fix/status/"):
+                fix_id = path.split("/api/issue/fix/status/")[1].strip()
+                from studio.codex.fixer import get_issue_fix_status
+                res = get_issue_fix_status(fix_id)
+                if not res:
+                    return self._send_json({"error": "Fix job not found"}, 404)
+                return self._send_json({"ok": True, "job": res})
             if path == "/api/security/overview":
                 from studio.harness.security_overview import get_overview_snapshot
                 return self._send_json({"ok": True, "overview": get_overview_snapshot()})
@@ -413,6 +420,17 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 create_issues=create_issues
             )
             return self._send_json({"ok": True, "run_id": run_id})
+
+        if path == "/api/issue/fix":
+            repo = str(data.get("repo", "")).strip()
+            issue_number = int(data.get("issue_number", 0))
+            issue_title = str(data.get("issue_title", "")).strip()
+            issue_body = str(data.get("issue_body", "")).strip()
+            if not repo or not issue_number:
+                return self._send_json({"error": "repo och issue_number krävs"}, 400)
+            from studio.codex.fixer import start_issue_fix
+            fix_id = start_issue_fix(repo, issue_number, issue_title, issue_body)
+            return self._send_json({"ok": True, "fix_id": fix_id})
 
         if path == "/api/schedule/delete":
             jid = (data.get("id") or "").strip()
