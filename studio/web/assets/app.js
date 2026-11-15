@@ -215,9 +215,9 @@ function humanDate(s){
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-const TITLES = {models:'My Models', discover:'Discover / Install', chat:'Chat', system:'System / GPU', settings:'Settings', code:'Codex', train:'AI Training', github:'GitHub'};
+const TITLES = {models:'My Models', discover:'Discover / Install', chat:'Chat', system:'System / GPU', settings:'Settings', code:'Codex', train:'AI Training', github:'GitHub', harness:'Vulnerability Harness'};
 function showView(v){
-  for(const k of ['models','discover','chat','system','settings','code','train','github']){
+  for(const k of ['models','discover','chat','system','settings','code','train','github','harness']){
     const navBtn = document.getElementById('nav-'+k);
     if(navBtn) navBtn.classList.toggle('active', v===k);
     const viewEl = document.getElementById('view-'+k);
@@ -226,8 +226,12 @@ function showView(v){
   const titleEl = document.getElementById('title');
   if(titleEl) titleEl.textContent = TITLES[v] || '';
   const sesTitle = document.getElementById('activeSessionTitle');
-  if(sesTitle) sesTitle.textContent = v === 'chat' ? (currentConvoId ? 'session' : 'new session') : v;
+  if(sesTitle) sesTitle.textContent = v === 'chat' ? (currentConvoId ? 'session' : 'new session') : (v === 'harness' ? 'Vuln Harness' : v);
 
+  if(v==='harness'){
+    populateHarnessProjects();
+    loadHarnessRuns();
+  }
   if(v==='models'){
     if(lastModels && lastModels.length) renderModels(lastModels);
     else refresh();
@@ -5196,5 +5200,226 @@ if (chatModelEl) {
     updateTelemetry();
   });
 }
+
+/* ============================================================
+   CLOUDFLARE VULNERABILITY HARNESS (VDH & VVS) FRONTEND
+   ============================================================ */
+let _harnessPollTimer = null;
+let _activeHarnessRunId = null;
+
+async function populateHarnessProjects() {
+  const sel = document.getElementById('harnessProjectSelect');
+  if (!sel) return;
+  const currentVal = sel.value;
+  sel.innerHTML = '<option value="current">Aktiv arbetsyta (Aktuell katalog)</option>';
+
+  try {
+    const r = await api('/api/gitlab/repos', {headers: headers(false)});
+    if (r.ok) {
+      const data = await r.json();
+      const repos = data.repos || [];
+      repos.forEach(repo => {
+        const opt = document.createElement('option');
+        opt.value = repo.full_name || repo.path_with_namespace || repo.name;
+        opt.textContent = `GitHub: ${repo.full_name || repo.name}`;
+        sel.appendChild(opt);
+      });
+    }
+  } catch(e) {}
+  if (currentVal) sel.value = currentVal;
+}
+
+async function loadHarnessRuns() {
+  const listEl = document.getElementById('harnessRunsList');
+  if (!listEl) return;
+  try {
+    const r = await api('/api/harness/runs', {headers: headers(false)});
+    if (!r.ok) return;
+    const data = await r.json();
+    const runs = data.runs || [];
+    if (!runs.length) {
+      listEl.innerHTML = '<div style="color:var(--fg-subtle);font-size:13px;padding:12px;text-align:center">Inga tidigare körningar registrerade. Starta en granskning ovan.</div>';
+      return;
+    }
+    listEl.innerHTML = runs.map(run => {
+      const statusColor = run.status === 'completed' ? 'var(--accent)' : (run.status === 'error' ? 'var(--danger, #ef4444)' : 'var(--warning, #f59e0b)');
+      const dateStr = run.created_at ? new Date(run.created_at * 1000).toLocaleString('sv-SE') : '';
+      return `
+        <div class="card" style="padding:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+          <div>
+            <div style="font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:6px">
+              <span class="tele-pill" style="border-color:${statusColor};color:${statusColor}">${esc(run.status)}</span>
+              <span>${esc(run.project)}</span>
+              <span style="font-size:11px;color:var(--fg-subtle);font-family:var(--font-mono)">(${esc(run.run_id)})</span>
+            </div>
+            <div style="font-size:12px;color:var(--fg-muted);margin-top:4px">
+              Profil: <b>${esc(run.profile)}</b> &middot; ${dateStr}
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="text-align:right;font-size:12px">
+              <div><b style="color:var(--accent)">${run.confirmed_count}</b> bekräftade</div>
+              <div style="color:var(--fg-subtle)">${run.rejected_count} falsklarm</div>
+            </div>
+            <button class="btn small" onclick="inspectHarnessRun('${esc(run.run_id)}')"><i class="ph ph-file-text"></i> <span>Inspektera</span></button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch(e) {
+    listEl.innerHTML = '<div style="color:var(--danger,#ef4444);font-size:13px;padding:12px">Kunde inte ladda körningshistorik: ' + esc(e.message) + '</div>';
+  }
+}
+
+async function startHarnessRun() {
+  const projSel = document.getElementById('harnessProjectSelect');
+  const profSel = document.getElementById('harnessProfileSelect');
+  const issuesChk = document.getElementById('harnessCreateIssues');
+  const startBtn = document.getElementById('harnessStartBtn');
+
+  const project = projSel ? projSel.value : 'current';
+  const profile = profSel ? profSel.value : 'standard';
+  const createIssues = issuesChk ? issuesChk.checked : false;
+
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.innerHTML = '<i class="ph ph-spinner ph-spin"></i> <span>Startar...</span>';
+  }
+
+  try {
+    const r = await api('/api/harness/start', {
+      method: 'POST',
+      headers: headers(true),
+      body: JSON.stringify({
+        project: project === 'current' ? (cfg.code_ws || 'workspace') : project,
+        profile: profile,
+        create_issues: createIssues
+      })
+    });
+    const res = await r.json();
+    if (res.ok && res.run_id) {
+      _activeHarnessRunId = res.run_id;
+      showHarnessLiveCard(res.run_id);
+      pollHarnessRun(res.run_id);
+      toast('Cloudflare Vulnerability Harness startad!', 'success');
+    } else {
+      toast('Kunde inte starta harness: ' + (res.error || 'Okänt fel'), 'error');
+    }
+  } catch(e) {
+    toast('Fel vid anrop till harness: ' + e.message, 'error');
+  } finally {
+    if (startBtn) {
+      startBtn.disabled = false;
+      startBtn.innerHTML = '<i class="ph-bold ph-play"></i> <span>Starta Vulnerability Harness</span>';
+    }
+  }
+}
+
+function showHarnessLiveCard(runId) {
+  const card = document.getElementById('harnessLiveCard');
+  if (!card) return;
+  card.style.display = 'block';
+  document.getElementById('harnessLiveTitle').textContent = `Körning: ${runId}`;
+  document.getElementById('harnessProgressBar').style.width = '0%';
+  document.getElementById('harnessLivePct').textContent = '0%';
+  document.getElementById('harnessLiveCandCount').textContent = '0';
+  document.getElementById('harnessLiveConfCount').textContent = '0';
+  document.getElementById('harnessLiveRejCount').textContent = '0';
+  document.getElementById('harnessLiveLog').textContent = 'Initierar...';
+}
+
+function updateStageIndicators(stage) {
+  const stages = ['stepRecon', 'stepLedger', 'stepVDH', 'stepVVS', 'stepReport'];
+  stages.forEach(s => {
+    const el = document.getElementById(s);
+    if (el) el.style.border = '1px solid var(--border)';
+  });
+  let activeId = null;
+  if (stage === 'reconnaissance') activeId = 'stepRecon';
+  else if (stage === 'coverage_ledger') activeId = 'stepLedger';
+  else if (stage === 'vdh_hunting') activeId = 'stepVDH';
+  else if (stage === 'vvs_validation') activeId = 'stepVVS';
+  else if (stage === 'reporting' || stage === 'done') activeId = 'stepReport';
+
+  if (activeId) {
+    const activeEl = document.getElementById(activeId);
+    if (activeEl) {
+      activeEl.style.border = '1px solid var(--accent)';
+      activeEl.style.color = 'var(--accent)';
+      activeEl.style.fontWeight = '600';
+    }
+  }
+}
+
+async function pollHarnessRun(runId) {
+  clearTimeout(_harnessPollTimer);
+  try {
+    const r = await api(`/api/harness/run/${runId}`, {headers: headers(false)});
+    if (!r.ok) return;
+    const data = await r.json();
+    const run = data.run;
+    if (!run) return;
+
+    document.getElementById('harnessProgressBar').style.width = (run.progress || 0) + '%';
+    document.getElementById('harnessLivePct').textContent = (run.progress || 0) + '%';
+    document.getElementById('harnessLiveCandCount').textContent = run.candidates_count || 0;
+    document.getElementById('harnessLiveConfCount').textContent = run.confirmed_count || 0;
+    document.getElementById('harnessLiveRejCount').textContent = run.rejected_count || 0;
+
+    const badge = document.getElementById('harnessLiveStatusBadge');
+    if (badge) {
+      badge.textContent = run.status.toUpperCase();
+      badge.style.background = run.status === 'completed' ? 'var(--accent)' : (run.status === 'error' ? 'var(--danger,#ef4444)' : 'var(--warning,#f59e0b)');
+    }
+
+    updateStageIndicators(run.stage);
+
+    if (run.log) {
+      const logEl = document.getElementById('harnessLiveLog');
+      if (logEl) {
+        logEl.textContent = run.log;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    if (run.status === 'running') {
+      _harnessPollTimer = setTimeout(() => pollHarnessRun(runId), 2000);
+    } else {
+      loadHarnessRuns();
+      if (run.status === 'completed') {
+        toast(`Harness slutförd! ${run.confirmed_count} sårbarheter bekräftade.`, 'success');
+      }
+    }
+  } catch(e) {
+    _harnessPollTimer = setTimeout(() => pollHarnessRun(runId), 3000);
+  }
+}
+
+async function inspectHarnessRun(runId) {
+  try {
+    const r = await api(`/api/harness/run/${runId}`, {headers: headers(false)});
+    if (!r.ok) return;
+    const data = await r.json();
+    const run = data.run;
+    if (!run) return;
+
+    showHarnessLiveCard(run.run_id);
+    document.getElementById('harnessProgressBar').style.width = (run.progress || 0) + '%';
+    document.getElementById('harnessLivePct').textContent = (run.progress || 0) + '%';
+    document.getElementById('harnessLiveCandCount').textContent = run.candidates_count || 0;
+    document.getElementById('harnessLiveConfCount').textContent = run.confirmed_count || 0;
+    document.getElementById('harnessLiveRejCount').textContent = run.rejected_count || 0;
+    updateStageIndicators(run.stage);
+    if (run.log) {
+      const logEl = document.getElementById('harnessLiveLog');
+      if (logEl) logEl.textContent = run.log;
+    }
+    const liveCard = document.getElementById('harnessLiveCard');
+    if (liveCard) liveCard.scrollIntoView({behavior: 'smooth'});
+  } catch(e) {
+    toast('Kunde inte inspektera körning: ' + e.message, 'error');
+  }
+}
+
 
 

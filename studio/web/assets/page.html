@@ -50,6 +50,10 @@
           <span class="sp-left"><i class="ph ph-github-logo"></i> <span>GitHub</span></span>
           <span class="sp-badge">repos</span>
         </button>
+        <button class="session-pill" id="nav-harness" onclick="showView('harness')" title="Cloudflare Vulnerability Harness (VDH & VVS)">
+          <span class="sp-left"><i class="ph ph-shield-check"></i> <span>Vuln Harness</span></span>
+          <span class="sp-badge" style="color:var(--accent);font-weight:600">vvs</span>
+        </button>
         <button class="session-pill" id="nav-train" onclick="showView('train')">
           <span class="sp-left"><i class="ph ph-graduation-cap"></i> <span>AI Training</span></span>
           <span class="sp-badge">soup</span>
@@ -456,6 +460,117 @@
             <div id="ghIssuesContainer" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
               <div style="color:var(--fg-subtle);font-size:13px;padding:14px;text-align:center">
                 Select a GitHub repository above to load issues and vulnerability reports.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW: VULNERABILITY HARNESS (Cloudflare VDH & VVS) -->
+      <div id="view-harness" class="view hidden">
+        <div class="harness-wrap" style="max-width:960px;margin:0 auto;padding-bottom:30px">
+          <!-- Header Banner -->
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+            <div>
+              <h2 style="margin:0 0 4px;display:flex;align-items:center;gap:8px">
+                <i class="ph-bold ph-shield-check" style="color:var(--accent)"></i>
+                <span>Cloudflare Vulnerability Harness</span>
+              </h2>
+              <p style="margin:0;color:var(--fg-muted);font-size:13px">
+                Deterministisk sårbarhetskartläggning (VDH) &amp; adversariell motgranskning (VVS) för att eliminera falsklarm.
+              </p>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn small" onclick="loadHarnessRuns()"><i class="ph ph-arrows-clockwise"></i> <span>Uppdatera historik</span></button>
+            </div>
+          </div>
+
+          <!-- Configuration Card -->
+          <div class="card" style="padding:18px;margin-bottom:20px">
+            <div style="font-weight:600;font-size:14px;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+              <i class="ph ph-sliders"></i> <span>Konfigurera körning</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px" class="harness-grid">
+              <div>
+                <label style="font-size:12px;color:var(--fg-muted);display:block;margin-bottom:4px">Projekt / Repository</label>
+                <select id="harnessProjectSelect" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-sunken);color:var(--fg);font-size:13px">
+                  <option value="current">Aktiv arbetsyta (Aktuell katalog)</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;color:var(--fg-muted);display:block;margin-bottom:4px">Granskningsprofil (Breadth &amp; Depth)</label>
+                <select id="harnessProfileSelect" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-sunken);color:var(--fg);font-size:13px">
+                  <option value="quick">Quick (Snabbpass — Begränsad yta, 1 jägarvåg)</option>
+                  <option value="standard" selected>Standard (Full VDH &amp; Adversarial VVS)</option>
+                  <option value="deep">Deep (Höginsats — Djup rekognosering &amp; dubbelverifiering)</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+              <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
+                <input type="checkbox" id="harnessCreateIssues">
+                <span>Skapa automatiskt GitHub Issues för bekräftade sårbarheter</span>
+              </label>
+              <button class="btn accent" id="harnessStartBtn" onclick="startHarnessRun()">
+                <i class="ph-bold ph-play"></i> <span>Starta Vulnerability Harness</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Active Run Status Card (Hidden by default) -->
+          <div class="card" id="harnessLiveCard" style="display:none;padding:18px;margin-bottom:20px;border-color:var(--accent)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <span style="font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px">
+                <span class="tele-pill" id="harnessLiveStatusBadge" style="background:var(--accent);color:#fff">KÖR</span>
+                <span id="harnessLiveTitle">Körning pågår...</span>
+              </span>
+              <span id="harnessLivePct" style="font-weight:600;font-size:13px;color:var(--accent)">0%</span>
+            </div>
+            
+            <!-- Progress Bar -->
+            <div style="width:100%;height:6px;background:var(--bg-sunken);border-radius:4px;overflow:hidden;margin-bottom:14px">
+              <div id="harnessProgressBar" style="width:0%;height:100%;background:var(--accent);transition:width 0.3s ease"></div>
+            </div>
+
+            <!-- Stages Flow -->
+            <div style="display:grid;grid-template-columns:repeat(5, 1fr);gap:6px;margin-bottom:14px;font-size:11.5px;text-align:center">
+              <div class="card" id="stepRecon" style="padding:8px 4px;background:var(--bg-sunken)">1. Recon</div>
+              <div class="card" id="stepLedger" style="padding:8px 4px;background:var(--bg-sunken)">2. Ledger</div>
+              <div class="card" id="stepVDH" style="padding:8px 4px;background:var(--bg-sunken)">3. VDH Jakt</div>
+              <div class="card" id="stepVVS" style="padding:8px 4px;background:var(--bg-sunken)">4. VVS Validering</div>
+              <div class="card" id="stepReport" style="padding:8px 4px;background:var(--bg-sunken)">5. Rapport</div>
+            </div>
+
+            <!-- Stats Counter -->
+            <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;margin-bottom:14px;text-align:center">
+              <div style="background:var(--bg-sunken);padding:10px;border-radius:8px">
+                <div style="font-size:11px;color:var(--fg-muted)">VDH KANDIDATER</div>
+                <div id="harnessLiveCandCount" style="font-size:20px;font-weight:700">0</div>
+              </div>
+              <div style="background:var(--bg-sunken);padding:10px;border-radius:8px">
+                <div style="font-size:11px;color:var(--fg-muted)">BEKRÄFTADE (VVS)</div>
+                <div id="harnessLiveConfCount" style="font-size:20px;font-weight:700;color:var(--accent)">0</div>
+              </div>
+              <div style="background:var(--bg-sunken);padding:10px;border-radius:8px">
+                <div style="font-size:11px;color:var(--fg-muted)">AVVISADE FALSKLARM</div>
+                <div id="harnessLiveRejCount" style="font-size:20px;font-weight:700;color:var(--fg-subtle)">0</div>
+              </div>
+            </div>
+
+            <!-- Live Log Output -->
+            <div style="font-size:12px;font-weight:600;margin-bottom:6px">Loggutskrift</div>
+            <pre id="harnessLiveLog" style="max-height:160px;overflow:auto;background:var(--bg-sunken);padding:10px;border-radius:6px;font-family:var(--font-mono);font-size:11.5px;color:var(--fg-muted);margin:0;white-space:pre-wrap"></pre>
+          </div>
+
+          <!-- Findings & Reports Section -->
+          <div class="card" style="padding:18px">
+            <div style="font-weight:600;font-size:14px;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+              <i class="ph ph-files"></i> <span>Tidigare körningar &amp; Sårbarhetsrapporter</span>
+            </div>
+            <div id="harnessRunsList" style="display:flex;flex-direction:column;gap:10px">
+              <div style="color:var(--fg-subtle);font-size:13px;padding:12px;text-align:center">
+                Laddar körningshistorik...
               </div>
             </div>
           </div>

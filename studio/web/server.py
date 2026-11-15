@@ -273,6 +273,16 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             if path == "/api/antigravity/status":
                 from studio.antigravity_bridge import antigravity_status
                 return self._send_json(antigravity_status())
+            if path == "/api/harness/runs":
+                from studio.harness import list_harness_runs
+                return self._send_json({"ok": True, "runs": list_harness_runs()})
+            if path.startswith("/api/harness/run/"):
+                run_id = path.split("/api/harness/run/")[1].strip()
+                from studio.harness import get_harness_run
+                run_data = get_harness_run(run_id)
+                if not run_data:
+                    return self._send_json({"error": "Run not found"}, 404)
+                return self._send_json({"ok": True, "run": run_data})
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:
@@ -382,6 +392,20 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"error": "project saknas"}, 400)
             project_target_set(proj, srv, tok, sec_mode=sec_mode)
             return self._send_json({"ok": True, "targets": project_targets_list()})
+
+        if path == "/api/harness/start":
+            proj = (data.get("project") or "").strip()
+            profile = (data.get("profile") or "standard").strip()
+            create_issues = bool(data.get("create_issues", False))
+            target_dir = (data.get("target_dir") or "").strip()
+            from studio.harness import start_vulnerability_harness
+            run_id = start_vulnerability_harness(
+                project=proj or "local-workspace",
+                profile=profile,
+                target_dir=target_dir or None,
+                create_issues=create_issues
+            )
+            return self._send_json({"ok": True, "run_id": run_id})
 
         if path == "/api/schedule/delete":
             jid = (data.get("id") or "").strip()
