@@ -108,11 +108,20 @@ def classify_task(text="", labels=""):
                  r'säkerhetstest\w*|security[ -]?test\w*|sårbarhetsskann\w*|sårbarhetsscann\w*|'
                  r'vuln\w*scan\w*|portskann\w*|port[ -]?scan\w*|recon\w*)\b', combined):
         return "pentest"
-    # Aktiv skanning formulerad som verb + mål ("skanna min sajt", "testa
-    # säkerheten på webbplatsen") -> pentest, men inte "granska koden".
-    if re.search(r'\b(skanna\w*|scanna\w*|testa säkerhet\w*|angrip\w*|penetrera\w*|attack\w*)\b'
-                 r'[^.\n]*\b(sajt\w*|webbplats\w*|site|webbsajt\w*|domän\w*|url|servern?|'
-                 r'nätverk\w*|endpoint\w*|api\b|api:?er|mål(server)?\w*|host\w*|port\w*|ip)\b', combined):
+    # Aktiv testning = ett test-/skan-verb följt av ett WEBB-/NÄTVERKSMÅL (sajt, URL,
+    # domän, server, endpoint, en http(s)-adress ...). Det är målet som skiljer ett
+    # pentest ("testa min sajt", "kolla sårbarheter på example.com") från kod-/SAST-
+    # granskning ("testa koden", "granska sårbarheter i koden") – där finns inget
+    # webbmål, så de faller vidare till regel 2 (security) nedan.
+    _verb = (r'(skanna\w*|scanna\w*|scan\w*|testa\w*|test\w*|kolla\w*|granska\w*|'
+             r'undersök\w*|angrip\w*|penetrera\w*|attack\w*|hacka\w*|bryt\w*)')
+    _target = (r'(sajt\w*|webbsajt\w*|webbplats\w*|\bsite\b|hemsid\w*|domän\w*|\burl\b|'
+               r'https?://\S+|\bservern?\b|nätverk\w*|endpoint\w*|\bapi\b|api:er|'
+               r'målserver\w*|host\w*|\bport(ar|en)?\b|\bip\b|'
+               # en bar värd/domän med riktig toppdomän (example.com) – men inte app.py
+               r'[a-z0-9-]+\.(?:com|se|net|org|io|dev|ai|co|app|nu|eu|de|uk|info|biz|'
+               r'gov|edu|mil|xyz|tech|site|online|cloud))')
+    if re.search(r'\b' + _verb + r'\b[^.\n]*\b' + _target, combined):
         return "pentest"
 
     # 2. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)

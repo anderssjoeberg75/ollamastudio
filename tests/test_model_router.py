@@ -44,8 +44,23 @@ class TestModelRouter(unittest.TestCase):
             "Skanna min webbplats efter sårbarheter",
             "sårbarhetsskanning av api:erna",
             "testa säkerheten på domänen example.com",
+            # verb + webbmål (det vanliga sättet att be om det)
+            "testa min site",
+            "testa min sajt https://example.com",
+            "kolla sårbarheter på min sajt",
+            "scanna example.com",
+            "undersök min server för öppna portar",
+            # exakt den prompt som Pentest Suite-knappen bygger
+            "Perform a disciplined, authorized penetration test and security "
+            "vulnerability verification against target site: http://min-sajt.se",
         ):
             self.assertEqual(classify_task(text), "pentest", text)
+
+    def test_classify_code_testing_is_not_pentest(self):
+        # Kod-testning/filnamn ska INTE råka klassas som pentest
+        self.assertEqual(classify_task("testa koden"), "general")
+        self.assertEqual(classify_task("kör pytest på app.py"), "testing")
+        self.assertEqual(classify_task("granska main.py"), "general")
 
     def test_classify_code_audit_stays_security_not_pentest(self):
         # Kod-/SAST-granskning är inte ett aktivt pentest

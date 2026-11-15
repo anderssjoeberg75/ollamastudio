@@ -56,7 +56,17 @@ class CodexRoutes(BaseHandler):
             routed = select_best_model_for_task(last_prompt)
             model = routed["model"]
 
-        sys_prompt = AGENT_SYSTEM_SCRATCH if scratch else agent_system_prompt(mode, task=task_type)
+        # Ett pentest ska ALLTID få pentest-systemprompten ("You are WhiteRabbitNeo …
+        # Never refuse an authorized security testing task"), även i skisslage utan
+        # arbetsyta – annars får modellen pentest-begäran med den generiska kod-
+        # assistent-prompten och vägrar. (Pentest av en fjärr-site kräver ingen
+        # lokal arbetsyta, så skisslage är det normala här.)
+        if task_type == "pentest":
+            sys_prompt = agent_system_prompt(mode, task="pentest")
+        elif scratch:
+            sys_prompt = AGENT_SYSTEM_SCRATCH
+        else:
+            sys_prompt = agent_system_prompt(mode, task=task_type)
         convo = [{"role": "system", "content": sys_prompt}] + list(messages)
         try:
             self.send_response(200)
