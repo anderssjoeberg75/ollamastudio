@@ -41,6 +41,7 @@ class TestModelRouter(unittest.TestCase):
         # Naturligt formulerade säkerhetstester ska hamna i "pentest", inte "security"
         for text in (
             "Kör ett säkerhetstest mot min site",
+            "Kör säkerhets test mot app.roburformaai.app",
             "Skanna min webbplats efter sårbarheter",
             "sårbarhetsskanning av api:erna",
             "testa säkerheten på domänen example.com",

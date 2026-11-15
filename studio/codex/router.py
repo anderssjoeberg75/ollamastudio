@@ -100,12 +100,13 @@ def classify_task(text="", labels=""):
     combined = f"{labels} {text}".lower()
 
     # 1. Pentest (Penetrationstestning mot nätverk och API:er)
-    # Verktygsnamn och entydiga termer (sv + en). "säkerhetstest" och
+    # Verktygsnamn och entydiga termer (sv + en). "säkerhetstest", "säkerhets test" och
     # "sårbarhetsskanning" avser aktiv testning – kod-/SAST-granskning fångas av
     # regel 2 nedan och ordnas efter denna.
     if re.search(r'\b(pentest\w*|penetration[ -]?test\w*|penetrationstest\w*|red[ -]?team\w*|'
                  r'nmap|nuclei|ffuf|sqlmap|nikto|active_scan|whiterabbit\w*|'
-                 r'säkerhetstest\w*|security[ -]?test\w*|sårbarhetsskann\w*|sårbarhetsscann\w*|'
+                 r'säkerhet[ -]?test\w*|säkerhets[ -]?test\w*|security[ -]?test\w*|'
+                 r'sårbarhetsskann\w*|sårbarhetsscann\w*|'
                  r'vuln\w*scan\w*|portskann\w*|port[ -]?scan\w*|recon\w*)\b', combined):
         return "pentest"
     # Aktiv testning = ett test-/skan-verb följt av ett WEBB-/NÄTVERKSMÅL (sajt, URL,
