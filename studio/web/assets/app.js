@@ -4390,6 +4390,8 @@ async function fixSingleIssue(repo, issueNumber, title) {
   }
 }
 
+let _lastFixTokens = {};
+
 async function pollIssueFix(fixId, repo, issueNumber, btn) {
   try {
     const r = await api(`/api/issue/fix/status/${fixId}`);
@@ -4397,6 +4399,14 @@ async function pollIssueFix(fixId, repo, issueNumber, btn) {
     const d = await r.json();
     const job = d.job;
     if (!job) return;
+
+    // Track tokens into Cumulative Saved vs Anthropic counter
+    const currentTok = job.tokens_used || 0;
+    const prevTok = _lastFixTokens[fixId] || 0;
+    if (currentTok > prevTok) {
+      addCumulativeTokens(currentTok - prevTok);
+      _lastFixTokens[fixId] = currentTok;
+    }
 
     if (btn) {
       btn.innerHTML = `<i class="ph ph-spinner ph-spin"></i> ${job.stage} (${job.progress}%)`;

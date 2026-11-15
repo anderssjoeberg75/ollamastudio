@@ -52,11 +52,16 @@ def init_fixer_db():
                 "stage TEXT DEFAULT 'init', "
                 "progress INTEGER DEFAULT 0, "
                 "test_passed INTEGER DEFAULT 0, "
+                "tokens_used INTEGER DEFAULT 0, "
                 "test_output TEXT DEFAULT '', "
                 "log TEXT DEFAULT '', "
                 "created_at REAL, "
                 "finished_at REAL)"
             )
+            try:
+                conn.execute("ALTER TABLE issue_fix_jobs ADD COLUMN tokens_used INTEGER DEFAULT 0")
+            except Exception:
+                pass
             conn.commit()
         finally:
             conn.close()
@@ -73,6 +78,7 @@ class IssueFixerRunner(threading.Thread):
         self.status = "running"
         self.stage = "init"
         self.progress = 0
+        self.tokens_used = 0
         self.log_lines = []
         self.test_passed = False
         self.test_output = ""
@@ -91,10 +97,10 @@ class IssueFixerRunner(threading.Thread):
                 conn.execute(
                     "UPDATE issue_fix_jobs SET "
                     "status = ?, stage = ?, progress = ?, "
-                    "test_passed = ?, test_output = ?, log = ? WHERE fix_id = ?",
+                    "test_passed = ?, tokens_used = ?, test_output = ?, log = ? WHERE fix_id = ?",
                     (
                         self.status, self.stage, self.progress,
-                        1 if self.test_passed else 0, self.test_output,
+                        1 if self.test_passed else 0, self.tokens_used, self.test_output,
                         "\n".join(self.log_lines), self.fix_id
                     )
                 )
@@ -192,6 +198,10 @@ class IssueFixerRunner(threading.Thread):
             try:
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     data = json.loads(resp.read().decode("utf-8", "replace"))
+                    tok_count = data.get("usage", {}).get("total_tokens", 0)
+                    if not tok_count:
+                        tok_count = (len(prompt) + 2000) // 4
+                    self.tokens_used += tok_count
                     raw_text = data["choices"][0]["message"]["content"]
                     match = re.search(r"```(?:\w+)?\n(.*?)```", raw_text, re.DOTALL)
                     if match:
@@ -270,6 +280,31 @@ class IssueFixerRunner(threading.Thread):
                 except Exception as e:
                     self._log(f"Gitleaks note: {e}")
 
+            # E. Cloudflare Vuln Harness Verification (VDH & VVS) på den åtgärdade filen
+            if target_file and os.path.exists(os.path.join(repo_dir, target_file)):
+                try:
+                    self._log(f"Running Vulnerability Harness VDH & VVS test against patched file {target_file}...")
+                    from studio.harness.engine import VulnerabilityHarnessRunner
+                    vh_runner = VulnerabilityHarnessRunner(run_id=f"vh-fix-{self.fix_id[:6]}", project=self.repo, profile="quick")
+                    unit = {"unit_id": "unit-fix", "path": target_file, "attack_class": "Regression & Patch Verification"}
+                    candidates = vh_runner._execute_vdh_hunting(repo_dir, [unit])
+                    self.tokens_used += getattr(vh_runner, "tokens_used", 0)
+                    if candidates:
+                        confirmed, rejected = vh_runner._execute_vvs_validation(repo_dir, candidates)
+                        self.tokens_used += getattr(vh_runner, "tokens_used", 0)
+                        if confirmed:
+                            self._log(f"Vuln Harness: {len(confirmed)} remaining issues detected in patched code!")
+                            test_results.append(f"Vuln Harness Verification: {len(confirmed)} active vulnerabilities remain")
+                            passed_tests = False
+                        else:
+                            self._log("Vuln Harness: All candidates eliminated by adversarial VVS. Clean!")
+                            test_results.append("Vuln Harness Verification: CLEAN (0 confirmed vulnerabilities)")
+                    else:
+                        self._log("Vuln Harness: 0 vulnerability candidates found in patched file. Clean!")
+                        test_results.append("Vuln Harness Verification: CLEAN (0 vulnerabilities detected)")
+                except Exception as e:
+                    self._log(f"Vuln Harness verification note: {e}")
+
             self.test_output = "\n".join(test_results)
             self.test_passed = passed_tests
 
@@ -347,7 +382,7 @@ def get_issue_fix_status(fix_id):
         try:
             cur = conn.execute(
                 "SELECT fix_id, repo, issue_number, issue_title, status, stage, progress, "
-                "test_passed, test_output, log, created_at, finished_at "
+                "test_passed, tokens_used, test_output, log, created_at, finished_at "
                 "FROM issue_fix_jobs WHERE fix_id = ?",
                 (fix_id,)
             )
@@ -363,10 +398,12 @@ def get_issue_fix_status(fix_id):
                 "stage": row[5],
                 "progress": row[6],
                 "test_passed": bool(row[7]),
-                "test_output": row[8],
-                "log": row[9],
-                "created_at": row[10],
-                "finished_at": row[11]
+                "tokens_used": row[8] or 0,
+                "test_output": row[9],
+                "log": row[10],
+                "created_at": row[11],
+                "finished_at": row[12]
             }
         finally:
             conn.close()
+
