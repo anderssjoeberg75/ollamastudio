@@ -137,6 +137,15 @@ class TestModelRouter(unittest.TestCase):
             )
             self.assertEqual(res["model"], "llama3.2:latest")
 
+    def test_needs_security_system_prompt(self):
+        from studio.codex.router import needs_security_system_prompt
+        self.assertTrue(needs_security_system_prompt(model="whiterabbitneo", text="hej"))
+        self.assertTrue(needs_security_system_prompt(model="WhiteRabbitNeo-13B", text="hej"))
+        self.assertTrue(needs_security_system_prompt(model="gemma4:12b", text="kör pentest mot https://example.com"))
+        self.assertTrue(needs_security_system_prompt(model="gemma4:12b", text="kör säkerhets test mot app.roburformaai.app"))
+        self.assertFalse(needs_security_system_prompt(model="gemma4:12b", text="skriv en python funktion"))
+        self.assertFalse(needs_security_system_prompt(model="claude", text="granska koden för sårbarheter"))
+
     def test_model_matrix_structure(self):
         matrix = get_model_matrix()
         self.assertIn("antigravity:claude-sonnet-5-5-medium", matrix)

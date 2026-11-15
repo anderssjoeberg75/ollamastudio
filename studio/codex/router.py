@@ -151,6 +151,19 @@ def classify_task(text="", labels=""):
     return "general"
 
 
+def needs_security_system_prompt(model: str = "", text: str = "") -> bool:
+    """Avgör om en förfrågan kräver WhiteRabbitNeo / säkerhetssystemprompt i chatt/agent-vägen.
+    
+    Aktiveras om modellnamnet refererar till WhiteRabbitNeo eller om uppgiften klassificeras
+    som ett säkerhets-/penetrationstest (kategori 'test').
+    """
+    if "whiterabbit" in str(model).lower():
+        return True
+    if text and classify_task(text) == "test":
+        return True
+    return False
+
+
 TASK_RECOMMENDATIONS = {
     "test": {"agent": "openclaw-redteam", "skill": "openclaw-redteam"},
     "security": {"agent": "security-reviewer", "skill": "security-review"},

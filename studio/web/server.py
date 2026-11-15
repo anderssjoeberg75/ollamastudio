@@ -625,11 +625,26 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             opts = opts if isinstance(opts, dict) and opts else None
             # Välj backend (GPU-instans) att köra chatten på
             backend_choice = data.get("backend")
-            if not backend_choice and "whiterabbit" in model.lower():
+            last_user_text = self._last_user_text(messages)
+            from studio.codex.router import needs_security_system_prompt
+            is_sec_task = needs_security_system_prompt(model, last_user_text)
+
+            if not backend_choice and is_sec_task:
                 from studio.backends import select_optimal_backend
                 base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
+                if "whiterabbit" not in model.lower():
+                    model = "whiterabbitneo"
             else:
                 base = backend_url(backend_choice)
+
+            # Om WhiteRabbitNeo eller säkerhetstest körs i chatten: injicera säkerhetssystemprompt
+            # om användaren inte redan skickat en egen systemprompt
+            if is_sec_task:
+                has_sys = any(isinstance(m, dict) and m.get("role") == "system" for m in messages)
+                if not has_sys:
+                    from studio.codex.protocol import whiterabbit_chat_system_prompt
+                    messages = [{"role": "system", "content": whiterabbit_chat_system_prompt()}] + messages
+
             # Vad är klockan? Modellen vet inte – tala om det (först i listan, så
             # den ligger kvar även när minne och sökträffar läggs till).
             if chat_time_enabled():
