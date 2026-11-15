@@ -95,4 +95,22 @@ def prune_convo(convo, budget):
         target = max(600, len(cur) - over)
         if target < len(cur):
             msg["content"] = cap_tool_result(cur, target)
+
+    # Steg 3: om konversationen fortfarande överskrider budgeten (t.ex. vid många upprepade användarprompter
+    # eller lång assistenthistorik): beskär äldre meddelanden bakifrån för att skydda modellens kontextfönster.
+    # Systemprompten (out[0]) och det allra sista meddelandet lämnas alltid intakta.
+    if total() > budget and len(out) > 2:
+        system_msg = out[0]
+        convo_tail = out[1:]
+        while len(convo_tail) > 1 and total() > budget:
+            convo_tail.pop(0)
+            out = [system_msg] + convo_tail
+        if total() > budget and convo_tail:
+            last = convo_tail[-1]
+            last_content = str(last.get("content") or "")
+            sys_len = len(str(system_msg.get("content") or ""))
+            avail = max(1000, budget - sys_len - 200)
+            if len(last_content) > avail:
+                last["content"] = cap_tool_result(last_content, avail)
+            out = [system_msg] + convo_tail
     return out
