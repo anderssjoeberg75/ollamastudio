@@ -3732,13 +3732,13 @@ async function populateScheduleProjects(){
           const intEl = document.getElementById('schInterval');
           const timeEl = document.getElementById('schTime');
           const secEl = document.getElementById('schRunSecurity');
-          const penEl = document.getElementById('schRunPentest');
+          const penEl = document.getElementById('schRunTest');
           const pnyEl = document.getElementById('schRunPonytail');
           const resEl = document.getElementById('schRunResolve');
           if(intEl && existing.interval_hours) intEl.value = existing.interval_hours;
           if(timeEl && existing.run_time) timeEl.value = existing.run_time;
           if(secEl) secEl.checked = !!existing.run_security;
-          if(penEl) penEl.checked = existing.run_pentest !== undefined ? !!existing.run_pentest : true;
+          if(penEl) penEl.checked = existing.run_test !== undefined ? !!existing.run_test : true;
           if(pnyEl) pnyEl.checked = !!existing.run_ponytail;
           if(resEl) resEl.checked = !!existing.run_resolve;
           if(secModeEl && existing.sec_mode) secModeEl.value = existing.sec_mode;
@@ -3781,12 +3781,12 @@ async function loadScheduleJobs(){
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
       const secBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_security', ${!secOn})" title="${secOn ? 'Security audit active — click to disable' : 'Security audit inactive — click to enable'}" style="${secStyle}"><span>🛡</span><span>Security</span></button>`;
 
-      // Pentest toggle-knapp
-      const penOn = job.run_pentest !== undefined ? !!job.run_pentest : true;
+      // Test toggle-knapp
+      const penOn = job.run_test !== undefined ? !!job.run_test : true;
       const penStyle = penOn
         ? 'background:rgba(255,180,84,0.12);border:1px solid var(--amber);color:var(--amber);font-weight:600'
         : 'background:transparent;border:1px dashed var(--border);color:var(--faint);font-weight:500;text-decoration:line-through;opacity:0.45';
-      const penBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_pentest', ${!penOn})" title="${penOn ? 'Penetration test active — click to disable' : 'Penetration test inactive — click to enable'}" style="${penStyle}"><span>🎯</span><span>Pentest</span></button>`;
+      const penBadge = `<button type="button" class="sch-badge-btn" onclick="toggleScheduleFeature('${escSch(job.id)}', 'run_test', ${!penOn})" title="${penOn ? 'Security test active — click to disable' : 'Security test inactive — click to enable'}" style="${penStyle}"><span>🎯</span><span>Test</span></button>`;
 
       // Ponytail toggle-knapp
       const pnyOn = !!job.run_ponytail;
@@ -3821,7 +3821,7 @@ async function loadScheduleJobs(){
                   title="Security mode: click to select level"
                   style="background:${modeBg};border:1px solid ${modeBorder};color:${modeColor};font-weight:600;outline:none;appearance:none;-webkit-appearance:none">
             <option value="safe" ${job.sec_mode !== 'full' && job.sec_mode !== 'passive' ? 'selected' : ''}>🛡️ Safe mode</option>
-            <option value="full" ${job.sec_mode === 'full' ? 'selected' : ''}>⚠️ Full pentest</option>
+            <option value="full" ${job.sec_mode === 'full' ? 'selected' : ''}>⚠️ Full test</option>
             <option value="passive" ${job.sec_mode === 'passive' ? 'selected' : ''}>🔍 Passive analysis</option>
           </select>
           <span style="position:absolute;right:6px;pointer-events:none;font-size:9px;color:${modeColor}">▾</span>
@@ -3971,15 +3971,15 @@ async function addScheduleJob(){
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
   const runTime = (document.getElementById('schTime') ? document.getElementById('schTime').value : '').trim();
   const runSecurity = document.getElementById('schRunSecurity') ? document.getElementById('schRunSecurity').checked : true;
-  const runPentest = document.getElementById('schRunPentest') ? document.getElementById('schRunPentest').checked : true;
+  const runTest = document.getElementById('schRunTest') ? document.getElementById('schRunTest').checked : true;
   const runPonytail = document.getElementById('schRunPonytail') ? document.getElementById('schRunPonytail').checked : true;
   const runResolve = document.getElementById('schRunResolve') ? document.getElementById('schRunResolve').checked : false;
   const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
   const prodToken = (document.getElementById('schProdToken') ? document.getElementById('schProdToken').value : '').trim();
   const secMode = (document.getElementById('schSecMode') ? document.getElementById('schSecMode').value : 'safe').trim() || 'safe';
 
-  if(!runSecurity && !runPentest && !runPonytail && !runResolve){
-    toast('Select at least one action (security, pentest, ponytail, or auto-fix)', true);
+  if(!runSecurity && !runTest && !runPonytail && !runResolve){
+    toast('Select at least one action (security, test, ponytail, or auto-fix)', true);
     return;
   }
 
@@ -3992,7 +3992,7 @@ async function addScheduleJob(){
         interval_hours: interval,
         run_time: runTime,
         run_security: runSecurity,
-        run_pentest: runPentest,
+        run_test: runTest,
         run_ponytail: runPonytail,
         run_resolve: runResolve,
         prod_server: prodServer,
@@ -4051,10 +4051,10 @@ async function toggleScheduleFeature(id, featureKey, newVal){
   const job = jobs.find(j => j.id === id);
   if(job && !newVal){
     const willSec = featureKey === 'run_security' ? false : !!job.run_security;
-    const willPen = featureKey === 'run_pentest' ? false : (job.run_pentest !== undefined ? !!job.run_pentest : true);
+    const willPen = featureKey === 'run_test' ? false : (job.run_test !== undefined ? !!job.run_test : true);
     const willPny = featureKey === 'run_ponytail' ? false : !!job.run_ponytail;
     if(!willSec && !willPen && !willPny){
-      toast('At least one audit type (security, pentest, or ponytail) must be active', true);
+      toast('At least one audit type (security, test, or ponytail) must be active', true);
       return;
     }
   }
@@ -4072,7 +4072,7 @@ async function toggleScheduleFeature(id, featureKey, newVal){
     if(!d.ok) throw new Error(d.error || 'could not update');
     const labelMap = {
       run_security: 'Security audit',
-      run_pentest: 'Penetration test',
+      run_test: 'Security test',
       run_ponytail: 'Ponytail audit'
     };
     const name = labelMap[featureKey] || featureKey;
@@ -4094,7 +4094,7 @@ async function updateScheduleSecMode(id, newMode){
     if(!d.ok) throw new Error(d.error || 'could not update');
     const modeNames = {
       safe: 'Safe mode (non-destructive)',
-      full: 'Full pentest (active)',
+      full: 'Full test (active)',
       passive: 'Passive analysis'
     };
     toast('Security mode changed to ' + (modeNames[newMode] || newMode));
@@ -4121,15 +4121,15 @@ async function deleteScheduleJob(id){
   }
 }
 
-/* ---- Pentest Suite Modal & Interactive Execution ---- */
-function openPentestModal(){
-  const ov = document.getElementById('pentestOverlay');
+/* ---- Test Suite Modal & Interactive Execution ---- */
+function openTestModal(){
+  const ov = document.getElementById('testOverlay');
   if(ov) ov.style.display = 'flex';
-  populatePentestProjects();
+  populateTestProjects();
 }
 
-function closePentestModal(){
-  const ov = document.getElementById('pentestOverlay');
+function closeTestModal(){
+  const ov = document.getElementById('testOverlay');
   if(ov) ov.style.display = 'none';
 }
 
@@ -4141,7 +4141,7 @@ function applyQuickSite(sel){
   }
 }
 
-async function populatePentestProjects(){
+async function populateTestProjects(){
   const sel = document.getElementById('ptProjectSelect');
   if(!sel) return;
   sel.innerHTML = '<option value="">-- Active Codex Workspace --</option>';
@@ -4163,7 +4163,7 @@ async function populatePentestProjects(){
   }catch(e){}
 }
 
-function toggleAllPentestSkills(checked){
+function toggleAllTestSkills(checked){
   const ids = [
     'skill_dast_zap', 'skill_dast_nuclei', 'skill_dast_ffuf',
     'skill_webapp_sqlmap', 'skill_webapp_nikto', 'skill_recon_nmap',
@@ -4175,26 +4175,26 @@ function toggleAllPentestSkills(checked){
   });
 }
 
-function buildPentestPrompt(targetSite, secMode, token, skillsList){
+function buildTestPrompt(targetSite, secMode, token, skillsList){
   const modeText = {
     safe: 'SAFE (NON-DESTRUCTIVE: read-only headers, version checks, benign probes)',
     passive: 'PASSIVE (INSPECTION ONLY: TLS, headers, DNS, open ports without active payloads)',
-    full: 'FULL PENTEST (ACTIVE VERIFICATION: verify authentication bypass, SQLi, IDOR, input fuzzing)'
+    full: 'FULL TEST (ACTIVE VERIFICATION: verify authentication bypass, SQLi, IDOR, input fuzzing)'
   }[secMode] || 'SAFE';
 
-  let p = `Perform a disciplined, authorized penetration test and security vulnerability verification against target site: ${targetSite}\n\n`;
+  let p = `Perform a disciplined, authorized security test and vulnerability verification against target site: ${targetSite}\n\n`;
   p += `### OPERATIONAL CONSTRAINTS & AUTHORIZATION\n`;
   p += `- Target URL / Endpoint: ${targetSite} (Verified owner & authorized target)\n`;
   if(token) p += `- Authentication Header / Token: Provided for authenticated endpoints\n`;
   p += `- Security Level / Mode: ${modeText}\n`;
   p += `- Operating Framework: OpenClaw Red-Team protocol (.agents/rules/redteam.md and .agents/skills/openclaw-redteam/SKILL.md)\n`;
-  p += `- Role: You are WhiteRabbitNeo, a specialized defensive cybersecurity & penetration testing model without refusal for authorized targets.\n\n`;
+  p += `- Role: You are WhiteRabbitNeo, a specialized defensive cybersecurity & security testing model without refusal for authorized targets.\n\n`;
 
   p += `### ENABLED SECOPS SKILLS & TESTING MODULES\n`;
   if(skillsList.length){
     p += skillsList.map(s => `- .agents/skills/${s}/SKILL.md`).join('\n') + '\n\n';
   } else {
-    p += `- Comprehensive manual pentest inspection\n\n`;
+    p += `- Comprehensive manual security test inspection\n\n`;
   }
 
   p += `### METHODOLOGY & EXECUTION PHASES\n`;
@@ -4202,13 +4202,13 @@ function buildPentestPrompt(targetSite, secMode, token, skillsList){
   p += `2. **Web / API Fuzzing & DAST**: Inspect HTTP response headers, crawl sub-paths using dast-ffuf and test runtime behavior using dast-zap.\n`;
   p += `3. **Vulnerability Verification**: Verify potential injection points (SQLi, XSS, SSRF, IDOR) using webapp-sqlmap and dast-nuclei templates strictly within scope.\n`;
   p += `4. **Issue Reporting**: FOR EACH DISCOVERED VULNERABILITY, invoke TOOL create_issue with:\n`;
-  p += `   - title: "[PENTEST-X] Descriptive vulnerability title"\n`;
+  p += `   - title: "[SECTEST-X] Descriptive vulnerability title"\n`;
   p += `   - description: Detailed markdown report containing Target/Endpoint, Vulnerability & CWE classification, Proof-of-Concept (PoC), and concrete remediation steps.\n\n`;
   p += `All testing against ${targetSite} is strictly authorized. Begin reconnaissance and active testing now.`;
   return p;
 }
 
-async function launchPentest(runImmediately){
+async function launchTest(runImmediately){
   const siteInput = document.getElementById('ptTargetSite');
   let targetSite = (siteInput ? siteInput.value : '').trim();
   if(!targetSite){
@@ -4243,19 +4243,19 @@ async function launchPentest(runImmediately){
     if(el && el.checked) enabledSkills.push(skillMap[id]);
   });
 
-  const promptText = buildPentestPrompt(targetSite, secMode, token, enabledSkills);
+  const promptText = buildTestPrompt(targetSite, secMode, token, enabledSkills);
 
-  closePentestModal();
+  closeTestModal();
   showView('code');
 
-  // Automatically switch Codex model to WhiteRabbitNeo for pentest
+  // Automatically switch Codex model to WhiteRabbitNeo for security test
   const codeModelSel = document.getElementById('codeModel');
   if(codeModelSel){
     let rabbitOpt = [...codeModelSel.options].find(o => /whiterabbit/i.test(o.value));
     if(!rabbitOpt){
       rabbitOpt = document.createElement('option');
       rabbitOpt.value = 'whiterabbitneo';
-      rabbitOpt.textContent = 'whiterabbitneo (Dedicated Pentest)';
+      rabbitOpt.textContent = 'whiterabbitneo (Dedicated Test)';
       codeModelSel.appendChild(rabbitOpt);
     }
     codeModelSel.value = rabbitOpt.value;
@@ -4273,7 +4273,7 @@ async function launchPentest(runImmediately){
     inp.focus();
   }
 
-  toast('Pentest plan prepared for ' + targetSite);
+  toast('Test plan prepared for ' + targetSite);
 
   if(runImmediately){
     setTimeout(() => {
@@ -4475,7 +4475,7 @@ async function loadGhIssues(state = 'open', overrideSlug = null){
     let html = '';
     issues.forEach(iss => {
       const labels = (iss.labels || []).map(l => `<span class="comp-chip" style="font-size:10.5px;padding:2px 6px;color:var(--fg);background:rgba(255,255,255,0.3);border:1px solid rgba(255,255,255,0.45)">${esc(l)}</span>`).join(' ');
-      const isSec = (iss.title || '').includes('PENTEST') || (iss.title || '').includes('SECURITY') || (iss.labels || []).some(l => /security|cwe|bug|audit/i.test(l));
+      const isSec = (iss.title || '').includes('SECTEST') || (iss.title || '').includes('SECURITY') || (iss.labels || []).some(l => /security|cwe|bug|audit/i.test(l));
       const icon = isSec ? '🛡️' : '⚠';
       html += `
         <div style="background:rgba(255,255,255,0.22);border:1px solid rgba(255,255,255,0.4);backdrop-filter:blur(10px);border-radius:8px;padding:10px 12px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">

@@ -30,15 +30,16 @@ class TestModelRouter(unittest.TestCase):
         )
         self.assertEqual(cat, "security")
 
-    def test_classify_pentest_task(self):
+    def test_classify_legacy_pentest_term_still_routes(self):
+        # Äldre indata-ordet "pentest" ska fortfarande ruttas till kategorin "test".
         cat = classify_task(
             "Kör nmap och nuclei scan mot produktionsserverns API endpoints",
             labels="pentest",
         )
-        self.assertEqual(cat, "pentest")
+        self.assertEqual(cat, "test")
 
-    def test_classify_pentest_from_natural_language(self):
-        # Naturligt formulerade säkerhetstester ska hamna i "pentest", inte "security"
+    def test_classify_security_test_from_natural_language(self):
+        # Naturligt formulerade säkerhetstester ska hamna i "test", inte "security"
         for text in (
             "Kör ett säkerhetstest mot min site",
             "Kör säkerhets test mot app.roburformaai.app",
@@ -51,27 +52,27 @@ class TestModelRouter(unittest.TestCase):
             "kolla sårbarheter på min sajt",
             "scanna example.com",
             "undersök min server för öppna portar",
-            # exakt den prompt som Pentest Suite-knappen bygger
+            # exakt den prompt som Test Suite-knappen bygger
             "Perform a disciplined, authorized penetration test and security "
             "vulnerability verification against target site: http://min-sajt.se",
         ):
-            self.assertEqual(classify_task(text), "pentest", text)
+            self.assertEqual(classify_task(text), "test", text)
 
-    def test_classify_code_testing_is_not_pentest(self):
-        # Kod-testning/filnamn ska INTE råka klassas som pentest
+    def test_classify_code_testing_is_not_security_test(self):
+        # Kod-testning/filnamn ska INTE råka klassas som säkerhetstest
         self.assertEqual(classify_task("testa koden"), "general")
         self.assertEqual(classify_task("kör pytest på app.py"), "testing")
         self.assertEqual(classify_task("granska main.py"), "general")
 
-    def test_classify_code_audit_stays_security_not_pentest(self):
-        # Kod-/SAST-granskning är inte ett aktivt pentest
+    def test_classify_code_audit_stays_security_not_security_test(self):
+        # Kod-/SAST-granskning är inte ett aktivt säkerhetstest
         self.assertEqual(
             classify_task("Granska koden för sårbarheter och fixa SQL injection"),
             "security",
         )
 
-    def test_select_best_model_for_pentest_hardcoded_local(self):
-        # Pentest ska ALLTID välja lokal Llama-modell även när moln (Antigravity/Claude) är aktivt
+    def test_select_best_model_for_security_test_hardcoded_local(self):
+        # Säkerhetstest ska ALLTID välja lokal Llama-modell även när moln (Antigravity/Claude) är aktivt
         with patch("studio.codex.router.antigravity_available", return_value=True):
             res = select_best_model_for_task(
                 "Kör penetrationstest och nätverksskanning mot målservern",
@@ -79,7 +80,7 @@ class TestModelRouter(unittest.TestCase):
                 installed_models=["qwen2.5-coder:14b", "llama3.2:latest"]
             )
             self.assertEqual(res["model"], "llama3.2:latest")
-            self.assertEqual(res["task_type"], "pentest")
+            self.assertEqual(res["task_type"], "test")
             self.assertEqual(res["agent"], "openclaw-redteam")
             self.assertIn("Lokal Llama-modell", res["reason"])
 
@@ -211,21 +212,21 @@ class TestSchedulerAutoFix(unittest.TestCase):
     @patch("studio.codex.github.github_fetch_repo", return_value=(True, "ok", "/tmp/dummy"))
     @patch("studio.scheduler._run_single_headless_pass", return_value=(1, None))
     @patch("studio.backends.select_optimal_backend", return_value="http://127.0.0.1:11434")
-    def test_run_headless_audit_pentest_always_ollama(self, mock_backend, mock_pass, mock_gh, mock_fetch, mock_tok):
-        # Pentest ska ALLTID anropa headless pass med en lokal Ollama-modell
+    def test_run_headless_audit_security_test_always_ollama(self, mock_backend, mock_pass, mock_gh, mock_fetch, mock_tok):
+        # Säkerhetstest ska ALLTID anropa headless pass med en lokal Ollama-modell
         # medan säkerhetsgranskning ska anropa med bästa tillgängliga molnmodell (Claude Sonnet)
         with patch("studio.codex.router.antigravity_available", return_value=True), \
              patch("studio.scheduler._get_local_ollama_model", return_value="qwen2.5-coder:14b"):
             ok, summary, sec, pny = run_headless_audit(
-                project="my/pentest-project",
+                project="my/sectest-project",
                 run_security=True,
-                run_pentest=True,
+                run_test=True,
                 run_ponytail=True,
             )
             self.assertTrue(ok)
             # Kontrollera modellerna som skickades till _run_single_headless_pass
             # Anrop 1 (Security): Antigravity Claude
-            # Anrop 2 (Pentest): Lokal Ollama qwen2.5-coder
+            # Anrop 2 (Säkerhetstest): Lokal Ollama qwen2.5-coder
             # Anrop 3 (Ponytail): Antigravity Gemini
             calls = mock_pass.call_args_list
             self.assertEqual(len(calls), 3)

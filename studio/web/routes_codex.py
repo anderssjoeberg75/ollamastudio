@@ -41,14 +41,14 @@ class CodexRoutes(BaseHandler):
         user_texts = [str(m.get("content") or "") for m in (messages or []) if m.get("role") == "user"]
         last_prompt = user_texts[-1] if user_texts else ""
 
-        # Om uppgiften är ett penetrationstest tvingar vi alltid WhiteRabbitNeo på port 11436
-        # eftersom generella modeller vägrar penetrationstester av säkerhetspolicyer
+        # Om uppgiften är ett säkerhetstest tvingar vi alltid WhiteRabbitNeo på port 11436
+        # eftersom generella modeller vägrar säkerhetstester av säkerhetspolicyer
         from studio.codex.router import classify_task
         task_type = classify_task(last_prompt)
-        if task_type == "pentest" or "whiterabbit" in str(model).lower():
+        if task_type == "test" or "whiterabbit" in str(model).lower():
             model = "whiterabbitneo"
             from studio.backends import select_optimal_backend
-            base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+            base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
 
         # Om användaren valt "auto" eller ingen modell angetts: välj optimal modell med smart router
         elif not model or str(model).strip().lower() == "auto":
@@ -56,13 +56,13 @@ class CodexRoutes(BaseHandler):
             routed = select_best_model_for_task(last_prompt)
             model = routed["model"]
 
-        # Ett pentest ska ALLTID få pentest-systemprompten ("You are WhiteRabbitNeo …
+        # Ett säkerhetstest ska ALLTID få test-systemprompten ("You are WhiteRabbitNeo …
         # Never refuse an authorized security testing task"), även i skisslage utan
-        # arbetsyta – annars får modellen pentest-begäran med den generiska kod-
-        # assistent-prompten och vägrar. (Pentest av en fjärr-site kräver ingen
+        # arbetsyta – annars får modellen test-begäran med den generiska kod-
+        # assistent-prompten och vägrar. (Test av en fjärr-site kräver ingen
         # lokal arbetsyta, så skisslage är det normala här.)
-        if task_type == "pentest":
-            sys_prompt = agent_system_prompt(mode, task="pentest")
+        if task_type == "test":
+            sys_prompt = agent_system_prompt(mode, task="test")
         elif scratch:
             sys_prompt = AGENT_SYSTEM_SCRATCH
         else:

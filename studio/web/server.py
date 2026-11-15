@@ -283,7 +283,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                         # och inte redan finns med i primärbackendens lista, hämta den
                         from studio.llama_bridge import llama_server_models
                         from studio.backends import select_optimal_backend
-                        wr_url = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+                        wr_url = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
                         if wr_url and wr_url != _backends.PRIMARY["url"]:
                             try:
                                 wr_models = llama_server_models(wr_url, timeout=1.5)
@@ -493,9 +493,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             last_prompt = user_texts[-1] if user_texts else ""
             task_type = classify_task(last_prompt)
 
-            if not backend_param and (task_type == "pentest" or "whiterabbit" in model.lower()):
+            if not backend_param and (task_type == "test" or "whiterabbit" in model.lower()):
                 from studio.backends import select_optimal_backend
-                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
             else:
                 base = backend_url(backend_param)
             return self._run_agent(model, messages, base)
@@ -627,7 +627,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             backend_choice = data.get("backend")
             if not backend_choice and "whiterabbit" in model.lower():
                 from studio.backends import select_optimal_backend
-                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="pentest")
+                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
             else:
                 base = backend_url(backend_choice)
             # Vad är klockan? Modellen vet inte – tala om det (först i listan, så

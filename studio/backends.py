@@ -106,10 +106,10 @@ def select_optimal_backend(preferred_url=None, task=None):
     """Väljer den mest optimala Ollama/llama-server backend/GPU-instansen som är tillgänglig.
 
     Prioriterar:
-    1. För pentest: Instans på port 11436 eller märkt med WhiteRabbitNeo/pentest.
+    1. För test: Instans på port 11436 eller märkt med WhiteRabbitNeo/test.
     2. För kod/chatt: Instanser på port 11434 (llama-server/gemma4) eller port 8080.
     3. Auto-upptäckt: om primär URL är port 11434, kontrolleras om port 8080 (llama-server),
-       11436 (pentest/WhiteRabbitNeo) eller 11435 finns på samma värd och är igång.
+       11436 (test/WhiteRabbitNeo) eller 11435 finns på samma värd och är igång.
     4. Faller tillbaka på primär backend om inget annat är tillgängligt.
     """
     g = globals()
@@ -118,9 +118,9 @@ def select_optimal_backend(preferred_url=None, task=None):
     if preferred_url and _backend_is_alive(preferred_url):
         return preferred_url
 
-    # Fail loud: a pentest task whose dedicated backend is down would otherwise be
+    # Fail loud: a security-test task whose dedicated backend is down would otherwise be
     # routed silently to a general model that refuses. Warn so the operator notices.
-    if task == "pentest":
+    if task == "test":
         log.warning(
             "WhiteRabbitNeo-backenden (%s) svarar inte – säkerhetstestet kan hamna "
             "hos en allmän modell som vägrar. Starta WhiteRabbitNeo på port 11436.",
@@ -138,7 +138,7 @@ def select_optimal_backend(preferred_url=None, task=None):
                 known_urls.add(u_llama)
             u_tuned = url.replace(":11434", ":11436")
             if u_tuned not in known_urls:
-                expanded.append({"label": "Pentest (WhiteRabbitNeo)", "url": u_tuned, "gpu": "1"})
+                expanded.append({"label": "WhiteRabbitNeo (Test)", "url": u_tuned, "gpu": "1"})
                 known_urls.add(u_tuned)
             u_gpu1 = url.replace(":11434", ":11435")
             if u_gpu1 not in known_urls:
@@ -153,9 +153,9 @@ def select_optimal_backend(preferred_url=None, task=None):
         gpu = str(b.get("gpu") or "")
         score = 0
 
-        if task == "pentest":
-            # WhiteRabbitNeo / Port 11436 prioriteras absolut högst för penetrationstest
-            if ":11436" in url or "whiterabbit" in label or "pentest" in label:
+        if task == "test":
+            # WhiteRabbitNeo / Port 11436 prioriteras absolut högst för säkerhetstest
+            if ":11436" in url or "whiterabbit" in label or "pentest" in label:  # "pentest" = äldre env-etikett (bakåtkomp.)
                 score += 3000
             elif ":8080" in url or "llama_server" in label:
                 score += 1000
@@ -167,7 +167,7 @@ def select_optimal_backend(preferred_url=None, task=None):
             # Llama Server (högsta prioritet när llama-server önskas framför ollama)
             if ":8080" in url or "llama_server" in label or "llama-server" in label or (label.startswith("llama") and not label.startswith("ollama")):
                 score += 1200
-            # Port 11436 / Pentest (WhiteRabbitNeo) / tuned GPU 1
+            # Port 11436 / Test (WhiteRabbitNeo) / tuned GPU 1
             elif ":11436" in url or "tuned" in label or "flash" in label or "pentest" in label or "whiterabbit" in label:
                 score += 1000
             # Port 11435 / GPU 1
