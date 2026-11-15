@@ -504,6 +504,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
             "  \"direct_entrypoint\": 0.8,\n"
             "  \"exploitation_feasibility\": 0.9,\n"
             "  \"calculated_confidence\": 0.88,\n"
+            "  \"cvss_vector\": \"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H\",\n"
             "  \"poc\": \"curl -X POST http://localhost:8080/api... -d '...'\",\n"
             "  \"reasoning\": \"Detailed adversarial assessment of why this is genuinely exploitable or why it is a false positive.\"\n"
             "}"
@@ -539,9 +540,24 @@ class VulnerabilityHarnessRunner(threading.Thread):
             if isinstance(parsed, dict) and parsed.get("poc"):
                 cand["poc"] = parsed.get("poc")
 
+            # Beräkna officiell CVSS v3.1 score och vektor deterministiskt
+            from .cvss_v31 import base_score, normalize_cwe
+            suggested_vec = parsed.get("cvss_vector") if isinstance(parsed, dict) else None
+            cvss_info = base_score(suggested_vec or "")
+            if not cvss_info:
+                # Default baseline baserad på severity om vektorn saknades eller var ogiltig
+                fallback_vec = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N" if cand.get("severity") in ("high", "critical") else "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:N"
+                cvss_info = base_score(fallback_vec) or {"vector": fallback_vec, "score": 7.5, "severity": "high"}
+            
+            cand["cvss"] = cvss_info
+            if cand.get("cwe"):
+                norm = normalize_cwe(cand.get("cwe"))
+                if norm:
+                    cand["cwe"] = f"{norm['id']} ({norm['name']})" if norm.get("name") else norm["id"]
+
             if verdict == "confirmed" and conf_score >= 0.70:
                 confirmed.append(cand)
-                self._log(f"✅ VVS CONFIRMED ({conf_score*100:.0f}% confidence): {cand.get('title')} ({cand.get('file')})")
+                self._log(f"✅ VVS CONFIRMED ({conf_score*100:.0f}% conf, CVSS {cvss_info['score']}): {cand.get('title')} ({cand.get('file')})")
             else:
                 reason = parsed.get("reasoning", "False positive during validation") if isinstance(parsed, dict) else "Rejected"
                 cand["rejection_reason"] = reason
@@ -598,9 +614,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 conf = c.get("vvs_validation", {}).get("calculated_confidence", 0.9)
                 poc = c.get("poc") or c.get("vvs_validation", {}).get("poc", "N/A")
                 s2s = c.get("source_to_sink", "N/A")
+                cvss_data = c.get("cvss", {})
+                cvss_str = f"{cvss_data.get('score', 7.5)} ({cvss_data.get('vector', 'N/A')})"
                 lines.extend([
                     f"### {c.get('title')} [{c.get('severity', 'high').upper()}]",
                     f"- **Location**: `{c.get('file')}:{c.get('line', 1)}` ({c.get('cwe', 'CWE')})",
+                    f"- **CVSS v3.1 Score**: `{cvss_str}`",
                     f"- **Confidence Score (AWS Formula)**: `{conf*100:.0f}%`",
                     f"- **Taint Flow (Source -> Sink)**: `{s2s}`",
                     f"- **Problem**: {c.get('problem')}",
@@ -626,9 +645,11 @@ class VulnerabilityHarnessRunner(threading.Thread):
             conf = c.get("vvs_validation", {}).get("calculated_confidence", 0.9)
             poc = c.get("poc") or c.get("vvs_validation", {}).get("poc", "N/A")
             s2s = c.get("source_to_sink", "N/A")
+            cvss_data = c.get("cvss", {})
             desc = (
                 f"### Cloudflare Vulnerability Harness Finding\n\n"
-                f"- **Severity**: {c.get('severity', 'high').upper()}\n"
+                f"- **Severity**: {c.get('severity', 'high').upper()} (CVSS v3.1: `{cvss_data.get('score', 'N/A')}`)\n"
+                f"- **CVSS Vector**: `{cvss_data.get('vector', 'N/A')}`\n"
                 f"- **Location**: `{c.get('file')}` (Line: {c.get('line', 1)})\n"
                 f"- **Classification**: {c.get('cwe', 'Security')}\n"
                 f"- **Calculated Confidence (AWS Steering Formula)**: `{conf*100:.0f}%`\n"
