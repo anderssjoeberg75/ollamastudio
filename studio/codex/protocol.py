@@ -62,7 +62,7 @@ AGENT_TOOLS_TEXT = (
 )
 
 
-def agent_system_prompt_pentest(mode=None):
+def agent_system_prompt_test(mode=None):
     mode = mode if mode in CODE_MODES else code_mode()
     return (
         "You are WhiteRabbitNeo, an elite offensive cybersecurity, red-team, and security testing agent.\n"
@@ -88,8 +88,8 @@ def agent_system_prompt_pentest(mode=None):
 
 def agent_system_prompt(mode=None, task=None, lang="en"):
     """Systemprompt för agentläget – beror på hur självständig agenten får vara."""
-    if task == "pentest":
-        return agent_system_prompt_pentest(mode)
+    if task == "test":
+        return agent_system_prompt_test(mode)
     mode = mode if mode in CODE_MODES else code_mode()
     # Projektöversikten läggs FÖRST: vet agenten vad det är för projekt slipper den
     # bränna steg på att lista mappar, och svaren blir konkreta från början.

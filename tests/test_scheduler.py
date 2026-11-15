@@ -41,7 +41,7 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(saved["project"], "anderssjoeberg75/ollamastudio")
         self.assertEqual(saved["interval_hours"], 24)
         self.assertTrue(saved["run_security"])
-        self.assertTrue(saved["run_pentest"])
+        self.assertTrue(saved["run_test"])
         self.assertTrue(saved["run_ponytail"])
         self.assertEqual(saved["sec_mode"], "safe")
         self.assertTrue(saved["enabled"])
@@ -50,7 +50,7 @@ class TestScheduler(unittest.TestCase):
         all_jobs = schedule_list()
         self.assertEqual(len(all_jobs), 1)
         self.assertEqual(all_jobs[0]["id"], saved["id"])
-        self.assertTrue(all_jobs[0]["run_pentest"])
+        self.assertTrue(all_jobs[0]["run_test"])
         self.assertEqual(all_jobs[0]["sec_mode"], "safe")
 
     def test_get_and_update_schedule(self):
@@ -58,7 +58,7 @@ class TestScheduler(unittest.TestCase):
             "project": "group/subgroup/project",
             "interval_hours": 12,
             "run_security": True,
-            "run_pentest": False,
+            "run_test": False,
             "run_ponytail": False,
             "sec_mode": "full"
         })
@@ -67,7 +67,7 @@ class TestScheduler(unittest.TestCase):
         fetched = schedule_get(jid)
         self.assertIsNotNone(fetched)
         self.assertEqual(fetched["project"], "group/subgroup/project")
-        self.assertFalse(fetched["run_pentest"])
+        self.assertFalse(fetched["run_test"])
         self.assertFalse(fetched["run_ponytail"])
         self.assertEqual(fetched["sec_mode"], "full")
 
@@ -77,14 +77,14 @@ class TestScheduler(unittest.TestCase):
             "project": "group/subgroup/project",
             "interval_hours": 48,
             "run_security": False,
-            "run_pentest": True,
+            "run_test": True,
             "run_ponytail": True,
             "sec_mode": "passive",
             "enabled": False
         })
         self.assertEqual(updated["interval_hours"], 48)
         self.assertFalse(updated["run_security"])
-        self.assertTrue(updated["run_pentest"])
+        self.assertTrue(updated["run_test"])
         self.assertTrue(updated["run_ponytail"])
         self.assertEqual(updated["sec_mode"], "passive")
         self.assertFalse(updated["enabled"])
@@ -113,7 +113,7 @@ class TestScheduler(unittest.TestCase):
         saved = schedule_save({
             "project": "org/toggle-app",
             "run_security": True,
-            "run_pentest": True,
+            "run_test": True,
             "run_ponytail": True,
             "sec_mode": "safe",
         })
@@ -122,23 +122,70 @@ class TestScheduler(unittest.TestCase):
         # Toggla enbart run_security till False
         up1 = schedule_save({"id": jid, "run_security": False})
         self.assertFalse(up1["run_security"])
-        self.assertTrue(up1["run_pentest"])
+        self.assertTrue(up1["run_test"])
         self.assertTrue(up1["run_ponytail"])
         self.assertEqual(up1["sec_mode"], "safe")
 
         # Toggla enbart sec_mode till full
         up2 = schedule_save({"id": jid, "sec_mode": "full"})
         self.assertFalse(up2["run_security"])
-        self.assertTrue(up2["run_pentest"])
+        self.assertTrue(up2["run_test"])
         self.assertTrue(up2["run_ponytail"])
         self.assertEqual(up2["sec_mode"], "full")
 
-        # Toggla enbart run_security tillbaka till True och run_pentest till False
-        up3 = schedule_save({"id": jid, "run_security": True, "run_pentest": False})
+        # Toggla enbart run_security tillbaka till True och run_test till False
+        up3 = schedule_save({"id": jid, "run_security": True, "run_test": False})
         self.assertTrue(up3["run_security"])
-        self.assertFalse(up3["run_pentest"])
+        self.assertFalse(up3["run_test"])
         self.assertTrue(up3["run_ponytail"])
         self.assertEqual(up3["sec_mode"], "full")
+
+    def test_legacy_run_pentest_payload_still_accepted(self):
+        # Bakåtkompatibilitet: äldre API-anrop skickar run_pentest. Det ska tolkas
+        # som run_test så att gamla klienter/integrationer fortsätter fungera.
+        saved = schedule_save({
+            "project": "org/legacy-client",
+            "run_pentest": False,
+        })
+        self.assertFalse(saved["run_test"])
+        self.assertNotIn("run_pentest", saved)
+
+    def test_db_migrates_old_run_pentest_column(self):
+        # En gammal databas med kolumnen run_pentest (och värden) ska migreras till
+        # run_test med bevarade på/av-val när scheduler_db_init körs.
+        import sqlite3
+        conn = sqlite3.connect(config.DB_PATH)
+        try:
+            conn.execute("DROP TABLE IF EXISTS schedules")
+            conn.execute(
+                "CREATE TABLE schedules (id TEXT PRIMARY KEY, project TEXT NOT NULL, "
+                "branch TEXT DEFAULT '', run_security INTEGER DEFAULT 1, "
+                "run_ponytail INTEGER DEFAULT 1, interval_hours INTEGER DEFAULT 24, "
+                "next_run REAL DEFAULT 0, last_run REAL DEFAULT 0, last_status TEXT DEFAULT '', "
+                "enabled INTEGER DEFAULT 1, prod_server TEXT DEFAULT '', prod_token TEXT DEFAULT '', "
+                "run_time TEXT DEFAULT '', run_pentest INTEGER DEFAULT 1, "
+                "sec_mode TEXT DEFAULT 'safe', run_resolve INTEGER DEFAULT 0)"
+            )
+            conn.execute(
+                "INSERT INTO schedules(id, project, run_pentest) VALUES(?, ?, ?)",
+                ("legacy1", "org/old-repo", 0))
+            conn.commit()
+        finally:
+            conn.close()
+
+        scheduler_db_init()  # ska byta namn på kolumnen, inte tappa data
+
+        conn = sqlite3.connect(config.DB_PATH)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(schedules)")}
+        finally:
+            conn.close()
+        self.assertIn("run_test", cols)
+        self.assertNotIn("run_pentest", cols)
+
+        fetched = schedule_get("legacy1")
+        self.assertIsNotNone(fetched)
+        self.assertFalse(fetched["run_test"])  # det gamla run_pentest=0 bevarades
 
     def test_delete_schedule(self):
         saved = schedule_save({

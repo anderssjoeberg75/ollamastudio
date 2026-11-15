@@ -4,7 +4,7 @@ Väljer automatiskt den mest optimala modellen för varje given uppgift baserat 
 modellernas specifika styrkor:
 - Claude (via Antigravity): Kritiska säkerhetsfixar, avancerad refaktorisering, djup arkitektur
 - Gemini (via Antigravity): Blixtsnabba åtgärder, enhetstester, linter/kodstil, stora kontexter
-- Lokala Llama-modeller (Llama-server / Ollama): 100% lokal integritet, kodning, ponytail-förenklingar, pentest, offline
+- Lokala Llama-modeller (Llama-server / Ollama): 100% lokal integritet, kodning, ponytail-förenklingar, säkerhetstest, offline
 """
 import re
 
@@ -44,15 +44,15 @@ MODEL_MATRIX = {
         "name": "Llama 3.2 (Lokal)",
         "provider": "llama",
         "tier": "local_coding",
-        "strengths": ["lokal integritet", "syntax", "kodning", "linters", "offline", "pentest", "förenkling"],
-        "best_for": ["offline", "local_coding", "syntax", "pentest", "yagni_prune", "simple_cleanup", "ponytail_cleanup"]
+        "strengths": ["lokal integritet", "syntax", "kodning", "linters", "offline", "test", "förenkling"],
+        "best_for": ["offline", "local_coding", "syntax", "test", "yagni_prune", "simple_cleanup", "ponytail_cleanup"]
     },
     "llama3.1": {
         "name": "Llama 3.1 (Lokal)",
         "provider": "llama",
         "tier": "local_coding",
-        "strengths": ["avancerad kodning", "flerfilsanalys", "större kontext", "pentest"],
-        "best_for": ["local_coding", "pentest", "offline", "complex_refactor"]
+        "strengths": ["avancerad kodning", "flerfilsanalys", "större kontext", "test"],
+        "best_for": ["local_coding", "test", "offline", "complex_refactor"]
     },
     "codellama": {
         "name": "Code Llama (Lokal)",
@@ -65,22 +65,22 @@ MODEL_MATRIX = {
         "name": "Qwen 2.5 Coder (Lokal)",
         "provider": "ollama",
         "tier": "local_coding",
-        "strengths": ["lokal integritet", "syntax", "funktioner", "linters", "offline", "pentest"],
-        "best_for": ["offline", "local_coding", "syntax", "ponytail_cleanup", "pentest"]
+        "strengths": ["lokal integritet", "syntax", "funktioner", "linters", "offline", "test"],
+        "best_for": ["offline", "local_coding", "syntax", "ponytail_cleanup", "test"]
     },
     "deepseek-r1": {
         "name": "DeepSeek-R1 (Lokal)",
         "provider": "ollama",
         "tier": "local_reasoning",
-        "strengths": ["algoritmer", "matematik", "logiska felresonemang", "pentest"],
-        "best_for": ["algorithms", "math", "logical_bug", "pentest"]
+        "strengths": ["algoritmer", "matematik", "logiska felresonemang", "test"],
+        "best_for": ["algorithms", "math", "logical_bug", "test"]
     },
     "whiterabbitneo": {
-        "name": "WhiteRabbitNeo V3 7B (Lokal Pentest)",
+        "name": "WhiteRabbitNeo V3 7B (Lokal Test)",
         "provider": "llama",
-        "tier": "local_pentest",
-        "strengths": ["penetrationstest", "red team", "sårbarhetsanalys", "PoC-exploits", "100% lokal", "inga säkerhetsvägran"],
-        "best_for": ["pentest", "redteam", "security_audit", "vulnerability_scan"]
+        "tier": "local_test",
+        "strengths": ["säkerhetstest", "red team", "sårbarhetsanalys", "PoC-exploits", "100% lokal", "inga säkerhetsvägran"],
+        "best_for": ["test", "redteam", "security_audit", "vulnerability_scan"]
     }
 }
 
@@ -89,7 +89,7 @@ def classify_task(text="", labels=""):
     """Klassificerar en uppgift eller ett fynd till en uppgiftstyp.
 
     Typer:
-    - 'pentest': Nätverksskanning, endpoints, API-pentest (alltid lokal Ollama)
+    - 'säkerhetstest': Nätverksskanning, endpoints, API-säkerhetstest (alltid lokal Ollama)
     - 'security': Sårbarheter, CVE, auth, tokens, injektioner, säkerhetsgranskning
     - 'refactor_complex': Större arkitektoniska förändringar, omstrukturering
     - 'ponytail': Förenkling, död kod, ta bort överarbetning, YAGNI
@@ -99,19 +99,22 @@ def classify_task(text="", labels=""):
     """
     combined = f"{labels} {text}".lower()
 
-    # 1. Pentest (Penetrationstestning mot nätverk och API:er)
+    # 1. Säkerhetstest (Säkerhetstestning mot nätverk och API:er)
     # Verktygsnamn och entydiga termer (sv + en). "säkerhetstest", "säkerhets test" och
     # "sårbarhetsskanning" avser aktiv testning – kod-/SAST-granskning fångas av
     # regel 2 nedan och ordnas efter denna.
+    # OBS: regexen nedan behåller äldre synonymer (pentest/penetrationstest/red team)
+    # som INDATA att känna igen så att gamla scheman och fritext fortsatt ruttas rätt –
+    # kategorin som returneras heter numera "test".
     if re.search(r'\b(pentest\w*|penetration[ -]?test\w*|penetrationstest\w*|red[ -]?team\w*|'
                  r'nmap|nuclei|ffuf|sqlmap|nikto|active_scan|whiterabbit\w*|'
                  r'säkerhet[ -]?test\w*|säkerhets[ -]?test\w*|security[ -]?test\w*|'
                  r'sårbarhetsskann\w*|sårbarhetsscann\w*|'
                  r'vuln\w*scan\w*|portskann\w*|port[ -]?scan\w*|recon\w*)\b', combined):
-        return "pentest"
+        return "test"
     # Aktiv testning = ett test-/skan-verb följt av ett WEBB-/NÄTVERKSMÅL (sajt, URL,
     # domän, server, endpoint, en http(s)-adress ...). Det är målet som skiljer ett
-    # pentest ("testa min sajt", "kolla sårbarheter på example.com") från kod-/SAST-
+    # säkerhetstest ("testa min sajt", "kolla sårbarheter på example.com") från kod-/SAST-
     # granskning ("testa koden", "granska sårbarheter i koden") – där finns inget
     # webbmål, så de faller vidare till regel 2 (security) nedan.
     _verb = (r'(skanna\w*|scanna\w*|scan\w*|testa\w*|test\w*|kolla\w*|granska\w*|'
@@ -123,7 +126,7 @@ def classify_task(text="", labels=""):
                r'[a-z0-9-]+\.(?:com|se|net|org|io|dev|ai|co|app|nu|eu|de|uk|info|biz|'
                r'gov|edu|mil|xyz|tech|site|online|cloud))')
     if re.search(r'\b' + _verb + r'\b[^.\n]*\b' + _target, combined):
-        return "pentest"
+        return "test"
 
     # 2. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)
     if re.search(r'\b(sec|security|sårbarhet|vulnerability|cve|cwe|owasp|injection|sql|xss|ssrf|csrf|auth|token|jwt|leak|crypto|password|secret)\b', combined):
@@ -149,7 +152,7 @@ def classify_task(text="", labels=""):
 
 
 TASK_RECOMMENDATIONS = {
-    "pentest": {"agent": "openclaw-redteam", "skill": "openclaw-redteam"},
+    "test": {"agent": "openclaw-redteam", "skill": "openclaw-redteam"},
     "security": {"agent": "security-reviewer", "skill": "security-review"},
     "refactor_complex": {"agent": "architect", "skill": "hexagonal-architecture"},
     "testing": {"agent": "tdd-guide", "skill": "tdd-workflow"},
@@ -205,27 +208,27 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
     default_local = local_candidate or "llama3.2"
 
     # REGELVERK:
-    # 0. Pentest: HÅRDKODAT TILL LOKAL MODELL – WHITERABBITNEO PRIORITERAS ALLTID
-    # Molnmodeller (Claude, Gemini etc.) blockerar eller vägrar penetrationstester
-    # p.g.a. leverantörernas policyer. WhiteRabbitNeo är specialtränad utan säkerhetsvägran för pentester.
-    if task_type == "pentest":
-        pentest_m = None
+    # 0. Säkerhetstest: HÅRDKODAT TILL LOKAL MODELL – WHITERABBITNEO PRIORITERAS ALLTID
+    # Molnmodeller (Claude, Gemini etc.) blockerar eller vägrar säkerhetstester
+    # p.g.a. leverantörernas policyer. WhiteRabbitNeo är specialtränad utan säkerhetsvägran för säkerhetstester.
+    if task_type == "test":
+        test_m = None
         for m in (installed_names or []):
             if "whiterabbit" in m.lower():
-                pentest_m = m
+                test_m = m
                 break
-        if not pentest_m:
+        if not test_m:
             # WhiteRabbitNeo är inte installerad: fall tillbaka till en installerad
             # lokal modell i stället för att peka på en modell som inte finns (vilket
             # tyst skulle misslyckas vid körning).
-            pentest_m = default_local
+            test_m = default_local
         reason = (
-            "WhiteRabbitNeo vald för penetrationstest (specialiserad för offensive security och utan begränsande säkerhetsfilter)."
-            if "whiterabbit" in pentest_m.lower() else
-            "Lokal Llama-modell hårdkodad för penetrationstest (molnmodeller blockerar pentester p.g.a. policy)."
+            "WhiteRabbitNeo vald för säkerhetstest (specialiserad för offensive security och utan begränsande säkerhetsfilter)."
+            if "whiterabbit" in test_m.lower() else
+            "Lokal Llama-modell hårdkodad för säkerhetstest (molnmodeller blockerar säkerhetstester p.g.a. policy)."
         )
         return _decorate({
-            "model": pentest_m,
+            "model": test_m,
             "reason": reason,
             "task_type": task_type
         }, task_type)

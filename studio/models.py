@@ -209,8 +209,8 @@ def select_optimal_model(models, task="code"):
     def _score(name):
         n = name.lower()
         score = 0
-        if task == "pentest":
-            # WhiteRabbitNeo är specialtränad för penetrationstest och offensiv cybersäkerhet
+        if task == "test":
+            # WhiteRabbitNeo är specialtränad för säkerhetstest och offensiv cybersäkerhet
             if any(k in n for k in ("whiterabbitneo", "whiterabbit", "white-rabbit")):
                 score += 3000
             elif any(k in n for k in ("redteam", "secops", "cyber", "hacker")):

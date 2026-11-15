@@ -50,8 +50,8 @@
           <span class="sp-left"><i class="ph ph-github-logo"></i> <span>GitHub</span></span>
           <span class="sp-badge">repos</span>
         </button>
-        <button class="session-pill" id="nav-pentest" onclick="openPentestModal()" title="Run interactive red-team penetration test with WhiteRabbitNeo">
-          <span class="sp-left"><i class="ph ph-shield-warning" style="color:#a855f7"></i> <span>Pentest Suite</span></span>
+        <button class="session-pill" id="nav-test" onclick="openTestModal()" title="Run interactive security test with WhiteRabbitNeo">
+          <span class="sp-left"><i class="ph ph-shield-warning" style="color:#a855f7"></i> <span>Test Suite</span></span>
           <span class="sp-badge" style="color:#a855f7">redteam</span>
         </button>
         <button class="session-pill" id="nav-train" onclick="showView('train')">
@@ -362,7 +362,7 @@
               <select id="codeModel"></select>
               <button class="btn ghost small" onclick="clearCode()" title="workspace files are not touched">🧹 Clear log (workspace files are not touched)</button>
               <button class="btn accent small" onclick="runSecurityAudit()">🛡 Security review</button>
-              <button class="btn accent small" onclick="openPentestModal()" style="background:#7c3aed;border-color:#7c3aed">🎯 Pentest suite</button>
+              <button class="btn accent small" onclick="openTestModal()" style="background:#7c3aed;border-color:#7c3aed">🎯 Test suite</button>
               <button class="btn ghost small" onclick="runPonytailAudit()">✂ Ponytail audit</button>
             </div>
             <div class="chat-input" style="display:flex;gap:8px;margin-top:8px">
@@ -640,7 +640,7 @@
           <label style="display:block;font-size:12px;color:var(--subtle);margin-bottom:4px">Test mode / Security level</label>
           <select id="schSecMode" style="width:100%;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font-size:13px">
             <option value="safe" selected>🛡️ Safe (non-destructive)</option>
-            <option value="full">⚠️ Full pentest</option>
+            <option value="full">⚠️ Full test</option>
             <option value="passive">🔍 Passive analysis</option>
           </select>
         </div>
@@ -654,8 +654,8 @@
             🛡 Security review
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="checkbox" id="schRunPentest" checked style="accent-color:var(--accent)">
-            🎯 Penetration test (Pentest)
+            <input type="checkbox" id="schRunTest" checked style="accent-color:var(--accent)">
+            🎯 Security test
           </label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="checkbox" id="schRunPonytail" checked style="accent-color:var(--accent)">
@@ -690,18 +690,18 @@
 </div>
 
 <!-- ============================================================
-     PENTEST SUITE MODAL & TARGET SELECTOR
+     TEST SUITE MODAL & TARGET SELECTOR
      ============================================================ -->
-<div class="overlay" id="pentestOverlay" style="display:none">
+<div class="overlay" id="testOverlay" style="display:none">
   <div class="modal" style="max-width:760px;width:95%;max-height:92vh;overflow-y:auto;border-radius:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h3 style="margin:0;display:flex;align-items:center;gap:8px;color:#a855f7">
-        <i class="ph-bold ph-shield-warning"></i> Pentest Suite &amp; Red-Team Testing
+        <i class="ph-bold ph-shield-warning"></i> Test Suite &amp; Security Testing
       </h3>
-      <button class="btn ghost small" onclick="closePentestModal()" style="font-size:16px;line-height:1;padding:4px 8px">✕</button>
+      <button class="btn ghost small" onclick="closeTestModal()" style="font-size:16px;line-height:1;padding:4px 8px">✕</button>
     </div>
     <p style="color:var(--subtle);font-size:13px;margin:0 0 16px;line-height:1.5">
-      Select the target site/URL, attack vectors, and specialized SecOps skills. Penetration testing executes via local <b>WhiteRabbitNeo</b> on port 11436 with disciplined command logging according to <code>.agents/rules/redteam.md</code>.
+      Select the target site/URL, attack vectors, and specialized SecOps skills. Security testing executes via local <b>WhiteRabbitNeo</b> on port 11436 with disciplined command logging according to <code>.agents/rules/redteam.md</code>.
     </p>
 
     <!-- Target Site Selection Box -->
@@ -743,7 +743,7 @@
           <select id="ptSecMode" style="width:100%;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--fg)">
             <option value="safe" selected>🛡️ Safe (Non-destructive, read-only tests)</option>
             <option value="passive">🔍 Passive Analysis (Headers, TLS, Open Ports)</option>
-            <option value="full">⚠️ Full Pentest (Active Injection &amp; Exploitation PoC)</option>
+            <option value="full">⚠️ Full Test (Active Injection &amp; Exploitation PoC)</option>
           </select>
         </div>
       </div>
@@ -756,8 +756,8 @@
           <i class="ph ph-lightning" style="color:#a855f7"></i> <span>2. Enabled SecOps Skills &amp; Testing Modules</span>
         </div>
         <div style="display:flex;gap:8px">
-          <button class="btn ghost small" type="button" onclick="toggleAllPentestSkills(true)" style="font-size:11px;padding:2px 8px">Select all</button>
-          <button class="btn ghost small" type="button" onclick="toggleAllPentestSkills(false)" style="font-size:11px;padding:2px 8px">Clear</button>
+          <button class="btn ghost small" type="button" onclick="toggleAllTestSkills(true)" style="font-size:11px;padding:2px 8px">Select all</button>
+          <button class="btn ghost small" type="button" onclick="toggleAllTestSkills(false)" style="font-size:11px;padding:2px 8px">Clear</button>
         </div>
       </div>
 
@@ -841,11 +841,11 @@
 
     <!-- Action buttons -->
     <div style="display:flex;justify-content:space-between;align-items:center">
-      <button class="btn ghost" onclick="closePentestModal()">Cancel</button>
+      <button class="btn ghost" onclick="closeTestModal()">Cancel</button>
       <div style="display:flex;gap:8px">
-        <button class="btn ghost" onclick="launchPentest(false)"><i class="ph ph-chat-text"></i> Send to Codex IDE</button>
-        <button class="btn accent" onclick="launchPentest(true)" style="background:#7c3aed;border-color:#7c3aed">
-          <i class="ph-bold ph-play"></i> Run Pentest Now
+        <button class="btn ghost" onclick="launchTest(false)"><i class="ph ph-chat-text"></i> Send to Codex IDE</button>
+        <button class="btn accent" onclick="launchTest(true)" style="background:#7c3aed;border-color:#7c3aed">
+          <i class="ph-bold ph-play"></i> Run Test Now
         </button>
       </div>
     </div>

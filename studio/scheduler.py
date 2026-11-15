@@ -136,11 +136,11 @@ def scheduler_db_init():
                 "prod_server TEXT DEFAULT '', "
                 "prod_token TEXT DEFAULT '', "
                 "run_time TEXT DEFAULT '', "
-                "run_pentest INTEGER DEFAULT 1, "
+                "run_test INTEGER DEFAULT 1, "
                 "sec_mode TEXT DEFAULT 'safe', "
                 "run_resolve INTEGER DEFAULT 0)"
             )
-            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_pentest/sec_mode/run_resolve
+            # Migrera om schedules-tabellen redan fanns utan prod_server/prod_token/run_time/run_test/sec_mode/run_resolve
             cur = conn.execute("PRAGMA table_info(schedules)")
             existing_cols = {row[1] for row in cur.fetchall()}
             if "prod_server" not in existing_cols:
@@ -149,8 +149,13 @@ def scheduler_db_init():
                 conn.execute("ALTER TABLE schedules ADD COLUMN prod_token TEXT DEFAULT ''")
             if "run_time" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN run_time TEXT DEFAULT ''")
-            if "run_pentest" not in existing_cols:
-                conn.execute("ALTER TABLE schedules ADD COLUMN run_pentest INTEGER DEFAULT 1")
+            if "run_test" not in existing_cols:
+                if "run_pentest" in existing_cols:
+                    # Äldre databaser hade kolumnen run_pentest. Byt namn på den så att
+                    # befintliga schemans på/av-val för säkerhetstest bevaras (SQLite ≥ 3.25).
+                    conn.execute("ALTER TABLE schedules RENAME COLUMN run_pentest TO run_test")
+                else:
+                    conn.execute("ALTER TABLE schedules ADD COLUMN run_test INTEGER DEFAULT 1")
             if "sec_mode" not in existing_cols:
                 conn.execute("ALTER TABLE schedules ADD COLUMN sec_mode TEXT DEFAULT 'safe'")
             if "run_resolve" not in existing_cols:
@@ -170,7 +175,7 @@ def schedule_list():
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_test, sec_mode, run_resolve "
                 "FROM schedules ORDER BY project ASC"
             )
             for row in cur.fetchall():
@@ -191,7 +196,7 @@ def schedule_list():
                     "prod_server": row[10] or "",
                     "has_prod_token": bool(row[11]),
                     "run_time": row[12] or "",
-                    "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
+                    "run_test": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
                     "sec_mode": (row[14] if len(row) > 14 and row[14] else "safe") or "safe",
                     "run_resolve": bool(row[15]) if (len(row) > 15 and row[15] is not None) else False,
                     "running": is_running,
@@ -209,7 +214,7 @@ def schedule_get(job_id):
         try:
             cur = conn.execute(
                 "SELECT id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_test, sec_mode, run_resolve "
                 "FROM schedules WHERE id = ?", (job_id,)
             )
             row = cur.fetchone()
@@ -231,7 +236,7 @@ def schedule_get(job_id):
                 "prod_server": row[10] or "",
                 "has_prod_token": bool(row[11]),
                 "run_time": row[12] or "",
-                "run_pentest": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
+                "run_test": bool(row[13]) if (len(row) > 13 and row[13] is not None) else True,
                 "sec_mode": (row[14] if len(row) > 14 and row[14] else "safe") or "safe",
                 "run_resolve": bool(row[15]) if (len(row) > 15 and row[15] is not None) else False,
                 "running": is_running,
@@ -248,7 +253,8 @@ def schedule_save(job_data):
     branch = (job_data.get("branch") or "").strip()
     run_security = 1 if job_data.get("run_security", True) else 0
     run_ponytail = 1 if job_data.get("run_ponytail", True) else 0
-    run_pentest = 1 if job_data.get("run_pentest", True) else 0
+    # Läs nya nyckeln run_test, men acceptera äldre run_pentest från gamla API-anrop.
+    run_test = 1 if job_data.get("run_test", job_data.get("run_pentest", True)) else 0
     run_resolve = 1 if job_data.get("run_resolve", False) else 0
     interval_hours = max(1, int(job_data.get("interval_hours") or 24))
     enabled = 1 if job_data.get("enabled", True) else 0
@@ -279,8 +285,8 @@ def schedule_save(job_data):
             run_security = 1 if existing.get("run_security") else 0
         if "run_ponytail" not in job_data:
             run_ponytail = 1 if existing.get("run_ponytail") else 0
-        if "run_pentest" not in job_data:
-            run_pentest = 1 if existing.get("run_pentest", True) else 0
+        if "run_test" not in job_data and "run_pentest" not in job_data:
+            run_test = 1 if existing.get("run_test", True) else 0
         if "run_resolve" not in job_data:
             run_resolve = 1 if existing.get("run_resolve") else 0
         if "interval_hours" not in job_data:
@@ -337,18 +343,18 @@ def schedule_save(job_data):
         try:
             conn.execute(
                 "INSERT INTO schedules(id, project, branch, run_security, run_ponytail, "
-                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve) "
+                "interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_test, sec_mode, run_resolve) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 "project=excluded.project, branch=excluded.branch, "
                 "run_security=excluded.run_security, run_ponytail=excluded.run_ponytail, "
-                "run_pentest=excluded.run_pentest, run_resolve=excluded.run_resolve, "
+                "run_test=excluded.run_test, run_resolve=excluded.run_resolve, "
                 "interval_hours=excluded.interval_hours, next_run=excluded.next_run, "
                 "enabled=excluded.enabled, last_status=excluded.last_status, "
                 "prod_server=excluded.prod_server, prod_token=excluded.prod_token, "
                 "run_time=excluded.run_time, sec_mode=excluded.sec_mode",
                 (job_id, project, branch, run_security, run_ponytail,
-                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_pentest, sec_mode, run_resolve)
+                 interval_hours, next_run, last_run, last_status, enabled, prod_server, prod_token, run_time, run_test, sec_mode, run_resolve)
             )
             conn.commit()
         finally:
@@ -425,19 +431,19 @@ def _get_active_code_model(base_url=None):
     return ""
 
 
-def _get_local_ollama_model(base_url=None, task="pentest"):
+def _get_local_ollama_model(base_url=None, task="test"):
     """Hämtar alltid en lokal Llama/Ollama-modell (aldrig molnmodeller som Claude/Gemini).
 
-    Krävs för penetrationstestning (pentest) eftersom molnmodeller blockerar eller
-    vägrar utföra pentester p.g.a. sina strikta säkerhets- och användarpolicyer.
-    Prioriterar WhiteRabbitNeo för penetrationstest.
+    Krävs för säkerhetstestning eftersom molnmodeller blockerar eller
+    vägrar utföra säkerhetstester p.g.a. sina strikta säkerhets- och användarpolicyer.
+    Prioriterar WhiteRabbitNeo för säkerhetstest.
     """
     base = base_url or backends.select_optimal_backend(task=task)
     from .llama_bridge import detect_backend_type, llama_server_models
     try:
         targets = [base]
-        if task == "pentest":
-            pen_b = backends.select_optimal_backend(task="pentest")
+        if task == "test":
+            pen_b = backends.select_optimal_backend(task="test")
             if pen_b and pen_b not in targets and backends._backend_is_alive(pen_b):
                 targets.insert(0, pen_b)
 
@@ -464,20 +470,20 @@ def _get_local_ollama_model(base_url=None, task="pentest"):
     except Exception:
         _log.debug("ignored exception", exc_info=True)
         pass
-    return "whiterabbitneo" if task == "pentest" else "llama3.2:latest"
+    return "whiterabbitneo" if task == "test" else "llama3.2:latest"
 
 
 def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
     """Väljer den bäst lämpade modellen för en specifik granskningsuppgift.
 
-    - 'pentest': HÅRDKODAT att alltid köras med en lokal modell (WhiteRabbitNeo prioriteras
-      eftersom molnmodeller som Claude/Gemini vägrar pentester enligt sina regler).
+    - 'test': HÅRDKODAT att alltid köras med en lokal modell (WhiteRabbitNeo prioriteras
+      eftersom molnmodeller som Claude/Gemini vägrar säkerhetstester enligt sina regler).
     - 'security' / 'ponytail' / 'resolve': Väljer den bästa modellen som finns att
       tillgå (Claude Sonnet 5.5 för säkerhet, Gemini Flash för snabba tester/förenklingar,
       eller bästa lokala Ollama-modell).
     """
-    if task_type == "pentest":
-        return _get_local_ollama_model(base_url=base_url, task="pentest")
+    if task_type == "test":
+        return _get_local_ollama_model(base_url=base_url, task="test")
 
     # Om användaren explicit sparat en specifik Codex-modell som inte är 'auto'
     try:
@@ -540,7 +546,7 @@ SECURITY_AUDIT_PROMPT = (
     "5. Conclude with a short summary of the issues created."
 )
 
-PENTEST_AUDIT_PROMPT = (
+TEST_AUDIT_PROMPT = (
     "Perform a disciplined, authorized security test against the project's target environment and APIs "
     "according to .agents/skills/openclaw-redteam/SKILL.md, .agents/rules/redteam.md and relevant SecOpsAgentKit skills "
     "(dast-zap, dast-nuclei, dast-ffuf, webapp-sqlmap, webapp-nikto, recon-nmap).\n\n"
@@ -886,13 +892,13 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
     return resolved_count, errors
 
 
-def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_pentest=True,
+def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_test=True,
                        status_cb=None, prod_server="", prod_token="", sec_mode="safe", run_resolve=False):
     """Kör hela granskningen mot ett valt repo (GitHub eller GitLab) och sparar fynden som Issues.
 
     Modellval:
-    - Pentest: HÅRDKODAT att ALLTID köras med en lokal Ollama-modell (eftersom
-      molnmodeller som Claude/Gemini vägrar pentester enligt sina säkerhetspolicyer).
+    - Test: HÅRDKODAT att ALLTID köras med en lokal Ollama-modell (eftersom
+      molnmodeller som Claude/Gemini vägrar säkerhetstester enligt sina säkerhetspolicyer).
     - Övriga moment (säkerhetsgranskning, ponytail, resolve): Körs med bästa
       modellen som finns att tillgå (Claude Sonnet 5.5, Gemini Flash eller lokal).
     """
@@ -903,17 +909,17 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     base_url = backends.select_optimal_backend()
     sec_model = _get_best_model_for_task("security", text="Säkerhetsgranskning SAST", labels="security", base_url=base_url)
-    pen_model = _get_local_ollama_model(base_url=base_url, task="pentest")
+    pen_model = _get_local_ollama_model(base_url=base_url, task="test")
     pny_model = _get_best_model_for_task("ponytail", text="Ponytail förenkling", labels="ponytail", base_url=base_url)
 
     pen_url = base_url
     if "whiterabbit" in (pen_model or "").lower():
-        opt_p = backends.select_optimal_backend(task="pentest")
+        opt_p = backends.select_optimal_backend(task="test")
         if opt_p and ":11436" in opt_p:
             pen_url = opt_p
 
-    if not pen_model and run_pentest:
-        return False, "Ingen WhiteRabbitNeo eller lokal Llama-modell tillgänglig på %s för penetrationstest" % pen_url, 0, 0
+    if not pen_model and run_test:
+        return False, "Ingen WhiteRabbitNeo eller lokal Llama-modell tillgänglig på %s för säkerhetstest" % pen_url, 0, 0
 
     mode = (sec_mode or "safe").strip().lower()
     if mode not in ("safe", "full", "passive"):
@@ -942,7 +948,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     is_github = ("github.com" in project.lower()) or (setting_str("github_token") and "/" in project and not project.startswith("http://") and not project.startswith("https://"))
     provider_name = "GitHub" if is_github else "GitLab"
     if status_cb:
-        status_cb("Optimal hårdvara (%s) vald. Pentest: %s på %s, Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."
+        status_cb("Optimal hårdvara (%s) vald. Test: %s på %s, Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."
                   % (base_url, pen_model, pen_url, sec_model, pny_model, project, provider_name))
 
     if is_github:
@@ -971,8 +977,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
             if sec_err:
                 errors.append("Säkerhetsgranskning: " + sec_err)
 
-        if run_pentest:
-            pen_prompt = PENTEST_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
+        if run_test:
+            pen_prompt = TEST_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
             if prod_server:
                 token_desc = " (med access-token)" if prod_token else " (utan token)"
                 pen_prompt += (
@@ -985,10 +991,10 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
                 )
             if status_cb:
                 srv_msg = (" mot %s" % prod_server) if prod_server else ""
-                status_cb("Kör penetrationstest (pentest, %s, läge: %s)%s på %s..." % (pen_model, mode, srv_msg, pen_url))
+                status_cb("Kör säkerhetstest (test, %s, läge: %s)%s på %s..." % (pen_model, mode, srv_msg, pen_url))
             pen_count, pen_err = _run_single_headless_pass(pen_prompt, pen_model, project, base_url=pen_url)
             if pen_err:
-                errors.append("Penetrationstest: " + pen_err)
+                errors.append("Säkerhetstest: " + pen_err)
 
         if run_ponytail:
             if status_cb:
@@ -1010,7 +1016,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     total = sec_count + pen_count + pny_count + res_count
     models_used = []
-    for m in (sec_model if run_security else None, pen_model if run_pentest else None, pny_model if run_ponytail else None):
+    for m in (sec_model if run_security else None, pen_model if run_test else None, pny_model if run_ponytail else None):
         if m and m not in models_used:
             models_used.append(m)
     models_str = ", ".join(models_used) if models_used else (sec_model or pen_model)
@@ -1022,8 +1028,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     parts = []
     if run_security:
         parts.append("%d säkerhets-" % sec_count)
-    if run_pentest:
-        parts.append("%d pentest-" % pen_count)
+    if run_test:
+        parts.append("%d test-" % pen_count)
     if run_ponytail:
         parts.append("%d ponytail-" % pny_count)
     if run_resolve:
@@ -1074,7 +1080,7 @@ def _execute_job(job_id):
             branch=job.get("branch", ""),
             run_security=job.get("run_security", True),
             run_ponytail=job.get("run_ponytail", True),
-            run_pentest=job.get("run_pentest", True),
+            run_test=job.get("run_test", True),
             status_cb=on_status,
             prod_server=target_server,
             prod_token=target_token,
