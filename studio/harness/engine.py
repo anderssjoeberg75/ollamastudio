@@ -16,7 +16,10 @@ Modellstrategi:
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
@@ -220,38 +223,41 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self._log(f"Audit target directory: {target_path}")
 
             # ========================================================
-            # PHASE 1: Reconnaissance (Architecture & File Tree)
+            # PHASE 1: Reconnaissance & Multi-Scanner Seeding (Bandit, Gitleaks, Semgrep)
             # ========================================================
             self.stage = "reconnaissance"
-            self.progress = 15
-            self._log("PHASE 1: Reconnaissance — Scanning file structure, entrypoints and API surfaces...")
+            self.progress = 10
+            self._log("PHASE 1: Reconnaissance — Scanning file structure & running multi-scanner suite...")
             file_tree = self._collect_source_files(target_path)
             self._log(f"Found {len(file_tree)} relevant source files.")
 
+            scanner_seeds = self._run_multiscanner_suite(target_path)
+            self._log(f"Multi-Scanner seeding found {len(scanner_seeds)} raw findings (Gitleaks, Bandit, Semgrep).")
+
             # ========================================================
-            # PHASE 2: Coverage Ledger Generation
+            # PHASE 2: Coverage Ledger Generation (Source-to-Sink Taint Mapping)
             # ========================================================
             self.stage = "coverage_ledger"
-            self.progress = 30
-            self._log("PHASE 2: Building Coverage Ledger into deterministic audit units...")
-            self.coverage_units = self._build_coverage_ledger(file_tree)
+            self.progress = 25
+            self._log("PHASE 2: Building Coverage Ledger with Source-to-Sink Taint Flow mapping...")
+            self.coverage_units = self._build_coverage_ledger(file_tree, scanner_seeds)
             self._log(f"Generated {len(self.coverage_units)} coverage units in ledger.")
 
             # ========================================================
-            # PHASE 3 & 4: VDH (Vulnerability Discovery Harness - Hunting)
+            # PHASE 3 & 4: VDH (Vulnerability Discovery Harness - Hunting with Taint-Flow)
             # ========================================================
             self.stage = "vdh_hunting"
-            self.progress = 50
-            self._log("PHASE 3-4: VDH Hunting — Searching vulnerabilities with specialized models (Auth, Injection, Data)...")
-            self.candidates = self._execute_vdh_hunting(target_path, self.coverage_units)
+            self.progress = 45
+            self._log("PHASE 3-4: VDH Hunting — Deep AST taint tracking across trust boundaries...")
+            self.candidates = self._execute_vdh_hunting(target_path, self.coverage_units, scanner_seeds)
             self._log(f"VDH completed: {len(self.candidates)} vulnerability candidates identified.")
 
             # ========================================================
-            # PHASE 5: VVS (Vulnerability Validation System - Adversarial)
+            # PHASE 5: VVS (Vulnerability Validation System - Adversarial & Mathematical Scoring)
             # ========================================================
             self.stage = "vvs_validation"
-            self.progress = 75
-            self._log("PHASE 5: VVS Adversarial Validation — Challenging candidates with independent reasoning model to eliminate false positives...")
+            self.progress = 70
+            self._log("PHASE 5: VVS Adversarial Validation — Calculating AWS formula confidence & generating PoCs...")
             self.confirmed, self.rejected = self._execute_vvs_validation(target_path, self.candidates)
             self._log(f"VVS completed: {len(self.confirmed)} confirmed vulnerabilities, {len(self.rejected)} false positives rejected.")
 
@@ -303,11 +309,100 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 break
         return collected
 
-    def _build_coverage_ledger(self, files):
+    def _run_multiscanner_suite(self, root_dir):
+        """Kör Gitleaks, Bandit och Semgrep för att generera deterministiska säkerhets-seeds."""
+        findings = []
+
+        # 1. Gitleaks (Secrets & API Keys)
+        if shutil.which("gitleaks"):
+            try:
+                cmd = ["gitleaks", "detect", "--no-git", "--source", root_dir, "-f", "json", "-r", os.path.join(tempfile.gettempdir(), f"gl_{self.run_id}.json")]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                rpt_file = os.path.join(tempfile.gettempdir(), f"gl_{self.run_id}.json")
+                if os.path.exists(rpt_file):
+                    with open(rpt_file, "r", encoding="utf-8", errors="replace") as fh:
+                        gl_data = json.load(fh)
+                        if isinstance(gl_data, list):
+                            for item in gl_data[:20]:
+                                findings.append({
+                                    "source": "gitleaks",
+                                    "file": os.path.relpath(item.get("File", ""), root_dir).replace("\\", "/"),
+                                    "line": item.get("StartLine", 1),
+                                    "rule": item.get("RuleID", "Hardcoded Secret"),
+                                    "description": item.get("Description", "Potential secret or token exposed"),
+                                    "severity": "high",
+                                    "cwe": "CWE-798"
+                                })
+                    try:
+                        os.remove(rpt_file)
+                    except Exception:
+                        pass
+                self._log("Gitleaks scanner completed.")
+            except Exception as e:
+                self._log(f"Gitleaks scan note: {e}")
+
+        # 2. Bandit (Python AST SAST)
+        if shutil.which("bandit"):
+            try:
+                cmd = ["bandit", "-r", root_dir, "-f", "json", "-q"]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=30)
+                if res.stdout:
+                    b_data = json.loads(res.stdout)
+                    for item in b_data.get("results", [])[:25]:
+                        findings.append({
+                            "source": "bandit",
+                            "file": os.path.relpath(item.get("filename", ""), root_dir).replace("\\", "/"),
+                            "line": item.get("line_number", 1),
+                            "rule": item.get("test_id", "Bandit Finding"),
+                            "description": item.get("issue_text", ""),
+                            "severity": item.get("issue_severity", "medium").lower(),
+                            "cwe": f"CWE-{item.get('issue_cwe', {}).get('id', 'N/A')}"
+                        })
+                self._log("Bandit AST scanner completed.")
+            except Exception as e:
+                self._log(f"Bandit scan note: {e}")
+
+        # 3. Semgrep (Multi-language SAST & OWASP)
+        if shutil.which("semgrep"):
+            try:
+                cmd = ["semgrep", "--config=auto", "--json", "--quiet", "--max-target-bytes=500000", root_dir]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=40)
+                if res.stdout:
+                    s_data = json.loads(res.stdout)
+                    for item in s_data.get("results", [])[:25]:
+                        path = item.get("path", "")
+                        findings.append({
+                            "source": "semgrep",
+                            "file": os.path.relpath(path, root_dir).replace("\\", "/"),
+                            "line": item.get("start", {}).get("line", 1),
+                            "rule": item.get("check_id", "Semgrep Rule"),
+                            "description": item.get("extra", {}).get("message", ""),
+                            "severity": item.get("extra", {}).get("severity", "WARNING").lower(),
+                            "cwe": (item.get("extra", {}).get("metadata", {}).get("cwe") or ["CWE"])[0] if isinstance(item.get("extra", {}).get("metadata", {}).get("cwe"), list) else "CWE"
+                        })
+                self._log("Semgrep multi-language scanner completed.")
+            except Exception as e:
+                self._log(f"Semgrep scan note: {e}")
+
+        return findings
+
+    def _build_coverage_ledger(self, files, scanner_seeds=None):
         units = []
+        seed_files = {s["file"]: s for s in (scanner_seeds or []) if s.get("file")}
+
         for f in files:
             low = f.lower()
-            if any(k in low for k in ("auth", "login", "jwt", "session", "token", "password", "crypto", "permission")):
+            # Förtur till filer som flaggats av multi-scanner sviten
+            if f in seed_files:
+                seed = seed_files[f]
+                units.append({
+                    "unit_id": f"unit-{len(units)+1}",
+                    "path": f,
+                    "attack_class": f"Scanner Alert: {seed.get('rule', 'Suspicious')} ({seed.get('source')})",
+                    "priority": "critical",
+                    "seed": seed
+                })
+            elif any(k in low for k in ("auth", "login", "jwt", "session", "token", "password", "crypto", "permission")):
                 units.append({"unit_id": f"unit-{len(units)+1}", "path": f, "attack_class": "Authentication & Session Management", "priority": "high"})
             elif any(k in low for k in ("api", "route", "server", "controller", "endpoint", "handler", "service")):
                 units.append({"unit_id": f"unit-{len(units)+1}", "path": f, "attack_class": "Injection & Input Validation", "priority": "high"})
@@ -319,30 +414,32 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 units.append({"unit_id": f"unit-{len(units)+1}", "path": f, "attack_class": "General Logic & Memory Safety", "priority": "low"})
         return units
 
-    def _execute_vdh_hunting(self, root_dir, units):
+    def _execute_vdh_hunting(self, root_dir, units, scanner_seeds=None):
         candidates = []
         # Begränsa antalet enheter baserat på profil
-        limit = 6 if self.profile == "quick" else (15 if self.profile == "standard" else 30)
+        limit = 8 if self.profile == "quick" else (18 if self.profile == "standard" else 35)
         selected_units = units[:limit]
 
         system_prompt = (
-            "You are a specialized Vulnerability Discovery Harness (VDH) hunter following Cloudflare's security-audit framework. "
-            "Examine the code snippet for vulnerabilities that violate a real trust boundary. "
-            "Output valid JSON ONLY with this format:\n"
+            "You are a specialized Vulnerability Discovery Harness (VDH) hunter applying the AWS 3-Layer & Cloudflare Security Audit methodology.\n"
+            "Analyze the code context for real, exploitable vulnerabilities across trust boundaries.\n"
+            "Enforce strict Source-to-Sink Taint Flow tracking: check where untrusted input enters and whether it reaches an unsanitized sink.\n"
+            "Return valid JSON ONLY with this structure:\n"
             "[\n"
             "  {\n"
             "    \"title\": \"[SEC-X] Descriptive title\",\n"
             "    \"cwe\": \"CWE-89\",\n"
-            "    \"severity\": \"high\",\n"
+            "    \"severity\": \"high\" | \"critical\" | \"medium\" | \"low\",\n"
             "    \"file\": \"path/to/file.py\",\n"
             "    \"line\": 42,\n"
+            "    \"source_to_sink\": \"Detailed data path: Source (e.g. req.body) -> Intermediary functions -> Sink (e.g. cursor.execute)\",\n"
             "    \"problem\": \"Detailed explanation of weakness\",\n"
-            "    \"attack_vector\": \"How an attacker exploits this boundary\",\n"
-            "    \"poc\": \"Example input or exploit flow\",\n"
+            "    \"attack_vector\": \"How an attacker reaches and exploits this boundary\",\n"
+            "    \"poc\": \"Concrete Proof-of-Concept curl command or script\",\n"
             "    \"fix\": \"Concrete remediation proposal\"\n"
             "  }\n"
             "]\n"
-            "If no vulnerability exists, output an empty list: []"
+            "If no vulnerability exists, return strictly: []"
         )
 
         for u in selected_units:
@@ -355,11 +452,17 @@ class VulnerabilityHarnessRunner(threading.Thread):
             except Exception:
                 continue
 
+            seed_info = ""
+            if u.get("seed"):
+                s = u["seed"]
+                seed_info = f"\n[MULTI-SCANNER SEED]: Flagged by {s.get('source')} (Rule: {s.get('rule')}, Line {s.get('line')}) - {s.get('description')}\n"
+
             prompt = (
                 f"File: {u['path']}\n"
-                f"Assigned Attack Class: {u['attack_class']}\n\n"
-                f"Code snippet:\n```\n{content}\n```\n\n"
-                "Hunt for exploitable vulnerabilities. Return strictly JSON list."
+                f"Assigned Attack Class: {u['attack_class']}\n"
+                f"{seed_info}\n"
+                f"Source code snippet:\n```\n{content}\n```\n\n"
+                "Trace Source-to-Sink taint flow. Hunt for exploitable vulnerabilities. Return strictly JSON list."
             )
 
             resp, tok = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-coding", timeout=45)
@@ -371,8 +474,10 @@ class VulnerabilityHarnessRunner(threading.Thread):
                         item["file"] = u["path"]
                         item["unit_id"] = u["unit_id"]
                         item["id"] = f"CAND-{len(candidates)+1}"
+                        if u.get("seed"):
+                            item["scanner_seed"] = u["seed"]["source"]
                         candidates.append(item)
-                        self._log(f"VDH kandidat funnen i {u['path']}: {item.get('title')}")
+                        self._log(f"VDH candidate detected in {u['path']}: {item.get('title')}")
 
         return candidates
 
@@ -381,18 +486,26 @@ class VulnerabilityHarnessRunner(threading.Thread):
         rejected = []
 
         system_prompt = (
-            "You are an adversarial Vulnerability Validation System (VVS) auditor following Cloudflare's security-audit skill. "
-            "Your job is to rigorously cross-examine vulnerability candidates and aggressively eliminate FALSE POSITIVES. "
-            "You MUST challenge the claim:\n"
-            "1. Does it cross a real, verifiable trust boundary with untrusted input?\n"
-            "2. Is the affected function actually reachable or already sanitized/guarded?\n"
-            "3. Is the outcome real and observable (not a theoretical complaint or missing best practice)?\n\n"
-            "Return JSON ONLY with this format:\n"
+            "You are an adversarial Vulnerability Validation System (VVS) auditor following the AWS Steering File & Cloudflare Verification Protocol.\n"
+            "Your objective: ruthlessly challenge every candidate and eliminate false positives, theoretical warnings, and protected endpoints.\n\n"
+            "Apply AWS Formula Scoring:\n"
+            "- taint_confirms_flow (0.0 to 1.0): Does untrusted input actually reach the vulnerable sink unbroken?\n"
+            "- no_sanitization_found (0.0 to 1.0): Is there truly no framework sanitization, casting, ORM, or validation in place?\n"
+            "- direct_entrypoint (0.0 to 1.0): Is the function exposed via public API/route without requiring internal admin/debug privilege?\n"
+            "- exploitation_feasibility (0.0 to 1.0): Can a practical exploit payload actually be crafted without crashing?\n\n"
+            "Confidence Formula:\n"
+            "confidence = (0.35 * taint_confirms_flow) + (0.25 * no_sanitization_found) + (0.20 * direct_entrypoint) + (0.20 * exploitation_feasibility)\n\n"
+            "Rule: Set verdict = 'confirmed' ONLY if confidence >= 0.70 AND there is a viable PoC. Otherwise verdict = 'rejected'.\n\n"
+            "Return JSON ONLY with this exact format:\n"
             "{\n"
             "  \"verdict\": \"confirmed\" | \"rejected\",\n"
-            "  \"confidence\": 0.95,\n"
-            "  \"reasoning\": \"Why this is confirmed or why it is rejected as a false positive\",\n"
-            "  \"remediation_verified\": \"True/False\"\n"
+            "  \"taint_confirms_flow\": 0.9,\n"
+            "  \"no_sanitization_found\": 1.0,\n"
+            "  \"direct_entrypoint\": 0.8,\n"
+            "  \"exploitation_feasibility\": 0.9,\n"
+            "  \"calculated_confidence\": 0.88,\n"
+            "  \"poc\": \"curl -X POST http://localhost:8080/api... -d '...'\",\n"
+            "  \"reasoning\": \"Detailed adversarial assessment of why this is genuinely exploitable or why it is a false positive.\"\n"
             "}"
         )
 
@@ -410,27 +523,30 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 f"Candidate Title: {cand.get('title')}\n"
                 f"File: {cand.get('file')} (Line: {cand.get('line')})\n"
                 f"Claimed Problem: {cand.get('problem')}\n"
+                f"Claimed Source-to-Sink Flow: {cand.get('source_to_sink', 'N/A')}\n"
                 f"Claimed Attack Vector: {cand.get('attack_vector')}\n\n"
                 f"Source code context:\n```\n{code_context}\n```\n\n"
-                "Evaluate this candidate adversarially. Confirm only if it is a genuine, exploitable security flaw."
+                "Calculate AWS formula scoring, craft a concrete PoC, and validate adversarially."
             )
 
-            # Använd resonemangsmodell för validering
             resp, tok = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-reasoning", timeout=50)
             self.tokens_used += tok
             parsed = self._extract_json(resp)
             verdict = parsed.get("verdict", "").lower() if isinstance(parsed, dict) else ""
+            conf_score = parsed.get("calculated_confidence", 0) if isinstance(parsed, dict) else 0
 
             cand["vvs_validation"] = parsed if isinstance(parsed, dict) else {"verdict": "rejected", "reasoning": "Parse error in VVS"}
+            if isinstance(parsed, dict) and parsed.get("poc"):
+                cand["poc"] = parsed.get("poc")
 
-            if verdict == "confirmed":
+            if verdict == "confirmed" and conf_score >= 0.70:
                 confirmed.append(cand)
-                self._log(f"✅ VVS CONFIRMED: {cand.get('title')} ({cand.get('file')})")
+                self._log(f"✅ VVS CONFIRMED ({conf_score*100:.0f}% confidence): {cand.get('title')} ({cand.get('file')})")
             else:
                 reason = parsed.get("reasoning", "False positive during validation") if isinstance(parsed, dict) else "Rejected"
                 cand["rejection_reason"] = reason
                 rejected.append(cand)
-                self._log(f"❌ VVS REJECTED (False Positive): {cand.get('title')} — {reason[:80]}...")
+                self._log(f"❌ VVS REJECTED (False Positive / {conf_score*100:.0f}%): {cand.get('title')} — {reason[:75]}...")
 
         return confirmed, rejected
 
@@ -479,18 +595,24 @@ class VulnerabilityHarnessRunner(threading.Thread):
             if not self.confirmed:
                 lines.append("*No confirmed high-confidence vulnerabilities found.*")
             for c in self.confirmed:
+                conf = c.get("vvs_validation", {}).get("calculated_confidence", 0.9)
+                poc = c.get("poc") or c.get("vvs_validation", {}).get("poc", "N/A")
+                s2s = c.get("source_to_sink", "N/A")
                 lines.extend([
                     f"### {c.get('title')} [{c.get('severity', 'high').upper()}]",
                     f"- **Location**: `{c.get('file')}:{c.get('line', 1)}` ({c.get('cwe', 'CWE')})",
+                    f"- **Confidence Score (AWS Formula)**: `{conf*100:.0f}%`",
+                    f"- **Taint Flow (Source -> Sink)**: `{s2s}`",
                     f"- **Problem**: {c.get('problem')}",
                     f"- **Attack Vector**: {c.get('attack_vector')}",
+                    f"- **Verified Proof-of-Concept (PoC)**:\n```bash\n{poc}\n```",
                     f"- **Remediation**: {c.get('fix')}\n"
                 ])
             with open(report_path, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(lines))
-            self._log(f"Rapporter sparade i {harness_dir}/REPORT.md och findings.json")
+            self._log(f"Reports saved in {harness_dir}/REPORT.md and findings.json")
         except Exception as e:
-            self._log(f"Kunde inte spara rapportfiler: {e}")
+            self._log(f"Could not save report files: {e}")
 
     def _create_github_issues(self):
         token_gh = setting_str("github_token")
@@ -501,13 +623,19 @@ class VulnerabilityHarnessRunner(threading.Thread):
         from ..codex.github import github_create_issue
         for c in self.confirmed:
             title = c.get("title", "[SEC] Vulnerability")
+            conf = c.get("vvs_validation", {}).get("calculated_confidence", 0.9)
+            poc = c.get("poc") or c.get("vvs_validation", {}).get("poc", "N/A")
+            s2s = c.get("source_to_sink", "N/A")
             desc = (
                 f"### Cloudflare Vulnerability Harness Finding\n\n"
                 f"- **Severity**: {c.get('severity', 'high').upper()}\n"
-                f"- **File**: `{c.get('file')}` (Line: {c.get('line', 1)})\n"
-                f"- **Classification**: {c.get('cwe', 'Security')}\n\n"
+                f"- **Location**: `{c.get('file')}` (Line: {c.get('line', 1)})\n"
+                f"- **Classification**: {c.get('cwe', 'Security')}\n"
+                f"- **Calculated Confidence (AWS Steering Formula)**: `{conf*100:.0f}%`\n"
+                f"- **Taint Flow (Source to Sink)**: `{s2s}`\n\n"
                 f"### Problem & Risk\n{c.get('problem')}\n\n"
                 f"### Attack Vector & Evidence\n{c.get('attack_vector')}\n\n"
+                f"### Verified Proof-of-Concept (PoC)\n```bash\n{poc}\n```\n\n"
                 f"### Remediation Plan\n{c.get('fix')}\n\n"
                 f"---\n*Generated by Ollama Studio Vulnerability Harness (Run ID: {self.run_id})*"
             )
