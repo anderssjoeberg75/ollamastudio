@@ -292,8 +292,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                                     if wm.get("name") not in existing_names:
                                         # Ge ett tydligt namn och tag
                                         if wm.get("name") == "whiterabbitneo":
-                                            wm["name"] = "WhiteRabbitNeo-2.5-Qwen-7B"
-                                            wm["model"] = "WhiteRabbitNeo-2.5-Qwen-7B"
+                                            wm["name"] = "WhiteRabbitNeo-13B"
+                                            wm["model"] = "WhiteRabbitNeo-13B"
                                         models_list.append(wm)
                             except Exception:
                                 _log.debug("ignored exception", exc_info=True)
