@@ -78,6 +78,9 @@ class CodexRoutes(BaseHandler):
                     if chunk:
                         full += chunk
                         self._emit({"type": "delta", "text": chunk})
+                    if obj.get("done") and (obj.get("eval_count") or obj.get("prompt_eval_count")):
+                        toks = (obj.get("eval_count") or 0) + (obj.get("prompt_eval_count") or 0)
+                        self._emit({"type": "tokens", "count": toks})
                 try:
                     up.close()
                 except Exception:
@@ -136,6 +139,9 @@ class CodexRoutes(BaseHandler):
                         if chunk:
                             full += chunk
                             self._emit({"type": "delta", "text": chunk})
+                        if obj.get("done") and (obj.get("eval_count") or obj.get("prompt_eval_count")):
+                            toks = (obj.get("eval_count") or 0) + (obj.get("prompt_eval_count") or 0)
+                            self._emit({"type": "tokens", "count": toks})
                 finally:
                     try:
                         up.close()

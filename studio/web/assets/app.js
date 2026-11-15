@@ -2694,6 +2694,9 @@ async function runAgentServer(model){
         think.textContent = thinkText;
         codeLogEl().scrollTop = codeLogEl().scrollHeight;
       }
+      else if(ev.type==='tokens'){
+        if(ev.count){ addCumulativeTokens(ev.count); }
+      }
       else if(ev.type==='ask'){
         if(think){ think.remove(); think=null; }
         renderAsk(ev);
@@ -5199,6 +5202,7 @@ function addCumulativeTokens(count) {
     let updated = currentMax + count;
     localStorage.setItem('os_cum_tokens', updated.toString());
     savePref('cum_tokens', updated.toString());
+    updateSavedCost();
     updateTelemetry();
   } catch(e) {}
 }
