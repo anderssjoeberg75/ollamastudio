@@ -384,7 +384,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             return self._send_json({"ok": True, "job": saved})
 
         if path == "/api/gitlab/targets":
-            proj = (data.get("project") or "").strip()
+            raw_proj = data.get("project")
+            proj = str(raw_proj).strip() if raw_proj is not None and not isinstance(raw_proj, bool) else ""
             srv = (data.get("prod_server") or "").strip()
             tok = data.get("prod_token")
             sec_mode = data.get("sec_mode")
@@ -394,10 +395,13 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             return self._send_json({"ok": True, "targets": project_targets_list()})
 
         if path == "/api/harness/start":
-            proj = (data.get("project") or "").strip()
-            profile = (data.get("profile") or "standard").strip()
+            raw_proj = data.get("project")
+            proj = str(raw_proj).strip() if raw_proj is not None and not isinstance(raw_proj, bool) else ""
+            raw_prof = data.get("profile")
+            profile = str(raw_prof).strip() if raw_prof is not None else "standard"
             create_issues = bool(data.get("create_issues", False))
-            target_dir = (data.get("target_dir") or "").strip()
+            raw_target = data.get("target_dir")
+            target_dir = str(raw_target).strip() if raw_target is not None and not isinstance(raw_target, bool) else ""
             from studio.harness import start_vulnerability_harness
             run_id = start_vulnerability_harness(
                 project=proj or "local-workspace",

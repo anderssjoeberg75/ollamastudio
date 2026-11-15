@@ -5287,11 +5287,12 @@ async function startHarnessRun() {
   }
 
   try {
+    const projName = (project === 'current') ? (cfg.code_ws_path || 'workspace') : project;
     const r = await api('/api/harness/start', {
       method: 'POST',
       headers: headers(true),
       body: JSON.stringify({
-        project: project === 'current' ? (cfg.code_ws || 'workspace') : project,
+        project: projName,
         profile: profile,
         create_issues: createIssues
       })
