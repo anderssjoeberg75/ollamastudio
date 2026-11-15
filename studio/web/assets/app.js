@@ -4201,6 +4201,114 @@ function renderGhViewRepos(currentWs){
   onGhRepoSelectChange();
 }
 
+let ghTreeFiles = [];
+let currentGhModalFile = {repo: '', path: ''};
+
+async function loadGhTree(){
+  const box = document.getElementById('ghTreeContainer');
+  const pathEl = document.getElementById('ghTreeWsPath');
+  const countEl = document.getElementById('ghTreeFileCount');
+  const sel = document.getElementById('ghRepoSelect');
+  const slug = sel ? sel.value : '';
+
+  if(!box) return;
+  if(!slug){
+    box.innerHTML = '<div style="color:var(--fg-subtle);font-size:12px;padding:12px;text-align:center">Select a repository above to browse its files.</div>';
+    if(pathEl) { pathEl.textContent = 'No repository selected'; pathEl.title = ''; }
+    if(countEl) countEl.textContent = '0 files';
+    ghTreeFiles = [];
+    return;
+  }
+
+  box.innerHTML = '<div style="color:var(--fg-muted);font-size:12px;padding:10px;text-align:center"><i class="ph ph-spinner ph-spin"></i> Reading files…</div>';
+  try {
+    const r = await api(`/api/github/tree?repo=${encodeURIComponent(slug)}`);
+    const d = await r.json();
+    if(!d.ok || !d.cloned){
+      box.innerHTML = '<div style="color:var(--fg-muted);font-size:12px;padding:12px;text-align:center">Repository not cloned locally yet.<br><button class="btn small accent" style="margin-top:8px" onclick="cloneOrPullGhRepo(\'' + esc(slug) + '\')"><i class="ph ph-download-simple"></i> Clone to Studio</button></div>';
+      if(pathEl) { pathEl.textContent = 'Remote only (' + slug + ')'; pathEl.title = ''; }
+      if(countEl) countEl.textContent = '0 files';
+      ghTreeFiles = [];
+      return;
+    }
+
+    if(pathEl) {
+      pathEl.textContent = '📁 ' + (d.root || slug);
+      pathEl.title = d.root || '';
+    }
+    ghTreeFiles = d.files || [];
+    filterGhTree();
+  } catch(e){
+    box.innerHTML = '<div style="color:var(--danger);font-size:12px;padding:10px;text-align:center">Error reading file tree: ' + esc(e.message) + '</div>';
+    if(countEl) countEl.textContent = '0 files';
+    ghTreeFiles = [];
+  }
+}
+
+function filterGhTree(){
+  const box = document.getElementById('ghTreeContainer');
+  const searchEl = document.getElementById('ghTreeSearch');
+  const countEl = document.getElementById('ghTreeFileCount');
+  const sel = document.getElementById('ghRepoSelect');
+  const slug = sel ? sel.value : '';
+  if(!box) return;
+
+  const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
+  const matched = q ? ghTreeFiles.filter(f => f.toLowerCase().includes(q)) : ghTreeFiles;
+
+  if(countEl) countEl.textContent = matched.length + (matched.length === 1 ? ' file' : ' files');
+
+  if(!matched.length){
+    box.innerHTML = '<div style="color:var(--fg-subtle);font-size:12px;padding:10px;text-align:center">' + (q ? 'No matching files found' : '(Empty repository)') + '</div>';
+    return;
+  }
+
+  box.innerHTML = matched.map(f => {
+    const parts = f.split('/');
+    const name = parts.pop();
+    const dir = parts.join('/');
+    const icon = f.endsWith('.py') ? 'ph-file-py' : (f.endsWith('.js') || f.endsWith('.ts') ? 'ph-file-js' : (f.endsWith('.json') ? 'ph-file-code' : (f.endsWith('.md') ? 'ph-file-text' : 'ph-file')));
+    return `<div class="gh-tree-item" title="${esc(f)}" onclick="openGhFileModal('${esc(slug)}', '${esc(f).replace(/\\/g,"\\\\").replace(/'/g,"\\'")}')" style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:4px;cursor:pointer;user-select:none;font-size:11.5px;color:var(--fg);transition:background 0.15s">
+      <i class="ph ${icon}" style="color:var(--accent);font-size:13px;flex-shrink:0"></i>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${dir ? `<span style="color:var(--fg-faint)">${esc(dir)}/</span>` : ''}<strong>${esc(name)}</strong></span>
+    </div>`;
+  }).join('');
+}
+
+async function openGhFileModal(repo, path){
+  currentGhModalFile = {repo, path};
+  const ov = document.getElementById('ghFileModalOverlay');
+  const title = document.getElementById('ghFileModalTitle');
+  const content = document.getElementById('ghFileModalContent');
+  if(title) title.textContent = path + (repo ? ' (' + repo + ')' : '');
+  if(content) content.textContent = 'Loading file content…';
+  if(ov) ov.style.display = 'flex';
+
+  try {
+    const r = await api(`/api/github/file?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`);
+    const d = await r.json();
+    if(d.ok && d.content !== undefined){
+      if(content) content.textContent = d.content || '(Empty file)';
+    } else {
+      if(content) content.textContent = 'Could not load file: ' + (d.error || 'Unknown error');
+    }
+  } catch(e){
+    if(content) content.textContent = 'Failed to load file: ' + e.message;
+  }
+}
+
+function closeGhFileModal(){
+  const ov = document.getElementById('ghFileModalOverlay');
+  if(ov) ov.style.display = 'none';
+}
+
+function openCurrentGhFileInCodex(){
+  if(currentGhModalFile.repo){
+    openRepoInCodex(currentGhModalFile.repo);
+    closeGhFileModal();
+  }
+}
+
 function onGhRepoSelectChange(){
   const sel = document.getElementById('ghRepoSelect');
   const slug = sel ? sel.value : '';
@@ -4213,6 +4321,7 @@ function onGhRepoSelectChange(){
     if(actionsEl) actionsEl.innerHTML = '';
     if(badgeEl) { badgeEl.textContent = 'none'; badgeEl.className = 'tele-pill'; }
     loadGhIssues('open', '');
+    loadGhTree();
     return;
   }
 
@@ -4243,6 +4352,7 @@ function onGhRepoSelectChange(){
   }
 
   loadGhIssues('open', slug);
+  loadGhTree();
 }
 
 async function cloneOrPullGhRepo(slug){

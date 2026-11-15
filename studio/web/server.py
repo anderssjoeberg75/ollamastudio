@@ -44,7 +44,7 @@ from studio.codex.gitops import (
 from studio.codex.permissions import approval_answer
 from studio.codex.sandbox import sandbox_info
 from studio.codex.workspace import (
-    undo_available, undo_file, ws_current, ws_tree, ws_write_file)
+    CODE_SKIP_DIRS, undo_available, undo_file, ws_current, ws_tree, ws_write_file)
 from studio.mcp import MCP_TOOLS, process_mcp_request
 from studio.config import (
     APP_TITLE, APP_VERSION, CODE_MODES, CODE_MODE_LABELS, DB_PATH,
@@ -150,6 +150,78 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     return self._send_json({"path": rel, "content": ws_current(rel)})
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
+            if path == "/api/github/tree":
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                slug = q.get("repo", [""])[0].strip()
+                # Find local path for this slug
+                repos_root = code_repos_root() or ""
+                target_path = None
+                if slug and repos_root:
+                    for lr in local_repos():
+                        if lr.get("slug") == slug:
+                            target_path = lr.get("path")
+                            break
+                    if not target_path:
+                        # Fallback to repo_dir_name
+                        owner, _, rname = slug.partition("/")
+                        cand = os.path.join(repos_root, f"{owner}__{rname}" if rname else slug)
+                        if os.path.isdir(cand):
+                            target_path = cand
+                elif not slug:
+                    target_path = code_workspace_root()
+
+                if not target_path or not os.path.isdir(target_path):
+                    return self._send_json({"ok": False, "repo": slug, "cloned": False, "files": [], "root": None})
+
+                out = []
+                for dirpath, dirnames, filenames in os.walk(target_path):
+                    dirnames[:] = sorted(d for d in dirnames if d not in CODE_SKIP_DIRS)
+                    for name in sorted(filenames):
+                        full = os.path.join(dirpath, name)
+                        rel = os.path.relpath(full, target_path).replace(os.sep, "/")
+                        out.append(rel)
+                        if len(out) >= 800:
+                            break
+                    if len(out) >= 800:
+                        break
+                return self._send_json({"ok": True, "repo": slug, "cloned": True, "files": out, "root": target_path})
+
+            if path == "/api/github/file":
+                q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                slug = q.get("repo", [""])[0].strip()
+                rel = q.get("path", [""])[0].strip()
+                if not rel:
+                    return self._send_json({"error": "Path required"}, 400)
+                repos_root = code_repos_root() or ""
+                target_path = None
+                if slug and repos_root:
+                    for lr in local_repos():
+                        if lr.get("slug") == slug:
+                            target_path = lr.get("path")
+                            break
+                    if not target_path:
+                        owner, _, rname = slug.partition("/")
+                        cand = os.path.join(repos_root, f"{owner}__{rname}" if rname else slug)
+                        if os.path.isdir(cand):
+                            target_path = cand
+                elif not slug:
+                    target_path = code_workspace_root()
+
+                if not target_path:
+                    return self._send_json({"error": "Repo not found on server"}, 404)
+
+                full = os.path.normpath(os.path.join(target_path, rel))
+                if not full.startswith(os.path.abspath(target_path)):
+                    return self._send_json({"error": "Path traversal prohibited"}, 403)
+                if not os.path.isfile(full):
+                    return self._send_json({"error": "File not found"}, 404)
+                try:
+                    with open(full, "r", encoding="utf-8", errors="replace") as f:
+                        content = f.read(250000) # up to 250 KB
+                    return self._send_json({"ok": True, "repo": slug, "path": rel, "content": content})
+                except Exception as e:
+                    return self._send_json({"error": str(e)}, 500)
+
             if path == "/api/github/issues":
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
                 slug = q.get("repo", [""])[0].strip()
