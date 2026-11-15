@@ -283,6 +283,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 if not run_data:
                     return self._send_json({"error": "Run not found"}, 404)
                 return self._send_json({"ok": True, "run": run_data})
+            if path == "/api/security/overview":
+                from studio.harness.security_overview import get_overview_snapshot
+                return self._send_json({"ok": True, "overview": get_overview_snapshot()})
             if path in ("/api/version", "/api/models"):
                 upstream = "/api/version" if path == "/api/version" else "/api/tags"
                 try:

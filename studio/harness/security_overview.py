@@ -99,6 +99,20 @@ def _risky_path(value: Any) -> bool:
     ))
 
 
+def get_overview_snapshot() -> dict:
+    """Returnerar ett samlat översikts-ögonblick för Ollama Studios dashboard."""
+    import psutil
+    proc_count = len(psutil.pids()) if hasattr(psutil, "pids") else 0
+    return {
+        "status": "active",
+        "risk_level": "quiet",
+        "title": _RISK_COPY["quiet"][0],
+        "detail": _RISK_COPY["quiet"][1],
+        "monitored_processes": proc_count,
+        "timestamp": time.time()
+    }
+
+
 class SecurityOverviewService:
     """Thread-safe facade for manual security scans and saved investigations."""
 
