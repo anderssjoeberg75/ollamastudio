@@ -235,3 +235,76 @@ class TestSchedulerAutoFix(unittest.TestCase):
             self.assertEqual(calls[1][0][1], "qwen2.5-coder:14b")
             self.assertEqual(calls[2][0][1], "antigravity:gemini-3.8-flash-medium")
 
+
+
+class TestWhiteRabbitBackendReady(unittest.TestCase):
+    """Fail-loud-skyddet: säkerhetstest får bara köra om WhiteRabbitNeo faktiskt kör
+    på backenden – annars svarar en allmän/alignad modell (tyst fallback) och vägrar."""
+
+    def _tags(self, names):
+        import io, json as _json
+        payload = _json.dumps({"models": [{"name": n} for n in names]}).encode("utf-8")
+        cm = MagicMock()
+        resp = MagicMock()
+        resp.read.return_value = payload
+        cm.__enter__.return_value = resp
+        cm.__exit__.return_value = False
+        return cm
+
+    def test_ready_when_whiterabbit_present(self):
+        with patch("studio.backends._backend_is_alive", return_value=True), \
+             patch("studio.llama_bridge.detect_backend_type", return_value="ollama"), \
+             patch("studio.backends.urllib.request.urlopen", return_value=self._tags(["llama3.2:latest", "whiterabbitneo:latest"])):
+            from studio.backends import whiterabbit_backend_ready
+            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
+            self.assertTrue(ok)
+            self.assertIn("whiterabbit", str(detail).lower())
+
+    def test_not_ready_when_only_general_models(self):
+        # Backenden lever men kör bara en allmän modell -> ska failas (inte köra testet)
+        with patch("studio.backends._backend_is_alive", return_value=True), \
+             patch("studio.llama_bridge.detect_backend_type", return_value="ollama"), \
+             patch("studio.backends.urllib.request.urlopen", return_value=self._tags(["llama3.2:latest", "qwen2.5-coder:14b"])):
+            from studio.backends import whiterabbit_backend_ready
+            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
+            self.assertFalse(ok)
+            self.assertIn("llama3.2:latest", detail)
+
+    def _props(self, payload):
+        import json as _json
+        from unittest.mock import MagicMock as _MM
+        cm = _MM(); resp = _MM()
+        resp.read.return_value = _json.dumps(payload).encode("utf-8")
+        cm.__enter__.return_value = resp; cm.__exit__.return_value = False
+        return cm
+
+    def test_llama_server_ready_via_props_model_path(self):
+        # llama-server rapporterar generiskt id på /v1/models men /props avslöjar gguf-sökvägen
+        with patch("studio.backends._backend_is_alive", return_value=True), \
+             patch("studio.llama_bridge.detect_backend_type", return_value="llama_server"), \
+             patch("studio.llama_bridge.llama_server_models", return_value=[{"name": "model"}]), \
+             patch("studio.backends.urllib.request.urlopen",
+                   return_value=self._props({"model_path": "/models/WhiteRabbitNeo-V3-7B-Q5_K_M.gguf"})):
+            from studio.backends import whiterabbit_backend_ready
+            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
+            self.assertTrue(ok)
+            self.assertIn("whiterabbit", str(detail).lower())
+
+    def test_llama_server_not_ready_when_generic_model(self):
+        # Varken /v1/models eller /props nämner whiterabbit -> blockera (det är en annan modell)
+        with patch("studio.backends._backend_is_alive", return_value=True), \
+             patch("studio.llama_bridge.detect_backend_type", return_value="llama_server"), \
+             patch("studio.llama_bridge.llama_server_models", return_value=[{"name": "qwen2.5-7b-instruct"}]), \
+             patch("studio.backends.urllib.request.urlopen",
+                   return_value=self._props({"model_path": "/models/qwen2.5-7b-instruct-q4.gguf"})):
+            from studio.backends import whiterabbit_backend_ready
+            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
+            self.assertFalse(ok)
+            self.assertIn("qwen2.5", detail)
+
+    def test_not_ready_when_backend_down(self):
+        with patch("studio.backends._backend_is_alive", return_value=False):
+            from studio.backends import whiterabbit_backend_ready
+            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
+            self.assertFalse(ok)
+            self.assertIn("svarar inte", detail)

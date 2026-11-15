@@ -55,6 +55,66 @@ def backend_url(label):
     return (b or g["PRIMARY"])["url"]
 
 
+def whiterabbit_backend_ready(base_url, timeout=2.0):
+    """Kontrollerar att en backend verkligen kör WhiteRabbitNeo innan ett säkerhetstest körs.
+
+    Säkerhetstest ruttas hårdkodat till WhiteRabbitNeo (port 11436) eftersom allmänna/
+    alignade modeller vägrar. Problemet: är WhiteRabbitNeo nere faller backend-valet
+    tyst tillbaka på en annan instans (t.ex. en llama-server som serverar SIN inladdade
+    modell och struntar i modellnamnet) – och den modellen vägrar, på flytande språk,
+    så att det ser ut som om "WhiteRabbitNeo vägrade". Det gör den aldrig.
+
+    Returnerar (ok, detalj):
+      ok=True  + modellnamnet  om backenden lever OCH exponerar en WhiteRabbitNeo-modell.
+      ok=False + orsak         annars (nere, eller bara andra/allmänna modeller).
+    Anropa detta och faila högt i stället för att skicka testet till en modell som vägrar.
+    """
+    if not base_url:
+        return False, "ingen backend-URL angiven"
+    if not _backend_is_alive(base_url, timeout=timeout):
+        return False, "backenden %s svarar inte (WhiteRabbitNeo verkar inte köra där)" % base_url
+    base = base_url.rstrip("/")
+    # Samla ALLA modell-namn vi kan hitta på backenden. En llama-server rapporterar
+    # ofta ett generiskt id på /v1/models (t.ex. "gpt-3.5-turbo" eller bara "model"),
+    # så den riktiga modellen avslöjas i stället av /props (model_path/model_alias).
+    # Läs därför båda, annars riskerar en korrekt körande WhiteRabbitNeo att blockeras.
+    candidates = []
+    try:
+        from .llama_bridge import detect_backend_type, llama_server_models
+        is_llama = detect_backend_type(base) == "llama_server"
+        if is_llama:
+            for m in (llama_server_models(base) or []):
+                candidates.append(m.get("name") or m.get("model") or m.get("id") or "")
+            # /props avslöjar den faktiska gguf-sökvägen och aliaset
+            try:
+                req = urllib.request.Request(base + "/props")
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    props = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+                for key in ("model_path", "model_alias", "model"):
+                    if props.get(key):
+                        candidates.append(str(props.get(key)))
+                dgs = props.get("default_generation_settings")
+                if isinstance(dgs, dict) and dgs.get("model"):
+                    candidates.append(str(dgs.get("model")))
+            except Exception:
+                _log.debug("ignored /props exception", exc_info=True)
+        else:
+            req = urllib.request.Request(base + "/api/tags")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            for m in (data.get("models") or []):
+                candidates.append(m.get("name") or m.get("model") or "")
+    except Exception as e:
+        return False, "kunde inte läsa modell-listan från %s: %s" % (base_url, e)
+
+    for nm in candidates:
+        low = str(nm).lower()
+        if "whiterabbit" in low or "white-rabbit" in low:
+            return True, nm
+    found = ", ".join(str(c) for c in candidates if c) or "(inga modeller)"
+    return False, "ingen WhiteRabbitNeo-modell på %s – hittade: %s" % (base_url, found)
+
+
 def _backend_is_alive(url, timeout=0.8):
     """Snabb kontroll om en Ollama- eller llama-server-instans svarar på nätverket och stöder generering/chatt."""
     if not url:
