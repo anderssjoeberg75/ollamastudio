@@ -174,8 +174,22 @@ class VulnerabilityHarnessRunner(threading.Thread):
     def run(self):
         self._log(f"Startar Cloudflare Vulnerability Harness för projekt {self.project} (Profil: {self.profile})...")
         try:
-            # Arbetskatalog
             target_path = self.target_dir
+            # Om ett specifikt repo valts (t.ex. "owner/repo" eller en GitHub-URL): klona/uppdatera det automatiskt
+            is_github_repo = ("/" in self.project and not os.path.isabs(self.project)) or "github.com" in self.project.lower()
+            if is_github_repo:
+                self.stage = "cloning"
+                self.progress = 5
+                self._log(f"Klona / synkar repo '{self.project}' från GitHub...")
+                from ..codex.github import github_fetch_repo
+                ok_fetch, msg_fetch, fetched_dir = github_fetch_repo(self.project)
+                if not ok_fetch or not fetched_dir:
+                    self.status = "error"
+                    self._log(f"FEL: Kunde inte klona eller hämta repot: {msg_fetch}")
+                    return
+                target_path = fetched_dir
+                self._log(f"Repot klonat/synkat till serverns disk: {target_path}")
+
             if not target_path:
                 from ..codex.workspace import ws_current
                 target_path = ws_current()
@@ -185,7 +199,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 self._log("FEL: Ingen giltig arbetskatalog tillgänglig.")
                 return
 
-            self._log(f"Målkatalog: {target_path}")
+            self._log(f"Målkatalog för granskning: {target_path}")
 
             # ========================================================
             # FAS 1: Reconnaissance (Arkitektur & Filträd)
@@ -585,3 +599,4 @@ def list_harness_runs(limit=20):
 
 def get_harness_run(run_id):
     return get_harness_status(run_id)
+

@@ -5211,21 +5211,49 @@ async function populateHarnessProjects() {
   const sel = document.getElementById('harnessProjectSelect');
   if (!sel) return;
   const currentVal = sel.value;
-  sel.innerHTML = '<option value="current">Aktiv arbetsyta (Aktuell katalog)</option>';
+  sel.innerHTML = '<option value="current">Aktiv arbetsyta (Aktuell lokal mapp)</option>';
 
   try {
-    const r = await api('/api/gitlab/repos', {headers: headers(false)});
+    const r = await api('/api/github/repos', {headers: headers(false)});
     if (r.ok) {
       const data = await r.json();
       const repos = data.repos || [];
-      repos.forEach(repo => {
-        const opt = document.createElement('option');
-        opt.value = repo.full_name || repo.path_with_namespace || repo.name;
-        opt.textContent = `GitHub: ${repo.full_name || repo.name}`;
-        sel.appendChild(opt);
-      });
+      if (repos.length > 0) {
+        const grp = document.createElement('optgroup');
+        grp.label = 'GitHub Repositories';
+        repos.forEach(repo => {
+          const opt = document.createElement('option');
+          const slug = repo.slug || repo.full_name || repo.name;
+          opt.value = slug;
+          opt.textContent = slug;
+          grp.appendChild(opt);
+        });
+        sel.appendChild(grp);
+      }
     }
   } catch(e) {}
+
+  // Prova även GitLab om tillgängligt
+  try {
+    const r2 = await api('/api/gitlab/repos', {headers: headers(false)});
+    if (r2.ok) {
+      const data2 = await r2.json();
+      const repos2 = data2.repos || [];
+      if (repos2.length > 0) {
+        const grp2 = document.createElement('optgroup');
+        grp2.label = 'GitLab Repositories';
+        repos2.forEach(repo => {
+          const opt = document.createElement('option');
+          const slug = repo.path_with_namespace || repo.full_name || repo.name;
+          opt.value = slug;
+          opt.textContent = slug;
+          grp2.appendChild(opt);
+        });
+        sel.appendChild(grp2);
+      }
+    }
+  } catch(e) {}
+
   if (currentVal) sel.value = currentVal;
 }
 
@@ -5287,12 +5315,11 @@ async function startHarnessRun() {
   }
 
   try {
-    const projName = (project === 'current') ? (cfg.code_ws_path || 'workspace') : project;
     const r = await api('/api/harness/start', {
       method: 'POST',
       headers: headers(true),
       body: JSON.stringify({
-        project: projName,
+        project: project === 'current' ? (cfg.code_ws_path || 'workspace') : project,
         profile: profile,
         create_issues: createIssues
       })
