@@ -172,23 +172,23 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 conn.close()
 
     def run(self):
-        self._log(f"Startar Cloudflare Vulnerability Harness för projekt {self.project} (Profil: {self.profile})...")
+        self._log(f"Starting Cloudflare Vulnerability Harness for project {self.project} (Profile: {self.profile})...")
         try:
             target_path = self.target_dir
-            # Om ett specifikt repo valts (t.ex. "owner/repo" eller en GitHub-URL): klona/uppdatera det automatiskt
+            # If a specific repo is selected (e.g. "owner/repo" or a GitHub URL): clone/fetch automatically
             is_github_repo = ("/" in self.project and not os.path.isabs(self.project)) or "github.com" in self.project.lower()
             if is_github_repo:
                 self.stage = "cloning"
                 self.progress = 5
-                self._log(f"Klona / synkar repo '{self.project}' från GitHub...")
+                self._log(f"Cloning / syncing repo '{self.project}' from GitHub...")
                 from ..codex.github import github_fetch_repo
                 ok_fetch, msg_fetch, fetched_dir = github_fetch_repo(self.project)
                 if not ok_fetch or not fetched_dir:
                     self.status = "error"
-                    self._log(f"FEL: Kunde inte klona eller hämta repot: {msg_fetch}")
+                    self._log(f"ERROR: Could not clone or fetch repo: {msg_fetch}")
                     return
                 target_path = fetched_dir
-                self._log(f"Repot klonat/synkat till serverns disk: {target_path}")
+                self._log(f"Repository cloned/synced to server disk: {target_path}")
 
             if not target_path:
                 from ..codex.workspace import ws_current
@@ -196,66 +196,66 @@ class VulnerabilityHarnessRunner(threading.Thread):
 
             if not target_path or not os.path.exists(target_path):
                 self.status = "error"
-                self._log("FEL: Ingen giltig arbetskatalog tillgänglig.")
+                self._log("ERROR: No valid target directory available.")
                 return
 
-            self._log(f"Målkatalog för granskning: {target_path}")
+            self._log(f"Audit target directory: {target_path}")
 
             # ========================================================
-            # FAS 1: Reconnaissance (Arkitektur & Filträd)
+            # PHASE 1: Reconnaissance (Architecture & File Tree)
             # ========================================================
             self.stage = "reconnaissance"
             self.progress = 15
-            self._log("FAS 1: Reconnaissance — Skannar filstruktur, entrypoints och API-ytor...")
+            self._log("PHASE 1: Reconnaissance — Scanning file structure, entrypoints and API surfaces...")
             file_tree = self._collect_source_files(target_path)
-            self._log(f"Hittade {len(file_tree)} relevanta källkodsfiler.")
+            self._log(f"Found {len(file_tree)} relevant source files.")
 
             # ========================================================
-            # FAS 2: Coverage Ledger Generation
+            # PHASE 2: Coverage Ledger Generation
             # ========================================================
             self.stage = "coverage_ledger"
             self.progress = 30
-            self._log("FAS 2: Bygger Coverage Ledger och delar in i deterministiska granskningsenheter...")
+            self._log("PHASE 2: Building Coverage Ledger into deterministic audit units...")
             self.coverage_units = self._build_coverage_ledger(file_tree)
-            self._log(f"Genererade {len(self.coverage_units)} coverage units i ledger.")
+            self._log(f"Generated {len(self.coverage_units)} coverage units in ledger.")
 
             # ========================================================
-            # FAS 3 & 4: VDH (Vulnerability Discovery Harness - Hunting)
+            # PHASE 3 & 4: VDH (Vulnerability Discovery Harness - Hunting)
             # ========================================================
             self.stage = "vdh_hunting"
             self.progress = 50
-            self._log("FAS 3-4: VDH Jakt — Söker sårbarheter med specialistmodeller (Auth, Injection, Data)...")
+            self._log("PHASE 3-4: VDH Hunting — Searching vulnerabilities with specialized models (Auth, Injection, Data)...")
             self.candidates = self._execute_vdh_hunting(target_path, self.coverage_units)
-            self._log(f"VDH slutförd: {len(self.candidates)} sårbarhetskandidater identifierade.")
+            self._log(f"VDH completed: {len(self.candidates)} vulnerability candidates identified.")
 
             # ========================================================
-            # FAS 5: VVS (Vulnerability Validation System - Adversarial)
+            # PHASE 5: VVS (Vulnerability Validation System - Adversarial)
             # ========================================================
             self.stage = "vvs_validation"
             self.progress = 75
-            self._log("FAS 5: VVS Adversarial Validation — Utmanar kandidater med oberoende resonemangsmodell för att eliminera falsklarm...")
+            self._log("PHASE 5: VVS Adversarial Validation — Challenging candidates with independent reasoning model to eliminate false positives...")
             self.confirmed, self.rejected = self._execute_vvs_validation(target_path, self.candidates)
-            self._log(f"VVS slutförd: {len(self.confirmed)} bekräftade sårbarheter, {len(self.rejected)} falsklarm/avvisade.")
+            self._log(f"VVS completed: {len(self.confirmed)} confirmed vulnerabilities, {len(self.rejected)} false positives rejected.")
 
             # ========================================================
-            # FAS 6: Reporting & Issue Tracking
+            # PHASE 6: Reporting & Issue Tracking
             # ========================================================
             self.stage = "reporting"
             self.progress = 95
-            self._log("FAS 6: Skapar slutrapport (REPORT.md & findings.json)...")
+            self._log("PHASE 6: Generating final report (REPORT.md & findings.json)...")
             self._save_artifacts(target_path)
 
             if self.create_issues and self.confirmed:
-                self._log("Skapar GitHub Issues för bekräftade fynd...")
+                self._log("Creating GitHub Issues for confirmed findings...")
                 self._create_github_issues()
 
             self.status = "completed"
             self.stage = "done"
             self.progress = 100
-            self._log(f"Harness slutförd! Bekräftade fynd: {len(self.confirmed)}, Avvisade: {len(self.rejected)}.")
+            self._log(f"Harness completed! Confirmed findings: {len(self.confirmed)}, Rejected false positives: {len(self.rejected)}.")
         except Exception as e:
             self.status = "error"
-            self._log(f"Ett oväntat fel inträffade i harness: {e}")
+            self._log(f"Unexpected error in harness: {e}")
             log.exception("Harness failed")
         finally:
             with _settings_lock:
@@ -405,12 +405,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
 
             if verdict == "confirmed":
                 confirmed.append(cand)
-                self._log(f"✅ VVS BEKRÄFTAD: {cand.get('title')} ({cand.get('file')})")
+                self._log(f"✅ VVS CONFIRMED: {cand.get('title')} ({cand.get('file')})")
             else:
-                reason = parsed.get("reasoning", "Falsklarm vid validering") if isinstance(parsed, dict) else "Avvisad"
+                reason = parsed.get("reasoning", "False positive during validation") if isinstance(parsed, dict) else "Rejected"
                 cand["rejection_reason"] = reason
                 rejected.append(cand)
-                self._log(f"❌ VVS AVVISAD (Falsklarm): {cand.get('title')} — {reason[:80]}...")
+                self._log(f"❌ VVS REJECTED (False Positive): {cand.get('title')} — {reason[:80]}...")
 
         return confirmed, rejected
 
@@ -475,7 +475,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
     def _create_github_issues(self):
         token_gh = setting_str("github_token")
         if not token_gh:
-            self._log("Ingen GitHub-token inställd, hoppar över automatisk issue-generering.")
+            self._log("No GitHub token configured, skipping automatic issue creation.")
             return
 
         from ..codex.github import github_create_issue
@@ -494,9 +494,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
             labels = ["security", "vulnerability-harness", c.get("severity", "high")]
             ok, msg = github_create_issue(title, description=desc, labels=labels, project_slug=self.project)
             if ok:
-                self._log(f"Skapade GitHub Issue: {title}")
+                self._log(f"Created GitHub Issue: {title}")
             else:
-                self._log(f"Kunde inte skapa GitHub Issue: {msg}")
+                self._log(f"Failed to create GitHub Issue: {msg}")
 
 
 def start_vulnerability_harness(project, profile="standard", target_dir=None, create_issues=False):
