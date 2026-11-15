@@ -5379,6 +5379,8 @@ function updateStageIndicators(stage) {
   }
 }
 
+let _lastHarnessTokens = {};
+
 async function pollHarnessRun(runId) {
   clearTimeout(_harnessPollTimer);
   try {
@@ -5387,6 +5389,14 @@ async function pollHarnessRun(runId) {
     const data = await r.json();
     const run = data.run;
     if (!run) return;
+
+    // Track tokens into Cumulative Saved vs Anthropic counter
+    const currentTok = run.tokens_used || 0;
+    const prevTok = _lastHarnessTokens[runId] || 0;
+    if (currentTok > prevTok) {
+      addCumulativeTokens(currentTok - prevTok);
+      _lastHarnessTokens[runId] = currentTok;
+    }
 
     document.getElementById('harnessProgressBar').style.width = (run.progress || 0) + '%';
     document.getElementById('harnessLivePct').textContent = (run.progress || 0) + '%';

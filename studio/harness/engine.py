@@ -34,7 +34,9 @@ _runner_lock = threading.Lock()
 
 
 def _llm_chat(prompt, system_prompt="You are a professional security researcher.", model=None, timeout=60):
-    """Anropar LLM via OmniRoute (i första hand) eller lokal llama-server."""
+    """Anropar LLM via OmniRoute (i första hand) eller lokal llama-server.
+    Returnerar (content, total_tokens).
+    """
     # 1. Prova OmniRoute
     try:
         req_url = OMNIROUTE_URL.rstrip("/") + "/chat/completions"
@@ -52,9 +54,12 @@ def _llm_chat(prompt, system_prompt="You are a professional security researcher.
         req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
+            tokens = data.get("usage", {}).get("total_tokens", 0)
+            if not tokens:
+                tokens = (len(prompt) + len(system_prompt) + 500) // 4
             choices = data.get("choices") or []
             if choices:
-                return choices[0].get("message", {}).get("content", "").strip()
+                return choices[0].get("message", {}).get("content", "").strip(), tokens
     except Exception as e:
         log.warning("OmniRoute anrop misslyckades (%s), provar lokal backend: %s", req_url, e)
 
@@ -76,9 +81,12 @@ def _llm_chat(prompt, system_prompt="You are a professional security researcher.
             req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
+                tokens = data.get("usage", {}).get("total_tokens", 0)
+                if not tokens:
+                    tokens = (len(prompt) + len(system_prompt) + 500) // 4
                 choices = data.get("choices") or []
                 if choices:
-                    return choices[0].get("message", {}).get("content", "").strip()
+                    return choices[0].get("message", {}).get("content", "").strip(), tokens
         else:
             req_url = base.rstrip("/") + "/api/generate"
             payload = {
@@ -89,10 +97,13 @@ def _llm_chat(prompt, system_prompt="You are a professional security researcher.
             req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8", "replace"))
-                return data.get("response", "").strip()
+                eval_count = data.get("eval_count", 0) + data.get("prompt_eval_count", 0)
+                if not eval_count:
+                    eval_count = (len(prompt) + len(system_prompt) + 500) // 4
+                return data.get("response", "").strip(), eval_count
     except Exception as e:
         log.error("Lokal fallback misslyckades: %s", e)
-        return ""
+        return "", 0
 
 
 def init_harness_db():
@@ -110,11 +121,17 @@ def init_harness_db():
                 "candidates_count INTEGER DEFAULT 0, "
                 "confirmed_count INTEGER DEFAULT 0, "
                 "rejected_count INTEGER DEFAULT 0, "
+                "tokens_used INTEGER DEFAULT 0, "
                 "report_json TEXT DEFAULT '{}', "
                 "log TEXT DEFAULT '', "
                 "created_at REAL, "
                 "finished_at REAL)"
             )
+            # Kolla om tokens_used saknas i äldre tabeller och lägg till
+            try:
+                conn.execute("ALTER TABLE vulnerability_harness_runs ADD COLUMN tokens_used INTEGER DEFAULT 0")
+            except Exception:
+                pass
             conn.commit()
         finally:
             conn.close()
@@ -132,6 +149,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
         self.status = "running"
         self.stage = "init"
         self.progress = 0
+        self.tokens_used = 0
         self.candidates = []
         self.confirmed = []
         self.rejected = []
@@ -158,11 +176,11 @@ class VulnerabilityHarnessRunner(threading.Thread):
                     "UPDATE vulnerability_harness_runs SET "
                     "status = ?, stage = ?, progress = ?, "
                     "candidates_count = ?, confirmed_count = ?, rejected_count = ?, "
-                    "report_json = ?, log = ? WHERE run_id = ?",
+                    "tokens_used = ?, report_json = ?, log = ? WHERE run_id = ?",
                     (
                         self.status, self.stage, self.progress,
                         len(self.candidates), len(self.confirmed), len(self.rejected),
-                        json.dumps(report_data), "\n".join(self.log_lines), self.run_id
+                        self.tokens_used, json.dumps(report_data), "\n".join(self.log_lines), self.run_id
                     )
                 )
                 conn.commit()
@@ -344,7 +362,8 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 "Hunt for exploitable vulnerabilities. Return strictly JSON list."
             )
 
-            resp = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-coding", timeout=45)
+            resp, tok = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-coding", timeout=45)
+            self.tokens_used += tok
             parsed = self._extract_json(resp)
             if isinstance(parsed, list):
                 for item in parsed:
@@ -397,7 +416,8 @@ class VulnerabilityHarnessRunner(threading.Thread):
             )
 
             # Använd resonemangsmodell för validering
-            resp = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-reasoning", timeout=50)
+            resp, tok = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-reasoning", timeout=50)
+            self.tokens_used += tok
             parsed = self._extract_json(resp)
             verdict = parsed.get("verdict", "").lower() if isinstance(parsed, dict) else ""
 
@@ -535,7 +555,7 @@ def get_harness_status(run_id):
         try:
             cur = conn.execute(
                 "SELECT run_id, project, profile, status, stage, progress, "
-                "candidates_count, confirmed_count, rejected_count, report_json, log, created_at, finished_at "
+                "candidates_count, confirmed_count, rejected_count, tokens_used, report_json, log, created_at, finished_at "
                 "FROM vulnerability_harness_runs WHERE run_id = ?",
                 (run_id,)
             )
@@ -544,7 +564,7 @@ def get_harness_status(run_id):
                 return None
             report = {}
             try:
-                report = json.loads(row[9] or "{}")
+                report = json.loads(row[10] or "{}")
             except Exception:
                 pass
             return {
@@ -557,10 +577,11 @@ def get_harness_status(run_id):
                 "candidates_count": row[6],
                 "confirmed_count": row[7],
                 "rejected_count": row[8],
+                "tokens_used": row[9] or 0,
                 "report": report,
-                "log": row[10],
-                "created_at": row[11],
-                "finished_at": row[12]
+                "log": row[11],
+                "created_at": row[12],
+                "finished_at": row[13]
             }
         finally:
             conn.close()
