@@ -5289,6 +5289,14 @@ async function updateVramTelemetry() {
       const vramEl = document.getElementById('teleVram');
       if (vramEl) vramEl.textContent = pct + '% (RAM)';
     }
+
+    // Uppdatera throughput från llama-serverns metrics om inte chatten nyss satt den
+    if (s && s.throughput_tps && s.throughput_tps > 0) {
+      const spdEl = document.getElementById('teleSpeed');
+      if (spdEl && (spdEl.textContent === '– t/s' || spdEl.textContent === '–')) {
+        spdEl.textContent = Math.round(s.throughput_tps) + ' t/s';
+      }
+    }
   } catch(e) {}
 }
 

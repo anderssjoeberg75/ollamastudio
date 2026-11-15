@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 
 from . import backends
 from studio.logging_util import get_logger as _get_logger
@@ -193,9 +194,24 @@ def _nvidia_gpus_query():
 def gather_system():
     total, used = read_mem()
     gpus, gpu_err = nvidia_gpus()
+    # Hämta live-telemetri från lokal llama-server om tillgänglig
+    throughput_tps = None
+    try:
+        req = urllib.request.Request("http://127.0.0.1:11434/metrics", headers={"User-Agent": "OllamaStudio"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            text = resp.read().decode("utf-8", "replace")
+            for line in text.splitlines():
+                if line.startswith("llamacpp:predicted_tokens_seconds"):
+                    val = line.split()[-1]
+                    throughput_tps = float(val)
+                    break
+    except Exception:
+        pass
+
     return {
         "cpu": {"percent": read_cpu_percent(), "cores": os.cpu_count(), "load": read_loadavg()},
         "mem": {"total": total, "used": used},
         "gpus": gpus or [],
         "gpu_error": gpu_err,
+        "throughput_tps": throughput_tps
     }
