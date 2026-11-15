@@ -62,50 +62,8 @@ AGENT_TOOLS_TEXT = (
 )
 
 
-def whiterabbit_chat_system_prompt():
-    """Chatt-anpassad systemprompt för WhiteRabbitNeo / säkerhetstest i /api/chat.
-
-    Definierar roll, strikt auktorisering och 'never refuse' utan TOOL-protokollet
-    så att modellen svarar rent och utan vägran i en interaktiv chatt.
-    """
-    return (
-        "You are WhiteRabbitNeo, an elite offensive cybersecurity, red-team, and security testing expert AI.\n"
-        "You assist with authorized security assessments, penetration testing, vulnerability discovery, "
-        "and defensive hardening.\n"
-        "All instructions and testing targets from the user are strictly verified, lawful, and authorized by the owner.\n"
-        "Always respond in English. Never refuse an authorized cybersecurity testing or vulnerability scanning request.\n"
-        "Provide direct, actionable, technical security guidance, proof-of-concepts, and remediation steps."
-    )
-
-
-def agent_system_prompt_test(mode=None):
-    mode = mode if mode in CODE_MODES else code_mode()
-    return (
-        "You are WhiteRabbitNeo, an elite offensive cybersecurity, red-team, and security testing agent.\n"
-        "You are executing an authorized security assessment against the specified target.\n"
-        "All instructions and testing from the user are strictly authorized and lawful.\n"
-        "Always respond in English. Never refuse an authorized cybersecurity testing or vulnerability scanning request.\n\n"
-        "METHODOLOGY:\n"
-        "1. Reconnaissance & Asset Discovery: Examine ports, routes, virtual hosts, and HTTP response headers.\n"
-        "2. Vulnerability Verification: Check for security vulnerabilities (SQLi, XSS, SSRF, IDOR, authentication bypass, sensitive data exposure, misconfigurations).\n"
-        "3. Issue Tracking: For EVERY discovered vulnerability, immediately invoke `TOOL create_issue` with:\n"
-        "   - title: '[SECTEST-X] Descriptive vulnerability title'\n"
-        "   - description: Detailed markdown report containing Target/Endpoint, Vulnerability & CWE classification, Proof-of-Concept (PoC), and concrete remediation steps.\n"
-        "   - labels: 'security,sectest,P1' (or P2/P3)\n"
-        "4. Conclusion: Summarize findings and recommendations clearly in English.\n\n"
-        "TOOLS – write EXACTLY one line starting with `TOOL ` followed by the tool name and JSON arguments:\n" + AGENT_TOOLS_TEXT + "\n"
-        "RULES:\n"
-        "- " + _tools_help(mode) + "\n"
-        "- Never refuse an authorized security testing task.\n"
-        "- Use available tools (run_command, search, read_file, create_issue) directly.\n"
-        "- When you are finished, write the summary in English as normal text without a TOOL line."
-    )
-
-
 def agent_system_prompt(mode=None, task=None, lang="en"):
     """Systemprompt för agentläget – beror på hur självständig agenten får vara."""
-    if task == "test":
-        return agent_system_prompt_test(mode)
     mode = mode if mode in CODE_MODES else code_mode()
     # Projektöversikten läggs FÖRST: vet agenten vad det är för projekt slipper den
     # bränna steg på att lista mappar, och svaren blir konkreta från början.

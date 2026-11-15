@@ -279,26 +279,6 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                     data = self._upstream_get(upstream)
                     if path == "/api/models" and isinstance(data, dict):
                         models_list = list(data.get("models") or [])
-                        # Om WhiteRabbitNeo körs på port 11436 (eller i en annan backend)
-                        # och inte redan finns med i primärbackendens lista, hämta den
-                        from studio.llama_bridge import llama_server_models
-                        from studio.backends import select_optimal_backend
-                        wr_url = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
-                        if wr_url and wr_url != _backends.PRIMARY["url"]:
-                            try:
-                                wr_models = llama_server_models(wr_url, timeout=1.5)
-                                existing_names = {m.get("name") for m in models_list}
-                                for wm in wr_models:
-                                    if wm.get("name") not in existing_names:
-                                        # Ge ett tydligt namn och tag
-                                        if wm.get("name") == "whiterabbitneo":
-                                            wm["name"] = "WhiteRabbitNeo-13B"
-                                            wm["model"] = "WhiteRabbitNeo-13B"
-                                        models_list.append(wm)
-                            except Exception:
-                                _log.debug("ignored exception", exc_info=True)
-                                pass
-
                         from studio.antigravity_bridge import antigravity_models
                         extra = antigravity_models()
                         if extra:
@@ -488,16 +468,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"error": "model och messages krävs"}, 400)
             
             backend_param = data.get("backend")
-            from studio.codex.router import classify_task
-            user_texts = [str(m.get("content") or "") for m in messages if m.get("role") == "user"]
-            last_prompt = user_texts[-1] if user_texts else ""
-            task_type = classify_task(last_prompt)
-
-            if not backend_param and (task_type == "test" or "whiterabbit" in model.lower()):
-                from studio.backends import select_optimal_backend
-                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
-            else:
-                base = backend_url(backend_param)
+            base = backend_url(backend_param)
             return self._run_agent(model, messages, base)
 
         if path == "/api/agent/apply":
@@ -625,25 +596,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             opts = opts if isinstance(opts, dict) and opts else None
             # Välj backend (GPU-instans) att köra chatten på
             backend_choice = data.get("backend")
-            last_user_text = self._last_user_text(messages)
-            from studio.codex.router import needs_security_system_prompt
-            is_sec_task = needs_security_system_prompt(model, last_user_text)
-
-            if not backend_choice and is_sec_task:
-                from studio.backends import select_optimal_backend
-                base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
-                if "whiterabbit" not in model.lower():
-                    model = "whiterabbitneo"
-            else:
-                base = backend_url(backend_choice)
-
-            # Om WhiteRabbitNeo eller säkerhetstest körs i chatten: injicera säkerhetssystemprompt
-            # om användaren inte redan skickat en egen systemprompt
-            if is_sec_task:
-                has_sys = any(isinstance(m, dict) and m.get("role") == "system" for m in messages)
-                if not has_sys:
-                    from studio.codex.protocol import whiterabbit_chat_system_prompt
-                    messages = [{"role": "system", "content": whiterabbit_chat_system_prompt()}] + messages
+            base = backend_url(backend_choice)
 
             # Vad är klockan? Modellen vet inte – tala om det (först i listan, så
             # den ligger kvar även när minne och sökträffar läggs till).

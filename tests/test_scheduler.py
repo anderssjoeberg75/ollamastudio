@@ -303,11 +303,11 @@ class TestScheduler(unittest.TestCase):
     def test_select_optimal_backend(self):
         from studio import backends
         with patch.object(backends, "_backend_is_alive") as mock_alive:
-            # Simulera att port 11436 och 11434 är vid liv
-            mock_alive.side_effect = lambda u: ":11436" in u or ":11434" in u
+            # Simulera att port 8080 och 11434 är vid liv
+            mock_alive.side_effect = lambda u: ":8080" in u or ":11434" in u
             with patch.dict(backends.BACKENDS[0], {"url": "http://127.0.0.1:11434"}):
                 chosen = backends.select_optimal_backend()
-                self.assertIn(":11436", chosen)
+                self.assertIn(":8080", chosen)
 
 
 if __name__ == "__main__":

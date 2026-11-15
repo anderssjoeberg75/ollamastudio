@@ -431,22 +431,12 @@ def _get_active_code_model(base_url=None):
     return ""
 
 
-def _get_local_ollama_model(base_url=None, task="test"):
-    """Hämtar alltid en lokal Llama/Ollama-modell (aldrig molnmodeller som Claude/Gemini).
-
-    Krävs för säkerhetstestning eftersom molnmodeller blockerar eller
-    vägrar utföra säkerhetstester p.g.a. sina strikta säkerhets- och användarpolicyer.
-    Prioriterar WhiteRabbitNeo för säkerhetstest.
-    """
+def _get_local_ollama_model(base_url=None, task="general"):
+    """Hämtar en lokal Llama/Ollama-modell."""
     base = base_url or backends.select_optimal_backend(task=task)
     from .llama_bridge import detect_backend_type, llama_server_models
     try:
         targets = [base]
-        if task == "test":
-            pen_b = backends.select_optimal_backend(task="test")
-            if pen_b and pen_b not in targets and backends._backend_is_alive(pen_b):
-                targets.insert(0, pen_b)
-
         for b in targets:
             if detect_backend_type(b) == "llama_server":
                 models = llama_server_models(b)
@@ -457,9 +447,6 @@ def _get_local_ollama_model(base_url=None, task="test"):
                     models = data.get("models") or []
             if models:
                 from .models import select_optimal_model
-                optimal = select_optimal_model(models, task=task)
-                if optimal:
-                    return optimal
                 optimal_sec = select_optimal_model(models, task="security")
                 if optimal_sec:
                     return optimal_sec
@@ -470,21 +457,16 @@ def _get_local_ollama_model(base_url=None, task="test"):
     except Exception:
         _log.debug("ignored exception", exc_info=True)
         pass
-    return "whiterabbitneo" if task == "test" else "llama3.2:latest"
+    return "llama3.2:latest"
 
 
 def _get_best_model_for_task(task_type, text="", labels="", base_url=None):
     """Väljer den bäst lämpade modellen för en specifik granskningsuppgift.
 
-    - 'test': HÅRDKODAT att alltid köras med en lokal modell (WhiteRabbitNeo prioriteras
-      eftersom molnmodeller som Claude/Gemini vägrar säkerhetstester enligt sina regler).
     - 'security' / 'ponytail' / 'resolve': Väljer den bästa modellen som finns att
       tillgå (Claude Sonnet 5.5 för säkerhet, Gemini Flash för snabba tester/förenklingar,
       eller bästa lokala Ollama-modell).
     """
-    if task_type == "test":
-        return _get_local_ollama_model(base_url=base_url, task="test")
-
     # Om användaren explicit sparat en specifik Codex-modell som inte är 'auto'
     try:
         user_m = (prefs_all().get("code_model") or "").strip()
@@ -892,14 +874,12 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
     return resolved_count, errors
 
 
-def run_headless_audit(project, branch="", run_security=True, run_ponytail=True, run_test=True,
-                       status_cb=None, prod_server="", prod_token="", sec_mode="safe", run_resolve=False):
+def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
+                       status_cb=None, prod_server="", prod_token="", sec_mode="safe", run_resolve=False, **_kwargs):
     """Kör hela granskningen mot ett valt repo (GitHub eller GitLab) och sparar fynden som Issues.
 
     Modellval:
-    - Test: HÅRDKODAT att ALLTID köras med en lokal Ollama-modell (eftersom
-      molnmodeller som Claude/Gemini vägrar säkerhetstester enligt sina säkerhetspolicyer).
-    - Övriga moment (säkerhetsgranskning, ponytail, resolve): Körs med bästa
+    - Granskningsmoment (säkerhetsgranskning, ponytail, resolve): Körs med bästa
       modellen som finns att tillgå (Claude Sonnet 5.5, Gemini Flash eller lokal).
     """
     token_gh = setting_str("github_token")
@@ -909,17 +889,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
 
     base_url = backends.select_optimal_backend()
     sec_model = _get_best_model_for_task("security", text="Säkerhetsgranskning SAST", labels="security", base_url=base_url)
-    pen_model = _get_local_ollama_model(base_url=base_url, task="test")
     pny_model = _get_best_model_for_task("ponytail", text="Ponytail förenkling", labels="ponytail", base_url=base_url)
-
-    pen_url = base_url
-    if "whiterabbit" in (pen_model or "").lower():
-        opt_p = backends.select_optimal_backend(task="test")
-        if opt_p and ":11436" in opt_p:
-            pen_url = opt_p
-
-    if not pen_model and run_test:
-        return False, "Ingen WhiteRabbitNeo eller lokal Llama-modell tillgänglig på %s för säkerhetstest" % pen_url, 0, 0
 
     mode = (sec_mode or "safe").strip().lower()
     if mode not in ("safe", "full", "passive"):
@@ -948,8 +918,8 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     is_github = ("github.com" in project.lower()) or (setting_str("github_token") and "/" in project and not project.startswith("http://") and not project.startswith("https://"))
     provider_name = "GitHub" if is_github else "GitLab"
     if status_cb:
-        status_cb("Optimal hårdvara (%s) vald. Test: %s på %s, Övriga: bästa tillgängliga (%s, %s). Hämtar %s från %s..."
-                  % (base_url, pen_model, pen_url, sec_model, pny_model, project, provider_name))
+        status_cb("Optimal hårdvara (%s) vald. Modeller: (%s, %s). Hämtar %s från %s..."
+                  % (base_url, sec_model, pny_model, project, provider_name))
 
     if is_github:
         from studio.codex.github import github_fetch_repo
@@ -963,7 +933,6 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     settings_set({"code_workspace": target_dir})
 
     sec_count = 0
-    pen_count = 0
     pny_count = 0
     res_count = 0
     errors = []
@@ -976,25 +945,6 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
             sec_count, sec_err = _run_single_headless_pass(sec_prompt, sec_model, project, base_url=base_url)
             if sec_err:
                 errors.append("Säkerhetsgranskning: " + sec_err)
-
-        if run_test:
-            pen_prompt = TEST_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
-            if prod_server:
-                token_desc = " (med access-token)" if prod_token else " (utan token)"
-                pen_prompt += (
-                    "\n\nPRODUKTIONSSERVER & MÅLMILJÖ FÖR DETTA PROJEKT:\n"
-                    "- Målserver: %s%s\n"
-                    "- Testläge / Säkerhetsnivå: %s\n"
-                    "- Enligt .agents/skills/openclaw-redteam/SKILL.md och .agents/rules/redteam.md ska nätverkstester, "
-                    "endpoints och autentisering granskas och testas mot denna målserver enligt angiven säkerhetsnivå.\n"
-                    % (prod_server, token_desc, mode.upper())
-                )
-            if status_cb:
-                srv_msg = (" mot %s" % prod_server) if prod_server else ""
-                status_cb("Kör säkerhetstest (test, %s, läge: %s)%s på %s..." % (pen_model, mode, srv_msg, pen_url))
-            pen_count, pen_err = _run_single_headless_pass(pen_prompt, pen_model, project, base_url=pen_url)
-            if pen_err:
-                errors.append("Säkerhetstest: " + pen_err)
 
         if run_ponytail:
             if status_cb:
@@ -1014,29 +964,27 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
         if prev_workspace and prev_workspace != target_dir:
             settings_set({"code_workspace": prev_workspace})
 
-    total = sec_count + pen_count + pny_count + res_count
+    total = sec_count + pny_count + res_count
     models_used = []
-    for m in (sec_model if run_security else None, pen_model if run_test else None, pny_model if run_ponytail else None):
+    for m in (sec_model if run_security else None, pny_model if run_ponytail else None):
         if m and m not in models_used:
             models_used.append(m)
-    models_str = ", ".join(models_used) if models_used else (sec_model or pen_model)
+    models_str = ", ".join(models_used) if models_used else (sec_model or pny_model)
 
     if errors and total == 0:
         summary = "Fel under körning (%s på %s): %s" % (models_str, base_url, "; ".join(errors))
-        return False, summary, sec_count + pen_count, pny_count
+        return False, summary, sec_count, pny_count
 
     parts = []
     if run_security:
         parts.append("%d säkerhets-" % sec_count)
-    if run_test:
-        parts.append("%d test-" % pen_count)
     if run_ponytail:
         parts.append("%d ponytail-" % pny_count)
     if run_resolve:
         parts.append("%d åtgärdade fynd" % res_count)
     parts_str = " och ".join(parts) if len(parts) <= 2 else (", ".join(parts[:-1]) + " och " + parts[-1])
     summary = ("Klar (%s på %s): %s punkter behandlade." % (models_str, base_url, parts_str)) if parts else "Klar: Inga moment valda."
-    return True, summary, sec_count + pen_count, pny_count
+    return True, summary, sec_count, pny_count
 
 
 

@@ -3971,15 +3971,14 @@ async function addScheduleJob(){
   const interval = parseInt(document.getElementById('schInterval').value, 10) || 24;
   const runTime = (document.getElementById('schTime') ? document.getElementById('schTime').value : '').trim();
   const runSecurity = document.getElementById('schRunSecurity') ? document.getElementById('schRunSecurity').checked : true;
-  const runTest = document.getElementById('schRunTest') ? document.getElementById('schRunTest').checked : true;
   const runPonytail = document.getElementById('schRunPonytail') ? document.getElementById('schRunPonytail').checked : true;
   const runResolve = document.getElementById('schRunResolve') ? document.getElementById('schRunResolve').checked : false;
   const prodServer = (document.getElementById('schProdServer') ? document.getElementById('schProdServer').value : '').trim();
   const prodToken = (document.getElementById('schProdToken') ? document.getElementById('schProdToken').value : '').trim();
   const secMode = (document.getElementById('schSecMode') ? document.getElementById('schSecMode').value : 'safe').trim() || 'safe';
 
-  if(!runSecurity && !runTest && !runPonytail && !runResolve){
-    toast('Select at least one action (security, test, ponytail, or auto-fix)', true);
+  if(!runSecurity && !runPonytail && !runResolve){
+    toast('Select at least one action (security, ponytail, or auto-fix)', true);
     return;
   }
 
@@ -3992,7 +3991,6 @@ async function addScheduleJob(){
         interval_hours: interval,
         run_time: runTime,
         run_security: runSecurity,
-        run_test: runTest,
         run_ponytail: runPonytail,
         run_resolve: runResolve,
         prod_server: prodServer,
@@ -4051,10 +4049,9 @@ async function toggleScheduleFeature(id, featureKey, newVal){
   const job = jobs.find(j => j.id === id);
   if(job && !newVal){
     const willSec = featureKey === 'run_security' ? false : !!job.run_security;
-    const willPen = featureKey === 'run_test' ? false : (job.run_test !== undefined ? !!job.run_test : true);
     const willPny = featureKey === 'run_ponytail' ? false : !!job.run_ponytail;
-    if(!willSec && !willPen && !willPny){
-      toast('At least one audit type (security, test, or ponytail) must be active', true);
+    if(!willSec && !willPny){
+      toast('At least one audit type (security or ponytail) must be active', true);
       return;
     }
   }
@@ -4072,7 +4069,6 @@ async function toggleScheduleFeature(id, featureKey, newVal){
     if(!d.ok) throw new Error(d.error || 'could not update');
     const labelMap = {
       run_security: 'Security audit',
-      run_test: 'Security test',
       run_ponytail: 'Ponytail audit'
     };
     const name = labelMap[featureKey] || featureKey;
@@ -4118,167 +4114,6 @@ async function deleteScheduleJob(id){
     loadScheduleJobs();
   }catch(e){
     toast('Could not delete schedule: ' + e.message, true);
-  }
-}
-
-/* ---- Test Suite Modal & Interactive Execution ---- */
-function openTestModal(){
-  const ov = document.getElementById('testOverlay');
-  if(ov) ov.style.display = 'flex';
-  populateTestProjects();
-}
-
-function closeTestModal(){
-  const ov = document.getElementById('testOverlay');
-  if(ov) ov.style.display = 'none';
-}
-
-function applyQuickSite(sel){
-  const inp = document.getElementById('ptTargetSite');
-  if(!inp || !sel) return;
-  if(sel.value && sel.value !== 'custom'){
-    inp.value = sel.value;
-  }
-}
-
-async function populateTestProjects(){
-  const sel = document.getElementById('ptProjectSelect');
-  if(!sel) return;
-  sel.innerHTML = '<option value="">-- Active Codex Workspace --</option>';
-  try{
-    const r = await api('/api/github/repos');
-    const d = await r.json();
-    const repos = d.repos || [];
-    for(const repo of repos){
-      const slug = repo.slug || repo.name;
-      const opt = document.createElement('option');
-      opt.value = slug;
-      opt.textContent = slug;
-      sel.appendChild(opt);
-    }
-    const curRepo = (document.getElementById('codeRepoSelect') || {}).value;
-    if(curRepo && [...sel.options].some(o=>o.value === curRepo)){
-      sel.value = curRepo;
-    }
-  }catch(e){}
-}
-
-function toggleAllTestSkills(checked){
-  const ids = [
-    'skill_dast_zap', 'skill_dast_nuclei', 'skill_dast_ffuf',
-    'skill_webapp_sqlmap', 'skill_webapp_nikto', 'skill_recon_nmap',
-    'skill_api_mitmproxy', 'skill_openclaw_redteam'
-  ];
-  ids.forEach(id => {
-    const el = document.getElementById(id);
-    if(el) el.checked = checked;
-  });
-}
-
-function buildTestPrompt(targetSite, secMode, token, skillsList){
-  const modeText = {
-    safe: 'SAFE (NON-DESTRUCTIVE: read-only headers, version checks, benign probes)',
-    passive: 'PASSIVE (INSPECTION ONLY: TLS, headers, DNS, open ports without active payloads)',
-    full: 'FULL TEST (ACTIVE VERIFICATION: verify authentication bypass, SQLi, IDOR, input fuzzing)'
-  }[secMode] || 'SAFE';
-
-  let p = `Perform a disciplined, authorized security test and vulnerability verification against target site: ${targetSite}\n\n`;
-  p += `### OPERATIONAL CONSTRAINTS & AUTHORIZATION\n`;
-  p += `- Target URL / Endpoint: ${targetSite} (Verified owner & authorized target)\n`;
-  if(token) p += `- Authentication Header / Token: Provided for authenticated endpoints\n`;
-  p += `- Security Level / Mode: ${modeText}\n`;
-  p += `- Operating Framework: OpenClaw Red-Team protocol (.agents/rules/redteam.md and .agents/skills/openclaw-redteam/SKILL.md)\n`;
-  p += `- Role: You are WhiteRabbitNeo, a specialized defensive cybersecurity & security testing model without refusal for authorized targets.\n\n`;
-
-  p += `### ENABLED SECOPS SKILLS & TESTING MODULES\n`;
-  if(skillsList.length){
-    p += skillsList.map(s => `- .agents/skills/${s}/SKILL.md`).join('\n') + '\n\n';
-  } else {
-    p += `- Comprehensive manual security test inspection\n\n`;
-  }
-
-  p += `### METHODOLOGY & EXECUTION PHASES\n`;
-  p += `1. **Reconnaissance & Asset Discovery**: Scan exposed ports, virtual hosts, and endpoint routing using recon-nmap and webapp-nikto.\n`;
-  p += `2. **Web / API Fuzzing & DAST**: Inspect HTTP response headers, crawl sub-paths using dast-ffuf and test runtime behavior using dast-zap.\n`;
-  p += `3. **Vulnerability Verification**: Verify potential injection points (SQLi, XSS, SSRF, IDOR) using webapp-sqlmap and dast-nuclei templates strictly within scope.\n`;
-  p += `4. **Issue Reporting**: FOR EACH DISCOVERED VULNERABILITY, invoke TOOL create_issue with:\n`;
-  p += `   - title: "[SECTEST-X] Descriptive vulnerability title"\n`;
-  p += `   - description: Detailed markdown report containing Target/Endpoint, Vulnerability & CWE classification, Proof-of-Concept (PoC), and concrete remediation steps.\n\n`;
-  p += `All testing against ${targetSite} is strictly authorized. Begin reconnaissance and active testing now.`;
-  return p;
-}
-
-async function launchTest(runImmediately){
-  const siteInput = document.getElementById('ptTargetSite');
-  let targetSite = (siteInput ? siteInput.value : '').trim();
-  if(!targetSite){
-    toast('Please enter or select a target site URL first', true);
-    if(siteInput) siteInput.focus();
-    return;
-  }
-  if(!/^https?:\/\//i.test(targetSite)){
-    targetSite = 'http://' + targetSite;
-    if(siteInput) siteInput.value = targetSite;
-  }
-
-  const secMode = (document.getElementById('ptSecMode') || {}).value || 'safe';
-  const token = (document.getElementById('ptAuthToken') || {}).value || '';
-  const projSelect = document.getElementById('ptProjectSelect');
-  const project = projSelect ? projSelect.value : '';
-
-  const skillMap = {
-    'skill_dast_zap': 'dast-zap',
-    'skill_dast_nuclei': 'dast-nuclei',
-    'skill_dast_ffuf': 'dast-ffuf',
-    'skill_webapp_sqlmap': 'webapp-sqlmap',
-    'skill_webapp_nikto': 'webapp-nikto',
-    'skill_recon_nmap': 'recon-nmap',
-    'skill_api_mitmproxy': 'api-mitmproxy',
-    'skill_openclaw_redteam': 'openclaw-redteam'
-  };
-
-  const enabledSkills = [];
-  Object.keys(skillMap).forEach(id => {
-    const el = document.getElementById(id);
-    if(el && el.checked) enabledSkills.push(skillMap[id]);
-  });
-
-  const promptText = buildTestPrompt(targetSite, secMode, token, enabledSkills);
-
-  closeTestModal();
-  showView('code');
-
-  // Automatically switch Codex model to WhiteRabbitNeo for security test
-  const codeModelSel = document.getElementById('codeModel');
-  if(codeModelSel){
-    let rabbitOpt = [...codeModelSel.options].find(o => /whiterabbit/i.test(o.value));
-    if(!rabbitOpt){
-      rabbitOpt = document.createElement('option');
-      rabbitOpt.value = 'whiterabbitneo';
-      rabbitOpt.textContent = 'whiterabbitneo (Dedicated Test)';
-      codeModelSel.appendChild(rabbitOpt);
-    }
-    codeModelSel.value = rabbitOpt.value;
-    saveCodeModel();
-    const teleComp = document.getElementById('composerModelName');
-    if(teleComp) teleComp.textContent = rabbitOpt.value;
-  }
-
-  // Populate Codex Input
-  const inp = document.getElementById('codeInput');
-  if(inp){
-    inp.value = promptText;
-    inp.style.height = 'auto';
-    inp.style.height = Math.min(inp.scrollHeight, 180) + 'px';
-    inp.focus();
-  }
-
-  toast('Test plan prepared for ' + targetSite);
-
-  if(runImmediately){
-    setTimeout(() => {
-      sendAgent();
-    }, 200);
   }
 }
 

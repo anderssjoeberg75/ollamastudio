@@ -74,13 +74,6 @@ MODEL_MATRIX = {
         "tier": "local_reasoning",
         "strengths": ["algoritmer", "matematik", "logiska felresonemang", "test"],
         "best_for": ["algorithms", "math", "logical_bug", "test"]
-    },
-    "whiterabbitneo": {
-        "name": "WhiteRabbitNeo V3 7B (Lokal Test)",
-        "provider": "llama",
-        "tier": "local_test",
-        "strengths": ["säkerhetstest", "red team", "sårbarhetsanalys", "PoC-exploits", "100% lokal", "inga säkerhetsvägran"],
-        "best_for": ["test", "redteam", "security_audit", "vulnerability_scan"]
     }
 }
 
@@ -89,7 +82,6 @@ def classify_task(text="", labels=""):
     """Klassificerar en uppgift eller ett fynd till en uppgiftstyp.
 
     Typer:
-    - 'säkerhetstest': Nätverksskanning, endpoints, API-säkerhetstest (alltid lokal Ollama)
     - 'security': Sårbarheter, CVE, auth, tokens, injektioner, säkerhetsgranskning
     - 'refactor_complex': Större arkitektoniska förändringar, omstrukturering
     - 'ponytail': Förenkling, död kod, ta bort överarbetning, YAGNI
@@ -99,73 +91,30 @@ def classify_task(text="", labels=""):
     """
     combined = f"{labels} {text}".lower()
 
-    # 1. Säkerhetstest (Säkerhetstestning mot nätverk och API:er)
-    # Verktygsnamn och entydiga termer (sv + en). "säkerhetstest", "säkerhets test" och
-    # "sårbarhetsskanning" avser aktiv testning – kod-/SAST-granskning fångas av
-    # regel 2 nedan och ordnas efter denna.
-    # OBS: regexen nedan behåller äldre synonymer (pentest/penetrationstest/red team)
-    # som INDATA att känna igen så att gamla scheman och fritext fortsatt ruttas rätt –
-    # kategorin som returneras heter numera "test".
-    if re.search(r'\b(pentest\w*|penetration[ -]?test\w*|penetrationstest\w*|red[ -]?team\w*|'
-                 r'nmap|nuclei|ffuf|sqlmap|nikto|active_scan|whiterabbit\w*|'
-                 r'säkerhet[ -]?test\w*|säkerhets[ -]?test\w*|security[ -]?test\w*|'
-                 r'sårbarhetsskann\w*|sårbarhetsscann\w*|'
-                 r'vuln\w*scan\w*|portskann\w*|port[ -]?scan\w*|recon\w*)\b', combined):
-        return "test"
-    # Aktiv testning = ett test-/skan-verb följt av ett WEBB-/NÄTVERKSMÅL (sajt, URL,
-    # domän, server, endpoint, en http(s)-adress ...). Det är målet som skiljer ett
-    # säkerhetstest ("testa min sajt", "kolla sårbarheter på example.com") från kod-/SAST-
-    # granskning ("testa koden", "granska sårbarheter i koden") – där finns inget
-    # webbmål, så de faller vidare till regel 2 (security) nedan.
-    _verb = (r'(skanna\w*|scanna\w*|scan\w*|testa\w*|test\w*|kolla\w*|granska\w*|'
-             r'undersök\w*|angrip\w*|penetrera\w*|attack\w*|hacka\w*|bryt\w*)')
-    _target = (r'(sajt\w*|webbsajt\w*|webbplats\w*|\bsite\b|hemsid\w*|domän\w*|\burl\b|'
-               r'https?://\S+|\bservern?\b|nätverk\w*|endpoint\w*|\bapi\b|api:er|'
-               r'målserver\w*|host\w*|\bport(ar|en)?\b|\bip\b|'
-               # en bar värd/domän med riktig toppdomän (example.com) – men inte app.py
-               r'[a-z0-9-]+\.(?:com|se|net|org|io|dev|ai|co|app|nu|eu|de|uk|info|biz|'
-               r'gov|edu|mil|xyz|tech|site|online|cloud))')
-    if re.search(r'\b' + _verb + r'\b[^.\n]*\b' + _target, combined):
-        return "test"
-
-    # 2. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)
+    # 1. Säkerhet & Sårbarhetsgranskning (SAST / kodfixar)
     if re.search(r'\b(sec|security|sårbarhet|vulnerability|cve|cwe|owasp|injection|sql|xss|ssrf|csrf|auth|token|jwt|leak|crypto|password|secret)\b', combined):
         return "security"
 
-    # 3. Förenkling & Ponytail
+    # 2. Förenkling & Ponytail
     if re.search(r'\b(ponytail|yagni|död kod|dead code|överarbet|komplexitet|simplify|förenkla|clean|ta bort onödig|duplicer)\b', combined):
         return "ponytail"
 
-    # 4. Testning
+    # 3. Testning
     if re.search(r'\b(test|pytest|unittest|testfall|assert|mock|coverage|verifiera|testsvit)\b', combined):
         return "testing"
 
-    # 5. Linter & syntax
+    # 4. Linter & syntax
     if re.search(r'\b(lint|flake8|ruff|pep8|format|formatting|syntax|typo|namngivning)\b', combined):
         return "lint"
 
-    # 6. Komplex refaktorisering
+    # 5. Komplex refaktorisering
     if re.search(r'\b(arkitektur|refactor|restructure|migrera|migration|redesign|omstrukturera)\b', combined):
         return "refactor_complex"
 
     return "general"
 
 
-def needs_security_system_prompt(model: str = "", text: str = "") -> bool:
-    """Avgör om en förfrågan kräver WhiteRabbitNeo / säkerhetssystemprompt i chatt/agent-vägen.
-    
-    Aktiveras om modellnamnet refererar till WhiteRabbitNeo eller om uppgiften klassificeras
-    som ett säkerhets-/penetrationstest (kategori 'test').
-    """
-    if "whiterabbit" in str(model).lower():
-        return True
-    if text and classify_task(text) == "test":
-        return True
-    return False
-
-
 TASK_RECOMMENDATIONS = {
-    "test": {"agent": "openclaw-redteam", "skill": "openclaw-redteam"},
     "security": {"agent": "security-reviewer", "skill": "security-review"},
     "refactor_complex": {"agent": "architect", "skill": "hexagonal-architecture"},
     "testing": {"agent": "tdd-guide", "skill": "tdd-workflow"},
@@ -221,30 +170,6 @@ def select_best_model_for_task(text="", labels="", installed_models=None, prefer
     default_local = local_candidate or "llama3.2"
 
     # REGELVERK:
-    # 0. Säkerhetstest: HÅRDKODAT TILL LOKAL MODELL – WHITERABBITNEO PRIORITERAS ALLTID
-    # Molnmodeller (Claude, Gemini etc.) blockerar eller vägrar säkerhetstester
-    # p.g.a. leverantörernas policyer. WhiteRabbitNeo är specialtränad utan säkerhetsvägran för säkerhetstester.
-    if task_type == "test":
-        test_m = None
-        for m in (installed_names or []):
-            if "whiterabbit" in m.lower():
-                test_m = m
-                break
-        if not test_m:
-            # WhiteRabbitNeo är inte installerad: fall tillbaka till en installerad
-            # lokal modell i stället för att peka på en modell som inte finns (vilket
-            # tyst skulle misslyckas vid körning).
-            test_m = default_local
-        reason = (
-            "WhiteRabbitNeo vald för säkerhetstest (specialiserad för offensive security och utan begränsande säkerhetsfilter)."
-            if "whiterabbit" in test_m.lower() else
-            "Lokal Llama-modell hårdkodad för säkerhetstest (molnmodeller blockerar säkerhetstester p.g.a. policy)."
-        )
-        return _decorate({
-            "model": test_m,
-            "reason": reason,
-            "task_type": task_type
-        }, task_type)
 
     # 1. Säkerhetsfixar (P1/P2, sårbarheter, auth)
     # -> Claude Sonnet 5.5 är bäst i världen på att åtgärda sårbarheter utan regressioner

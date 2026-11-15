@@ -41,41 +41,16 @@ class CodexRoutes(BaseHandler):
         user_texts = [str(m.get("content") or "") for m in (messages or []) if m.get("role") == "user"]
         last_prompt = user_texts[-1] if user_texts else ""
 
-        # Om uppgiften är ett säkerhetstest tvingar vi alltid WhiteRabbitNeo på port 11436
-        # eftersom generella modeller vägrar säkerhetstester av säkerhetspolicyer
         from studio.codex.router import classify_task
         task_type = classify_task(last_prompt)
-        test_block_reason = None
-        if task_type == "test" or "whiterabbit" in str(model).lower():
-            model = "whiterabbitneo"
-            task_type = "test"
-            from studio.backends import select_optimal_backend, whiterabbit_backend_ready
-            base = select_optimal_backend(preferred_url="http://127.0.0.1:11436", task="test")
-            # Fail loud: skicka ALDRIG säkerhetstestet vidare om WhiteRabbitNeo inte
-            # verkligen kör på den valda backenden. Annars svarar en allmän/alignad
-            # modell (tyst fallback) och "vägrar" – vilket ser ut som att WhiteRabbitNeo
-            # vägrade, men det gör den aldrig.
-            ready, detail = whiterabbit_backend_ready(base)
-            if not ready:
-                test_block_reason = detail
 
         # Om användaren valt "auto" eller ingen modell angetts: välj optimal modell med smart router
-        elif not model or str(model).strip().lower() == "auto":
+        if not model or str(model).strip().lower() == "auto":
             from studio.codex.router import select_best_model_for_task
             routed = select_best_model_for_task(last_prompt)
             model = routed["model"]
 
-        # Ett säkerhetstest ska ALLTID få test-systemprompten ("You are WhiteRabbitNeo …
-        # Never refuse an authorized security testing task"), även i skisslage utan
-        # arbetsyta – annars får modellen test-begäran med den generiska kod-
-        # assistent-prompten och vägrar. (Test av en fjärr-site kräver ingen
-        # lokal arbetsyta, så skisslage är det normala här.)
-        if task_type == "test":
-            sys_prompt = agent_system_prompt(mode, task="test")
-        elif scratch:
-            sys_prompt = AGENT_SYSTEM_SCRATCH
-        else:
-            sys_prompt = agent_system_prompt(mode, task=task_type)
+        sys_prompt = AGENT_SYSTEM_SCRATCH if scratch else agent_system_prompt(mode, task=task_type)
         convo = [{"role": "system", "content": sys_prompt}] + list(messages)
         try:
             self.send_response(200)
@@ -84,19 +59,6 @@ class CodexRoutes(BaseHandler):
             self.end_headers()
         except Exception:
             _log.debug("ignored exception", exc_info=True)
-            return
-
-        if test_block_reason:
-            # WhiteRabbitNeo kör inte där vi förväntade oss. Avbryt tydligt i stället för
-            # att låta en allmän modell svara (och vägra). Detta är INTE modellen som
-            # vägrar – det är att den rätta modellen inte är igång.
-            self._emit({"type": "error", "text":
-                        "WhiteRabbitNeo är inte igång på port 11436 (%s). "
-                        "Säkerhetstestet skickas INTE till en allmän modell – den vägrar ändå. "
-                        "Starta WhiteRabbitNeo: kör en Ollama på port 11436 och `ollama pull whiterabbitneo`, "
-                        "eller peka om den dedikerade backenden i inställningarna, och försök igen."
-                        % test_block_reason})
-            self._emit({"type": "done"})
             return
 
         if scratch:

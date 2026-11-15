@@ -30,59 +30,18 @@ class TestModelRouter(unittest.TestCase):
         )
         self.assertEqual(cat, "security")
 
-    def test_classify_legacy_pentest_term_still_routes(self):
-        # Äldre indata-ordet "pentest" ska fortfarande ruttas till kategorin "test".
-        cat = classify_task(
-            "Kör nmap och nuclei scan mot produktionsserverns API endpoints",
-            labels="pentest",
-        )
-        self.assertEqual(cat, "test")
-
-    def test_classify_security_test_from_natural_language(self):
-        # Naturligt formulerade säkerhetstester ska hamna i "test", inte "security"
-        for text in (
-            "Kör ett säkerhetstest mot min site",
-            "Kör säkerhets test mot app.roburformaai.app",
-            "Skanna min webbplats efter sårbarheter",
-            "sårbarhetsskanning av api:erna",
-            "testa säkerheten på domänen example.com",
-            # verb + webbmål (det vanliga sättet att be om det)
-            "testa min site",
-            "testa min sajt https://example.com",
-            "kolla sårbarheter på min sajt",
-            "scanna example.com",
-            "undersök min server för öppna portar",
-            # exakt den prompt som Test Suite-knappen bygger
-            "Perform a disciplined, authorized penetration test and security "
-            "vulnerability verification against target site: http://min-sajt.se",
-        ):
-            self.assertEqual(classify_task(text), "test", text)
-
-    def test_classify_code_testing_is_not_security_test(self):
+    def test_classify_code_testing(self):
         # Kod-testning/filnamn ska INTE råka klassas som säkerhetstest
         self.assertEqual(classify_task("testa koden"), "general")
         self.assertEqual(classify_task("kör pytest på app.py"), "testing")
         self.assertEqual(classify_task("granska main.py"), "general")
 
-    def test_classify_code_audit_stays_security_not_security_test(self):
-        # Kod-/SAST-granskning är inte ett aktivt säkerhetstest
+    def test_classify_code_audit(self):
+        # Kod-/SAST-granskning
         self.assertEqual(
             classify_task("Granska koden för sårbarheter och fixa SQL injection"),
             "security",
         )
-
-    def test_select_best_model_for_security_test_hardcoded_local(self):
-        # Säkerhetstest ska ALLTID välja lokal Llama-modell även när moln (Antigravity/Claude) är aktivt
-        with patch("studio.codex.router.antigravity_available", return_value=True):
-            res = select_best_model_for_task(
-                "Kör penetrationstest och nätverksskanning mot målservern",
-                labels=["pentest"],
-                installed_models=["qwen2.5-coder:14b", "llama3.2:latest"]
-            )
-            self.assertEqual(res["model"], "llama3.2:latest")
-            self.assertEqual(res["task_type"], "test")
-            self.assertEqual(res["agent"], "openclaw-redteam")
-            self.assertIn("Lokal Llama-modell", res["reason"])
 
     def test_select_best_model_prefers_llama_over_qwen(self):
         # Verifiera att Llama-modeller väljs före Qwen och DeepSeek
@@ -136,15 +95,6 @@ class TestModelRouter(unittest.TestCase):
                 prefer_local=True,
             )
             self.assertEqual(res["model"], "llama3.2:latest")
-
-    def test_needs_security_system_prompt(self):
-        from studio.codex.router import needs_security_system_prompt
-        self.assertTrue(needs_security_system_prompt(model="whiterabbitneo", text="hej"))
-        self.assertTrue(needs_security_system_prompt(model="WhiteRabbitNeo-13B", text="hej"))
-        self.assertTrue(needs_security_system_prompt(model="gemma4:12b", text="kör pentest mot https://example.com"))
-        self.assertTrue(needs_security_system_prompt(model="gemma4:12b", text="kör säkerhets test mot app.roburformaai.app"))
-        self.assertFalse(needs_security_system_prompt(model="gemma4:12b", text="skriv en python funktion"))
-        self.assertFalse(needs_security_system_prompt(model="claude", text="granska koden för sårbarheter"))
 
     def test_model_matrix_structure(self):
         matrix = get_model_matrix()
@@ -221,99 +171,17 @@ class TestSchedulerAutoFix(unittest.TestCase):
     @patch("studio.codex.github.github_fetch_repo", return_value=(True, "ok", "/tmp/dummy"))
     @patch("studio.scheduler._run_single_headless_pass", return_value=(1, None))
     @patch("studio.backends.select_optimal_backend", return_value="http://127.0.0.1:11434")
-    def test_run_headless_audit_security_test_always_ollama(self, mock_backend, mock_pass, mock_gh, mock_fetch, mock_tok):
-        # Säkerhetstest ska ALLTID anropa headless pass med en lokal Ollama-modell
-        # medan säkerhetsgranskning ska anropa med bästa tillgängliga molnmodell (Claude Sonnet)
-        with patch("studio.codex.router.antigravity_available", return_value=True), \
-             patch("studio.scheduler._get_local_ollama_model", return_value="qwen2.5-coder:14b"):
+    def test_run_headless_audit_passes(self, mock_backend, mock_pass, mock_gh, mock_fetch, mock_tok):
+        # Granskning ska köra säkerhetsgranskning med Claude Sonnet och ponytail med Gemini
+        with patch("studio.codex.router.antigravity_available", return_value=True):
             ok, summary, sec, pny = run_headless_audit(
                 project="my/sectest-project",
                 run_security=True,
-                run_test=True,
                 run_ponytail=True,
             )
             self.assertTrue(ok)
-            # Kontrollera modellerna som skickades till _run_single_headless_pass
-            # Anrop 1 (Security): Antigravity Claude
-            # Anrop 2 (Säkerhetstest): Lokal Ollama qwen2.5-coder
-            # Anrop 3 (Ponytail): Antigravity Gemini
             calls = mock_pass.call_args_list
-            self.assertEqual(len(calls), 3)
+            self.assertEqual(len(calls), 2)
             # calls[i][0] är (prompt, model, project)
             self.assertEqual(calls[0][0][1], "antigravity:claude-sonnet-5-5-medium")
-            self.assertEqual(calls[1][0][1], "qwen2.5-coder:14b")
-            self.assertEqual(calls[2][0][1], "antigravity:gemini-3.8-flash-medium")
-
-
-
-class TestWhiteRabbitBackendReady(unittest.TestCase):
-    """Fail-loud-skyddet: säkerhetstest får bara köra om WhiteRabbitNeo faktiskt kör
-    på backenden – annars svarar en allmän/alignad modell (tyst fallback) och vägrar."""
-
-    def _tags(self, names):
-        import io, json as _json
-        payload = _json.dumps({"models": [{"name": n} for n in names]}).encode("utf-8")
-        cm = MagicMock()
-        resp = MagicMock()
-        resp.read.return_value = payload
-        cm.__enter__.return_value = resp
-        cm.__exit__.return_value = False
-        return cm
-
-    def test_ready_when_whiterabbit_present(self):
-        with patch("studio.backends._backend_is_alive", return_value=True), \
-             patch("studio.llama_bridge.detect_backend_type", return_value="ollama"), \
-             patch("studio.backends.urllib.request.urlopen", return_value=self._tags(["llama3.2:latest", "whiterabbitneo:latest"])):
-            from studio.backends import whiterabbit_backend_ready
-            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
-            self.assertTrue(ok)
-            self.assertIn("whiterabbit", str(detail).lower())
-
-    def test_not_ready_when_only_general_models(self):
-        # Backenden lever men kör bara en allmän modell -> ska failas (inte köra testet)
-        with patch("studio.backends._backend_is_alive", return_value=True), \
-             patch("studio.llama_bridge.detect_backend_type", return_value="ollama"), \
-             patch("studio.backends.urllib.request.urlopen", return_value=self._tags(["llama3.2:latest", "qwen2.5-coder:14b"])):
-            from studio.backends import whiterabbit_backend_ready
-            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
-            self.assertFalse(ok)
-            self.assertIn("llama3.2:latest", detail)
-
-    def _props(self, payload):
-        import json as _json
-        from unittest.mock import MagicMock as _MM
-        cm = _MM(); resp = _MM()
-        resp.read.return_value = _json.dumps(payload).encode("utf-8")
-        cm.__enter__.return_value = resp; cm.__exit__.return_value = False
-        return cm
-
-    def test_llama_server_ready_via_props_model_path(self):
-        # llama-server rapporterar generiskt id på /v1/models men /props avslöjar gguf-sökvägen
-        with patch("studio.backends._backend_is_alive", return_value=True), \
-             patch("studio.llama_bridge.detect_backend_type", return_value="llama_server"), \
-             patch("studio.llama_bridge.llama_server_models", return_value=[{"name": "model"}]), \
-             patch("studio.backends.urllib.request.urlopen",
-                   return_value=self._props({"model_path": "/models/WhiteRabbitNeo-V3-7B-Q5_K_M.gguf"})):
-            from studio.backends import whiterabbit_backend_ready
-            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
-            self.assertTrue(ok)
-            self.assertIn("whiterabbit", str(detail).lower())
-
-    def test_llama_server_not_ready_when_generic_model(self):
-        # Varken /v1/models eller /props nämner whiterabbit -> blockera (det är en annan modell)
-        with patch("studio.backends._backend_is_alive", return_value=True), \
-             patch("studio.llama_bridge.detect_backend_type", return_value="llama_server"), \
-             patch("studio.llama_bridge.llama_server_models", return_value=[{"name": "qwen2.5-7b-instruct"}]), \
-             patch("studio.backends.urllib.request.urlopen",
-                   return_value=self._props({"model_path": "/models/qwen2.5-7b-instruct-q4.gguf"})):
-            from studio.backends import whiterabbit_backend_ready
-            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
-            self.assertFalse(ok)
-            self.assertIn("qwen2.5", detail)
-
-    def test_not_ready_when_backend_down(self):
-        with patch("studio.backends._backend_is_alive", return_value=False):
-            from studio.backends import whiterabbit_backend_ready
-            ok, detail = whiterabbit_backend_ready("http://127.0.0.1:11436")
-            self.assertFalse(ok)
-            self.assertIn("svarar inte", detail)
+            self.assertEqual(calls[1][0][1], "antigravity:gemini-3.8-flash-medium")

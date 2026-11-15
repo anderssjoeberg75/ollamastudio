@@ -209,23 +209,9 @@ def select_optimal_model(models, task="code"):
     def _score(name):
         n = name.lower()
         score = 0
-        if task == "test":
-            # WhiteRabbitNeo är specialtränad för säkerhetstest och offensiv cybersäkerhet
-            if any(k in n for k in ("whiterabbitneo", "whiterabbit", "white-rabbit")):
-                score += 3000
-            elif any(k in n for k in ("redteam", "secops", "cyber", "hacker")):
-                score += 2000
-            elif any(k in n for k in ("llama3.2", "llama3.1", "llama3", "llama-3")):
-                score += 1200
-            elif "qwen2.5-coder" in n or "qwen2.5_coder" in n:
-                score += 1000
-            else:
-                score += 200
-        elif task in ("code", "audit", "security", "ponytail"):
-            if task == "security" and any(k in n for k in ("whiterabbitneo", "whiterabbit")):
-                score += 1500
+        if task in ("code", "audit", "security", "ponytail", "test"):
             # Kodspecialisering - Llama prioriteras alltid i första hand
-            elif any(k in n for k in ("llama3.2", "llama3.1", "llama3", "llama-3", "codellama")):
+            if any(k in n for k in ("llama3.2", "llama3.1", "llama3", "llama-3", "codellama")):
                 score += 1200
             elif "llama" in n:
                 score += 1100

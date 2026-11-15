@@ -55,66 +55,6 @@ def backend_url(label):
     return (b or g["PRIMARY"])["url"]
 
 
-def whiterabbit_backend_ready(base_url, timeout=2.0):
-    """Kontrollerar att en backend verkligen kör WhiteRabbitNeo innan ett säkerhetstest körs.
-
-    Säkerhetstest ruttas hårdkodat till WhiteRabbitNeo (port 11436) eftersom allmänna/
-    alignade modeller vägrar. Problemet: är WhiteRabbitNeo nere faller backend-valet
-    tyst tillbaka på en annan instans (t.ex. en llama-server som serverar SIN inladdade
-    modell och struntar i modellnamnet) – och den modellen vägrar, på flytande språk,
-    så att det ser ut som om "WhiteRabbitNeo vägrade". Det gör den aldrig.
-
-    Returnerar (ok, detalj):
-      ok=True  + modellnamnet  om backenden lever OCH exponerar en WhiteRabbitNeo-modell.
-      ok=False + orsak         annars (nere, eller bara andra/allmänna modeller).
-    Anropa detta och faila högt i stället för att skicka testet till en modell som vägrar.
-    """
-    if not base_url:
-        return False, "ingen backend-URL angiven"
-    if not _backend_is_alive(base_url, timeout=timeout):
-        return False, "backenden %s svarar inte (WhiteRabbitNeo verkar inte köra där)" % base_url
-    base = base_url.rstrip("/")
-    # Samla ALLA modell-namn vi kan hitta på backenden. En llama-server rapporterar
-    # ofta ett generiskt id på /v1/models (t.ex. "gpt-3.5-turbo" eller bara "model"),
-    # så den riktiga modellen avslöjas i stället av /props (model_path/model_alias).
-    # Läs därför båda, annars riskerar en korrekt körande WhiteRabbitNeo att blockeras.
-    candidates = []
-    try:
-        from .llama_bridge import detect_backend_type, llama_server_models
-        is_llama = detect_backend_type(base) == "llama_server"
-        if is_llama:
-            for m in (llama_server_models(base) or []):
-                candidates.append(m.get("name") or m.get("model") or m.get("id") or "")
-            # /props avslöjar den faktiska gguf-sökvägen och aliaset
-            try:
-                req = urllib.request.Request(base + "/props")
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    props = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-                for key in ("model_path", "model_alias", "model"):
-                    if props.get(key):
-                        candidates.append(str(props.get(key)))
-                dgs = props.get("default_generation_settings")
-                if isinstance(dgs, dict) and dgs.get("model"):
-                    candidates.append(str(dgs.get("model")))
-            except Exception:
-                _log.debug("ignored /props exception", exc_info=True)
-        else:
-            req = urllib.request.Request(base + "/api/tags")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
-            for m in (data.get("models") or []):
-                candidates.append(m.get("name") or m.get("model") or "")
-    except Exception as e:
-        return False, "kunde inte läsa modell-listan från %s: %s" % (base_url, e)
-
-    for nm in candidates:
-        low = str(nm).lower()
-        if "whiterabbit" in low or "white-rabbit" in low:
-            return True, nm
-    found = ", ".join(str(c) for c in candidates if c) or "(inga modeller)"
-    return False, "ingen WhiteRabbitNeo-modell på %s – hittade: %s" % (base_url, found)
-
-
 def _backend_is_alive(url, timeout=0.8):
     """Snabb kontroll om en Ollama- eller llama-server-instans svarar på nätverket och stöder generering/chatt."""
     if not url:
@@ -166,25 +106,16 @@ def select_optimal_backend(preferred_url=None, task=None):
     """Väljer den mest optimala Ollama/llama-server backend/GPU-instansen som är tillgänglig.
 
     Prioriterar:
-    1. För test: Instans på port 11436 eller märkt med WhiteRabbitNeo/test.
-    2. För kod/chatt: Instanser på port 11434 (llama-server/gemma4) eller port 8080.
-    3. Auto-upptäckt: om primär URL är port 11434, kontrolleras om port 8080 (llama-server),
-       11436 (test/WhiteRabbitNeo) eller 11435 finns på samma värd och är igång.
-    4. Faller tillbaka på primär backend om inget annat är tillgängligt.
+    1. För kod/chatt: Instanser på port 11434 (llama-server/gemma4) eller port 8080.
+    2. Auto-upptäckt: om primär URL är port 11434, kontrolleras om port 8080 (llama-server)
+       eller 11435 finns på samma värd och är igång.
+    3. Faller tillbaka på primär backend om inget annat är tillgängligt.
     """
     g = globals()
     backends_list = list(g.get("BACKENDS") or [{"label": "Ollama", "url": OLLAMA_URL, "gpu": None}])
 
     if preferred_url and _backend_is_alive(preferred_url):
         return preferred_url
-
-    # Fail loud: a security-test task whose dedicated backend is down would otherwise be
-    # routed silently to a general model that refuses. Warn so the operator notices.
-    if task == "test":
-        log.warning(
-            "WhiteRabbitNeo-backenden (%s) svarar inte – säkerhetstestet kan hamna "
-            "hos en allmän modell som vägrar. Starta WhiteRabbitNeo på port 11436.",
-            preferred_url or "http://127.0.0.1:11436")
 
     # Auto-upptäckt: om vi har en instans på port 11434 eller 8080
     known_urls = {b.get("url") or "" for b in backends_list}
@@ -196,10 +127,6 @@ def select_optimal_backend(preferred_url=None, task=None):
             if u_llama not in known_urls:
                 expanded.append({"label": "Llama Server", "url": u_llama, "gpu": "0"})
                 known_urls.add(u_llama)
-            u_tuned = url.replace(":11434", ":11436")
-            if u_tuned not in known_urls:
-                expanded.append({"label": "WhiteRabbitNeo (Test)", "url": u_tuned, "gpu": "1"})
-                known_urls.add(u_tuned)
             u_gpu1 = url.replace(":11434", ":11435")
             if u_gpu1 not in known_urls:
                 expanded.append({"label": "GPU 1", "url": u_gpu1, "gpu": "1"})
@@ -213,31 +140,17 @@ def select_optimal_backend(preferred_url=None, task=None):
         gpu = str(b.get("gpu") or "")
         score = 0
 
-        if task == "test":
-            # WhiteRabbitNeo / Port 11436 prioriteras absolut högst för säkerhetstest
-            if ":11436" in url or "whiterabbit" in label or "pentest" in label:  # "pentest" = äldre env-etikett (bakåtkomp.)
-                score += 3000
-            elif ":8080" in url or "llama_server" in label:
-                score += 1000
-            elif ":11434" in url:
-                score += 500
-            else:
-                score += 100
+        # Llama Server (högsta prioritet när llama-server önskas framför ollama)
+        if ":8080" in url or "llama_server" in label or "llama-server" in label or (label.startswith("llama") and not label.startswith("ollama")):
+            score += 1200
+        # Port 11435 / GPU 1
+        elif ":11435" in url or "gpu 1" in label or gpu == "1":
+            score += 500
+        # Port 11434 / GPU 0
+        elif ":11434" in url or "gpu 0" in label or gpu == "0":
+            score += 100
         else:
-            # Llama Server (högsta prioritet när llama-server önskas framför ollama)
-            if ":8080" in url or "llama_server" in label or "llama-server" in label or (label.startswith("llama") and not label.startswith("ollama")):
-                score += 1200
-            # Port 11436 / Test (WhiteRabbitNeo) / tuned GPU 1
-            elif ":11436" in url or "tuned" in label or "flash" in label or "pentest" in label or "whiterabbit" in label:
-                score += 1000
-            # Port 11435 / GPU 1
-            elif ":11435" in url or "gpu 1" in label or gpu == "1":
-                score += 500
-            # Port 11434 / GPU 0
-            elif ":11434" in url or "gpu 0" in label or gpu == "0":
-                score += 100
-            else:
-                score += 50
+            score += 50
 
         scored.append((score, url))
 
