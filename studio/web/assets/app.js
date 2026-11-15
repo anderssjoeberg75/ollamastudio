@@ -5266,7 +5266,7 @@ function compactContext() {
 }
 
 
-// Update GPU VRAM percentage from /api/system
+// Update GPU VRAM percentage, load & temperature per card from /api/system
 async function updateVramTelemetry() {
   try {
     const r = await fetch('/api/system', {headers: headers(false)});
@@ -5274,15 +5274,37 @@ async function updateVramTelemetry() {
     const s = await r.json();
     lastSystem = s;
     if (s && s.gpus && s.gpus.length) {
-      let totalUsed = 0, totalMem = 0;
-      s.gpus.forEach(g => {
-        totalUsed += (g.mem_used_mb || 0);
-        totalMem += (g.mem_total_mb || 0);
+      const vramEl = document.getElementById('teleVram');
+      const vramPill = document.getElementById('teleVramPill');
+
+      // Bygg kompakt och informativ visning per GPU, t.ex: "G0: 44% 29°C | G1: 62% 42°C"
+      const gpuParts = [];
+      const tooltipLines = [];
+
+      s.gpus.forEach((g, idx) => {
+        const memPct = g.mem_total_mb ? Math.round((g.mem_used_mb / g.mem_total_mb) * 100) : 0;
+        const temp = g.temp !== null && g.temp !== undefined ? Math.round(g.temp) : null;
+        const util = g.util !== null && g.util !== undefined ? Math.round(g.util) : 0;
+
+        // Kompakt text i pill: t.ex. "G0: 44% 29° · G1: 62% 42°"
+        const tempStr = temp !== null ? ` ${temp}°` : '';
+        gpuParts.push(`G${idx}: ${memPct}%${tempStr}`);
+
+        // Detaljerad tooltip vid hover:
+        tooltipLines.push(
+          `GPU ${idx} (${g.name}):\n` +
+          `• VRAM: ${memPct}% (${(g.mem_used_mb/1024).toFixed(1)} / ${(g.mem_total_mb/1024).toFixed(1)} GB)\n` +
+          `• Load / Utilization: ${util}%\n` +
+          `• Temperature: ${temp !== null ? temp + '°C' : 'N/A'}\n` +
+          `• Power: ${g.power ? g.power.toFixed(0) + 'W' : 'N/A'}`
+        );
       });
-      if (totalMem > 0) {
-        const pct = Math.round((totalUsed / totalMem) * 100);
-        const vramEl = document.getElementById('teleVram');
-        if (vramEl) vramEl.textContent = pct + '%';
+
+      if (vramEl) {
+        vramEl.textContent = gpuParts.join(' · ');
+      }
+      if (vramPill) {
+        vramPill.title = tooltipLines.join('\n\n');
       }
     } else if (s && s.mem && s.mem.total) {
       const pct = Math.round((s.mem.used / s.mem.total) * 100);
