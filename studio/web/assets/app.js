@@ -1829,6 +1829,7 @@ async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
   catch(e){ toast('Could not fetch settings', true); return; }
+  renderOmniRouteCard(s);
   const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.value = (v==null?'':v); };
   const chk = (id, v)=>{ const el=document.getElementById(id); if(el) el.checked = !!v; };
   chk('stWebsearch', s.websearch);
@@ -2034,6 +2035,109 @@ async function pingAntigravity(){
   } finally {
     if(btn) btn.disabled = false;
   }
+}
+
+/* ---- OmniRoute (AI gateway, OpenAI-compatible) ---- */
+let omniKeyClear = false;
+function renderOmniRouteCard(s){
+  const host = document.getElementById('settingsForm');
+  if(!host) return;
+  let card = document.getElementById('omniCard');
+  if(!card){
+    card = document.createElement('div');
+    card.id = 'omniCard';
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="top"><h3>🔀 OmniRoute</h3>
+        <span id="omniBadge" style="font-size:12px;padding:2px 8px;border-radius:6px"></span></div>
+      <p class="hint" style="margin:6px 0 12px;font-size:12.5px">
+        Connect to an <b>OmniRoute</b> gateway to use its models in Chat, Codex and scheduled audits.
+        They show up in the model list as <code>omniroute:&lt;model&gt;</code>.</p>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input type="checkbox" id="omniEnabled"> Enable OmniRoute</label>
+      <label for="omniUrl" style="display:block;font-size:12.5px;margin-bottom:4px">Base URL</label>
+      <input id="omniUrl" type="text" placeholder="http://localhost:20128/v1" style="width:100%;margin-bottom:10px">
+      <label for="omniKey" style="display:block;font-size:12.5px;margin-bottom:4px">API key (from OmniRoute dashboard → Endpoint)</label>
+      <div style="display:flex;gap:8px;margin-bottom:4px">
+        <input id="omniKey" type="password" autocomplete="off" placeholder="sk-…" style="flex:1">
+        <button class="btn small" type="button" onclick="clearOmniKey()">Remove key</button></div>
+      <div id="omniKeyState" class="hint" style="font-size:12px;margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn accent" type="button" id="omniSave" onclick="saveOmniRoute()">Save &amp; connect</button>
+        <button class="btn" type="button" id="omniPing" onclick="pingOmniRoute()">Test chat</button></div>
+      <div id="omniStatus" style="margin-top:10px;font-size:12.5px"></div>`;
+    host.prepend(card);
+  }
+  document.getElementById('omniEnabled').checked = !!s.omniroute_enabled;
+  document.getElementById('omniUrl').value = s.omniroute_url || '';
+  document.getElementById('omniKey').value = '';
+  omniKeyClear = false;
+  document.getElementById('omniKeyState').textContent = s.omniroute_api_key_set
+    ? '● An API key is saved (leave empty to keep)' : 'No API key saved';
+  loadOmniRouteStatus();
+}
+function clearOmniKey(){
+  omniKeyClear = true;
+  document.getElementById('omniKey').value = '';
+  document.getElementById('omniKeyState').textContent = '✕ Key will be removed upon saving';
+}
+function setOmniBadge(text, tone){
+  const b = document.getElementById('omniBadge'); if(!b) return;
+  const c = {ok:'var(--green)', warn:'var(--amber)', bad:'var(--danger)', off:'var(--subtle)'}[tone] || 'var(--subtle)';
+  b.textContent = text; b.style.color = c; b.style.border = '1px solid ' + c;
+}
+async function loadOmniRouteStatus(){
+  const el = document.getElementById('omniStatus'); if(!el) return;
+  setOmniBadge('Checking…', 'off');
+  try{
+    const d = await (await api('/api/omniroute/status')).json();
+    if(!d.enabled){
+      setOmniBadge('Off', 'off');
+      el.textContent = d.reachable
+        ? `Gateway reachable at ${d.url} (${d.models.length} models) – enable it to use the models.` : '';
+      return;
+    }
+    if(d.reachable){
+      setOmniBadge('● Connected', 'ok');
+      const chips = d.models.slice(0, 40).map(m =>
+        `<span style="display:inline-block;padding:2px 8px;border-radius:6px;border:1px solid var(--border);margin:2px 4px 2px 0;font-size:12px">${esc(m)}</span>`).join('');
+      const more = d.models.length > 40 ? ` <i>+${d.models.length - 40} more</i>` : '';
+      el.innerHTML = `<div style="margin-bottom:4px">${d.models.length} model(s) via <code>${esc(d.url)}</code></div>${chips}${more}`;
+    } else {
+      setOmniBadge('● Unreachable', 'bad');
+      el.innerHTML = `<span style="color:var(--danger)">✗ ${esc(d.error || 'No answer')}</span>`;
+    }
+  }catch(e){ setOmniBadge('Error', 'bad'); el.textContent = 'Could not fetch status: ' + e.message; }
+}
+async function saveOmniRoute(){
+  const body = {
+    omniroute_enabled: document.getElementById('omniEnabled').checked,
+    omniroute_url: document.getElementById('omniUrl').value
+  };
+  const key = document.getElementById('omniKey').value.trim();
+  if(key) body.omniroute_api_key = key;
+  else if(omniKeyClear) body.omniroute_api_key = null;
+  try{
+    const d = await (await api('/api/settings', {method:'POST', headers:headers(true),
+      body: JSON.stringify(body)})).json();
+    if(!d.ok) throw new Error(d.error || 'unknown error');
+    toast('OmniRoute settings saved');
+    renderOmniRouteCard(d.settings || {});
+    try{ refresh(); }catch(e){}
+  }catch(e){ toast('Could not save: ' + e.message, true); }
+}
+async function pingOmniRoute(){
+  const el = document.getElementById('omniStatus');
+  const btn = document.getElementById('omniPing');
+  if(btn) btn.disabled = true;
+  el.textContent = '⏳ Sending a test message…';
+  try{
+    const d = await (await api('/api/omniroute/ping', {method:'POST', headers:headers(true), body:'{}'})).json();
+    el.innerHTML = d.ok
+      ? `<span style="font-weight:600">✓ ${esc(d.message)}</span>${d.reply ? ' – “' + esc(d.reply) + '”' : ''}`
+      : `<span style="color:var(--danger)">✗ ${esc(d.error || 'unknown error')}</span>`;
+  }catch(e){ el.innerHTML = `<span style="color:var(--danger)">✗ ${esc(e.message)}</span>`; }
+  finally{ if(btn) btn.disabled = false; }
 }
 
 let currentProjectTargets = {};

@@ -132,6 +132,10 @@ SETTINGS_SPEC = {
     # Stöd för llama-server (llama.cpp)
     "llama_url":            ("LLAMA_URL", "", "str", False),
     "backend_type":         ("OLLAMA_STUDIO_BACKEND_TYPE", "auto", "str", False),
+    # OmniRoute – AI-gateway med OpenAI-kompatibelt API (standardport 20128)
+    "omniroute_enabled":    ("OLLAMA_STUDIO_OMNIROUTE", "0", "bool", False),
+    "omniroute_url":        ("OMNIROUTE_URL", "http://localhost:20128/v1", "str", False),
+    "omniroute_api_key":    ("OMNIROUTE_API_KEY", "", "str", True),
 }
 
 _settings_lock = threading.Lock()
