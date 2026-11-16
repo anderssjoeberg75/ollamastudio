@@ -539,6 +539,21 @@
               </div>
             </div>
 
+            <!-- SecuritySkills (UnitOneAI) playbooks -->
+            <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
+                  <input type="checkbox" id="harnessUseSkills" checked onchange="toggleHarnessSkillPicker()">
+                  <span><b>Apply SecuritySkills playbooks</b> &mdash; framework-grounded checklists (OWASP ASVS, API &amp; LLM Top 10, CIS, SLSA) auto-selected per file</span>
+                </label>
+                <a href="https://github.com/UnitOneAI/SecuritySkills" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--fg-subtle)" id="harnessSkillsSource">UnitOneAI/SecuritySkills &middot; MIT</a>
+              </div>
+              <div id="harnessSkillPickerWrap" style="margin-top:10px">
+                <label style="font-size:12px;color:var(--fg-muted);display:block;margin-bottom:4px">Force extra skills on every unit (optional, Ctrl/Cmd-click for multiple, max 6)</label>
+                <select id="harnessExtraSkills" multiple size="5" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font-size:12.5px"></select>
+              </div>
+            </div>
+
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
               <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
                 <input type="checkbox" id="harnessCreateIssues">
@@ -588,6 +603,12 @@
                 <div style="font-size:11px;color:var(--fg-muted)">REJECTED FALSE POSITIVES</div>
                 <div id="harnessLiveRejCount" style="font-size:20px;font-weight:700;color:var(--fg-subtle)">0</div>
               </div>
+            </div>
+
+            <!-- Applied SecuritySkills -->
+            <div id="harnessSkillsUsedWrap" style="display:none;margin-bottom:14px">
+              <div style="font-size:12px;font-weight:600;margin-bottom:6px">Security Skills Applied</div>
+              <div id="harnessSkillsUsed" style="display:flex;flex-wrap:wrap;gap:6px"></div>
             </div>
 
             <!-- Live Log Output -->

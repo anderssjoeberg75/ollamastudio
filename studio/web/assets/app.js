@@ -230,6 +230,7 @@ function showView(v){
 
   if(v==='harness'){
     populateHarnessProjects();
+    populateHarnessSkills();
     loadHarnessRuns();
   }
   if(v==='models'){
@@ -5560,6 +5561,54 @@ async function loadHarnessRuns() {
   }
 }
 
+let _harnessSkillsLoaded = false;
+
+async function populateHarnessSkills() {
+  const sel = document.getElementById('harnessExtraSkills');
+  if (!sel || _harnessSkillsLoaded) return;
+  try {
+    const r = await api('/api/harness/skills', {headers: headers(false)});
+    if (!r.ok) return;
+    const data = await r.json();
+    const skills = data.skills || [];
+    const byDomain = {};
+    skills.forEach(s => { (byDomain[s.domain] = byDomain[s.domain] || []).push(s); });
+    sel.innerHTML = '';
+    Object.keys(byDomain).forEach(domain => {
+      const grp = document.createElement('optgroup');
+      grp.label = domain + (byDomain[domain][0].code_audit ? '' : ' (non-code / compliance)');
+      byDomain[domain].forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.name;
+        opt.textContent = `${s.name} — ${(s.frameworks || []).join(', ')}`;
+        opt.title = s.description || '';
+        grp.appendChild(opt);
+      });
+      sel.appendChild(grp);
+    });
+    const src = document.getElementById('harnessSkillsSource');
+    if (src) src.textContent = `UnitOneAI/SecuritySkills · ${skills.length} skills · MIT`;
+    _harnessSkillsLoaded = true;
+  } catch(e) {}
+}
+
+function toggleHarnessSkillPicker() {
+  const chk = document.getElementById('harnessUseSkills');
+  const wrap = document.getElementById('harnessSkillPickerWrap');
+  if (wrap) wrap.style.display = (chk && !chk.checked) ? 'none' : 'block';
+}
+
+function renderHarnessSkillsUsed(run) {
+  const wrap = document.getElementById('harnessSkillsUsedWrap');
+  const el = document.getElementById('harnessSkillsUsed');
+  if (!wrap || !el) return;
+  const used = (run && run.report && run.report.skills_used) || {};
+  const names = Object.keys(used).sort((a, b) => used[b] - used[a]);
+  if (!names.length) { wrap.style.display = 'none'; el.innerHTML = ''; return; }
+  wrap.style.display = 'block';
+  el.innerHTML = names.map(n => `<span class="tele-pill" title="${esc(n)} applied to ${used[n]} coverage unit(s)">${esc(n)} &middot; ${used[n]}</span>`).join('');
+}
+
 async function startHarnessRun() {
   const projSel = document.getElementById('harnessProjectSelect');
   const profSel = document.getElementById('harnessProfileSelect');
@@ -5569,6 +5618,10 @@ async function startHarnessRun() {
   const project = projSel ? projSel.value : 'current';
   const profile = profSel ? profSel.value : 'standard';
   const createIssues = issuesChk ? issuesChk.checked : false;
+  const skillsChk = document.getElementById('harnessUseSkills');
+  const useSkills = skillsChk ? skillsChk.checked : true;
+  const extraSel = document.getElementById('harnessExtraSkills');
+  const extraSkills = (useSkills && extraSel) ? Array.from(extraSel.selectedOptions).map(o => o.value).slice(0, 6) : [];
 
   if (startBtn) {
     startBtn.disabled = true;
@@ -5582,7 +5635,9 @@ async function startHarnessRun() {
       body: JSON.stringify({
         project: project === 'current' ? (cfg.code_ws_path || 'workspace') : project,
         profile: profile,
-        create_issues: createIssues
+        create_issues: createIssues,
+        use_skills: useSkills,
+        skills: extraSkills
       })
     });
     const res = await r.json();
@@ -5615,6 +5670,7 @@ function showHarnessLiveCard(runId) {
   document.getElementById('harnessLiveConfCount').textContent = '0';
   document.getElementById('harnessLiveRejCount').textContent = '0';
   document.getElementById('harnessLiveLog').textContent = 'Initializing...';
+  renderHarnessSkillsUsed(null);
 }
 
 function updateStageIndicators(stage) {
@@ -5672,6 +5728,7 @@ async function pollHarnessRun(runId) {
     }
 
     updateStageIndicators(run.stage);
+    renderHarnessSkillsUsed(run);
 
     if (run.log) {
       const logEl = document.getElementById('harnessLiveLog');
@@ -5709,6 +5766,7 @@ async function inspectHarnessRun(runId) {
     document.getElementById('harnessLiveConfCount').textContent = run.confirmed_count || 0;
     document.getElementById('harnessLiveRejCount').textContent = run.rejected_count || 0;
     updateStageIndicators(run.stage);
+    renderHarnessSkillsUsed(run);
     if (run.log) {
       const logEl = document.getElementById('harnessLiveLog');
       if (logEl) logEl.textContent = run.log;
