@@ -1,966 +1,669 @@
 # Ollama Studio
 
-Ett enkelt, fristående GUI för att hantera dina lokala **Ollama**-modeller –
-inspirerat av LM Studio. Fokus ligger på det viktigaste: att **installera** och
-**avinstallera** modeller med ett klick.
+A self-hosted workbench for local LLMs: manage **Ollama** and **llama.cpp** models, chat, use a coding agent
+(**Codex**) that edits your repositories, and audit code with a multi-stage **Vulnerability Harness**. Everything
+runs on your own hardware.
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
-![Beroenden](https://img.shields.io/badge/beroenden-inga-brightgreen)
-![Plattform](https://img.shields.io/badge/plattform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
-![Licens](https://img.shields.io/badge/licens-MIT-green)
+![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-Ollama Studio finns i **två varianter** – välj den som passar dig:
+Ollama Studio comes in **two variants**:
 
-| Variant | Fil | När du väljer den |
+| Variant | File | Choose it when |
 | --- | --- | --- |
-| 🌐 **Webbversion** | `ollama_web.py` | Ollama körs på en **server** (t.ex. utan skärm) och du vill nå det från en **annan dator via webbläsaren**. |
-| 🖥️ **Skrivbordsapp** | `ollama_studio.py` | Du kör och använder allt på **samma dator** som har ett skrivbord. |
+| 🌐 **Web app** (full feature set) | `ollama_web.py` | Ollama runs on a **server** (e.g. a headless GPU box) and you want to use it from **another computer's browser**. |
+| 🖥️ **Desktop app** (model manager) | `ollama_studio.py` | You only want to install and remove models on the **same machine**. Uses `tkinter`. |
 
-Båda ser likadana ut och kräver **inga externa beroenden** – bara Pythons standardbibliotek.
-
-> **Filstruktur (webbversionen):** `ollama_web.py` är startfilen. Koden ligger i `studio/`,
-> uppdelad per ansvarsområde – `config.py` (inställningar), `backends.py`, `sysinfo.py`,
-> `websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `codex/` för
-> kodagenten (arbetsyta, behörigheter, protokoll, kommandon, git, GitLab, GitHub) och `web/` för
-> webblagret – routingtabellen i `server.py`, arbetet i `routes_*.py`, och sidan i
-> `web/assets/` (HTML, CSS, JavaScript). Webbläsaren laddar
-> fortfarande inga externa filer: allt bakas in i sidan vid start. Se
-> [`docs/kodassistent.md`](docs/kodassistent.md) för hela kartan.
+The core needs **no external Python packages**; it uses only the standard library. Optional features use external
+tools when they are installed: Soup for training, Docker for the sandbox, and Bandit, Semgrep and Gitleaks for the
+harness.
 
 ---
 
-## Innehåll
+## Contents
 
-- [Funktioner](#funktioner)
-- [🌐 Webbversion – åtkomst från en annan dator](#-webbversion--åtkomst-från-en-annan-dator)
-  - [Snabbstart](#snabbstart-webb)
-  - [Kör den permanent (systemd)](#kör-den-permanent-systemd)
-  - [Inställningar (miljövariabler)](#inställningar-miljövariabler)
-  - [Säkerhet](#säkerhet)
-- [🖥️ Skrivbordsapp – kör lokalt](#️-skrivbordsapp--kör-lokalt)
-  - [Steg 1 – Python och tkinter](#steg-1--installera-python-och-tkinter)
-  - [Steg 2 – Starta appen](#steg-2--starta-skrivbordsappen)
-  - [Lägg till i programmenyn](#lägg-till-i-programmenyn-linux)
-- [Installera Ollama (behövs för båda)](#installera-ollama-behövs-för-båda)
-- [Använda appen](#använda-appen)
-- [🤗 Hugging Face-modeller](#-hugging-face-modeller)
-- [🎓 AI-träning – finjustera en egen modell](#-ai-träning--finjustera-en-egen-modell)
-- [Rekommenderade modeller](#rekommenderade-modeller)
-- [Felsökning](#felsökning)
-- [🛠️ Codex Skills – färdigheter & automatisering](#️-codex-skills--färdigheter--automatisering)
-- [Så fungerar det (teknik)](#så-fungerar-det-teknik)
-- [Licens](#licens)
-
----
-
-## Funktioner
-
-- **Mina modeller** – se alla installerade modeller (storlek, parametrar, kvantisering,
-  datum) och avinstallera dem med en knapp.
-- **Upptäck / Installera** – **ett sökfält som täcker allt**: skriv t.ex. `qwen` så visas
-  träffar från både [Ollamas bibliotek](https://ollama.com/library) och
-  [Hugging Face](https://huggingface.co) i samma lista, med källa, storlekar och en
-  installationsknapp per modell. Tomt fält visar den kurerade listan över populära modeller.
-  Skriver du ett exakt namn laddar **↓ Ladda ner** hem det direkt.
-- **Hårdvarufilter** – varje modell märks med om den passar din GPU, körs delvis på CPU eller
-  är för stor. Kryssrutan **"Dölj modeller som inte får plats på den här datorn"** filtrerar
-  bort dem som inte kan köras alls. Se [Hårdvarufiltret](#hårdvarufiltret).
-- **🎓 AI-träning** – finjustera en modell på dina egna exempel: skriv frågor och svar i en
-  tabell, välj basmodell och hårdvaruprofil, följ förloppet med progressbar och loss-kurva – och
-  lägg in den färdiga modellen i Ollama med ett klick. **Fliken är dold som standard** så att
-  menyn fokuserar på Codex; kryssa i **"Visa AI-träning i menyn"** under **⚙ Inställningar →
-  AI-träning** för att få fram den. Instruktioner finns inbyggda i fliken. Se
-  [AI-träning](#-ai-träning--finjustera-en-egen-modell).
-- **🤗 Hugging Face** – GGUF-modeller därifrån visas i samma sökträfflista, med
-  **Varianter** för att välja kvantisering själv (Q4_K_M, Q8_0 …). Skriver du ett namn som
-  inte finns i Ollamas bibliotek söks det dessutom upp automatiskt och laddas ner därifrån.
-  Se [Hugging Face-modeller](#-hugging-face-modeller).
-- **🕒 Vet vad klockan är** – chatten skickar med dagens datum och tid till modellen, så den
-  kan räkna ut veckodagar och åldrar, och slutar svara som om året vore det år den tränades.
-  Frågor om pågående händelser hänvisas till webbsök i stället för gissningar.
-- **Nedladdning i realtid** – progressbar med procent, storlek och status medan modellen
-  laddas ner. Går att avbryta.
-- **Aktiv modell** – se vilken modell som just nu är inläst i minnet ("körs nu"), inklusive
-  om den ligger på GPU/CPU, hur mycket VRAM den använder och när den frigörs. Uppdateras
-  automatiskt.
-- **Chatta** (webbversionen) – prata med en modell direkt i webbläsaren, med streamande
-  svar token för token och sparad konversationshistorik. Svaren renderas som **Markdown**
-  (rubriker, listor, fetstil och kodblock med kopieringsknapp), och under varje svar visas
-  **hastighet** (tokens/sekund), antal tokens och tid – smidigt för att jämföra olika GPU:er.
-  Under **⚙ Inställningar** kan du sätta systemprompt, temperatur och kontextlängd. Du kan
-  också **bifoga bilder** (📎) till vision-modeller som `llava`, och **spara/återuppta
-  namngivna konversationer**.
-- **Webbsök i chatten** (webbversionen) – när modellen är osäker eller saknar aktuell info kan
-  den automatiskt **söka på nätet** (DuckDuckGo, ingen API-nyckel) och besvara frågan utifrån
-  träffarna. Servern **läser dessutom innehållet på de bästa träffarna** och matar in texten,
-  så modellen kan svara på sådant som bara står inne på sidan (resultat, ledare, priser) i
-  stället för att bara sammanfatta rubriker. Svaret märks tydligt sist med *"togs fram efter en
-  webbsökning"* och en **källista**. Slås av/på under **⚙ Inställningar** i chatten, eller helt
-  med `OLLAMA_STUDIO_WEBSEARCH=0`. Kräver att servern har internetåtkomst.
-- **Delat långtidsminne (Mem0)** (webbversionen) – chatten kan komma ihåg fakta om dig mellan
-  konversationer via **[Mem0](https://mem0.ai)**. Relevanta minnen hämtas och matas in i modellen,
-  och nya fakta sparas efter varje svar. Pekar du på **samma Mem0 och samma `MEM0_USER_ID`** som en
-  annan assistant (t.ex. Freja) **delar de minne**. Under **⚙ Inställningar → 🧠 Visa minne** kan du
-  se, lägga till och rensa minnen. Aktiveras med `OLLAMA_STUDIO_MEM0=1` (se tabellen nedan).
-- **Inställningssida** (webbversionen) – en **⚙ Inställningar**-vy där du sätter webbsök och
-  Mem0 (API-nyckel, användar-ID m.m.) direkt i gränssnittet. Allt sparas i en **lokal
-  SQLite-databas** på servern och gäller framför miljövariabler – inga omstarter behövs.
-- **Hämta GitHub-repo i Codex** – välj ett av dina repon i rullmenyn högst upp i Codex-vyn,
-  klicka **⬇ Hämta & arbeta här**: koden klonas till servern, arbetsytan pekas om dit, och
-  när du är klar tar knapparna **Ny gren → Committa → Push → Skapa PR** allt tillbaka till
-  GitHub. Ingen sökväg att fylla i för hand. **🗑 Ta bort lokalt** raderar kopian från servern
-  igen – med en varning som räknar upp osparade ändringar och opushade commits först.
-- **Codex – kodagent** (webbversionen) – en kodagent i samma anda som Claude Code eller
-  OpenAI Codex, men **modellen är din egen** (t.ex. `qwen2.5-coder` i din Ollama). Den läser
-  projektet, **ändrar filerna själv**, kör tester och arbetar mot git – i en loop tills den är
-  klar. **Du bestämmer hur lång koppel den får** med väljaren **Behörighet** överst i vyn:
-  - 🔒 **Fråga om lov** – varje skrivning, kommando och git-åtgärd stannar upp och visar en ruta
-    med diffen: *Tillåt · Tillåt alltid · Neka*.
-  - ✍ **Skriv filer själv** – ändrar filer direkt, men frågar innan den kör kommandon eller committar.
-  - ⚡ **Fria händer** – gör allt utan att fråga, även kommandon utanför allowlisten.
-
-  **Varje skrivning går att ångra** (↩ Ångra på ändringen, eller *Ångra senaste*). Agenten har
-  verktygen `read_file`, `search`, `tree`, `list_dir`, `edit_file` (byter ut en exakt textbit –
-  därför funkar även stora filer), `write_file`, `run_command`, `git_status`, `git_diff`,
-  `git_branch`, `git_commit`, `find_symbol` (var något definieras) och `todo` (visar en
-  plan/checklista som uppdateras i vyn).
-  `search` klarar `glob` (`"*.py"`), `regex` och skiftlägesokänslig sökning; `read_file` ger
-  400 rader åt gången så att en stor fil inte äter upp hela modellens kontext. Både `read_file`
-  och `search` läser radvis, så **filstorlek spelar ingen roll** – Codex kan arbeta i filer på
-  hundratals kB. Knapparna **Ny gren →
-  Committa → Push → Skapa PR** tar ändringarna hela vägen till GitHub (kräver en GitHub-token).
-
-  **När du väljer ett repo läses projektet igenom** – vyn visar *"🔎 Analyserar repot…"* och
-  sedan vad som hittades. Codex får en kort översikt (språk, nyckelfiler, var koden ligger) i
-  sin systemprompt, och ett symbolindex den kan slå upp i, så den vet vad ni arbetar med i
-  stället för att leta sig fram.
-
-  Utan arbetsyta fungerar Codex som en **kod-chatt** (skriver kod du kopierar). Du kan också öppna
-  en **lokal mapp i webbläsaren** (Chrome/Edge, *File System Access*) – då läser och skriver Codex
-  filerna på **din egen dator**, med samma behörighetslägen, även om servern kör på en annan maskin.
-
-  Agenten kommer aldrig utanför den valda arbetsytan. Slås på under **⚙ Inställningar**
-  (`OLLAMA_STUDIO_CODE=1` + arbetsyta). Eftersom den kan skriva till disk och köra kommandon:
-  **kör bakom en token** om servern nås av andra. Se [`docs/kodassistent.md`](docs/kodassistent.md).
-- **System / GPU** (webbversionen) – live-vy över CPU, RAM och varje GPU (användning, VRAM,
-  temperatur, effekt) samt vilka Ollama-processer som ligger på vilken GPU. Varje kort har en
-  **⏏ Ladda ur**-knapp som ber Ollama släppa modellen så VRAM:et blir ledigt (`keep_alive: 0`).
-  Knappen följer **var modellen faktiskt ligger**, inte vad instansen heter: `gpu`-fältet i
-  `OLLAMA_STUDIO_BACKENDS` är en etikett, och binder inte Ollama till kortet. Pinnar du inte
-  instansen med `CUDA_VISIBLE_DEVICES` kan en instans som heter "GPU 0" mycket väl köra på
-  kort 1 – då visar **Mina modeller** det riktiga kortet med ett ⚠ och förklarar varför.
-  Hittas inget att ladda ur säger svaret **varför**: att instansen inte svarade, eller att
-  modellen ligger i en annan instans (och erbjuder att tömma den i stället).
-- **Välj GPU per modell** (webbversionen) – kör en Ollama-instans per GPU och välj i chatten
-  vilken GPU en modell ska köras på.
-- **VRAM-varning** (webbversionen) – i chatten visas grönt/gult/rött om den valda modellen
-  får plats på det valda kortets VRAM (jämför modellens storlek mot GPU:ns lediga/totala
-  minne) innan du skickar.
-- **Mörkt, modernt tema** i LM Studio-stil.
-- **Inga externa beroenden** – bygger enbart på Pythons standardbibliotek.
+- [Features](#features)
+- [🌐 Web app](#-web-app)
+  - [Quick start](#quick-start)
+  - [Run permanently (systemd)](#run-permanently-systemd)
+  - [Configuration (environment variables)](#configuration-environment-variables)
+  - [Security](#security)
+- [🖥️ Desktop app](#️-desktop-app)
+- [Installing Ollama](#installing-ollama)
+- [Using the app](#using-the-app)
+- [💻 Codex – the coding agent](#-codex--the-coding-agent)
+- [🐙 GitHub & GitLab workspace](#-github--gitlab-workspace)
+- [🛡️ Vulnerability Harness](#️-vulnerability-harness)
+- [🔧 Issue Fixer & scheduled audits](#-issue-fixer--scheduled-audits)
+- [🔌 Backends: Ollama, llama-server, Antigravity, OmniRoute](#-backends-ollama-llama-server-antigravity-omniroute)
+- [🧩 MCP server](#-mcp-server)
+- [🤗 Hugging Face models](#-hugging-face-models)
+- [🎓 AI training (fine-tuning)](#-ai-training-fine-tuning)
+- [Recommended models](#recommended-models)
+- [Troubleshooting](#troubleshooting)
+- [Agent skills (`.agents/`)](#agent-skills-agents)
+- [How it works](#how-it-works)
+- [Development & tests](#development--tests)
+- [License](#license)
 
 ---
 
-## 🌐 Webbversion – åtkomst från en annan dator
+## Features
 
-Det här är rätt variant om Ollama körs på en **server** (t.ex. en headless Linux-maskin
-utan skärm) och du vill hantera modellerna från din **egen dator via webbläsaren**.
+**Models**
+- **My Models**: lists installed models with size, parameters, quantization and date, and removes them with one
+  click. The model currently loaded in memory is marked **● Running**, with GPU or CPU placement, VRAM use and
+  expiry time.
+- **Discover / Install**: one search box covers the [Ollama library](https://ollama.com/library) and
+  [Hugging Face](https://huggingface.co) GGUF models. Downloads stream live with a progress bar and can be cancelled.
+- **Hardware filter**: every model is tagged *fits your GPU*, *runs partly on CPU* or *too large*. Models that
+  cannot run can be hidden.
+- **Multi-GPU**: run one Ollama instance per GPU and choose the GPU per chat. A VRAM warning appears before you send.
 
-Så här funkar det: du kör `ollama_web.py` **på servern**. Den startar en liten webbserver
-som visar gränssnittet i webbläsaren och pratar med Ollama lokalt på servern
-(`localhost:11434`). Du behöver alltså **inte** exponera Ollama självt på nätverket – bara
-webbappens port (standard 8080).
+**Chat**
+- Streaming Markdown responses with copyable code blocks and tokens/s statistics.
+- System prompt, temperature and context length can be set. Image attachments work with vision models.
+- Named conversations are stored in SQLite.
+- **Date & time awareness**: the model knows today's date. It does not answer current-event questions from stale
+  training data.
+- **Web search**: DuckDuckGo search with no API key. The app reads the top result pages and lists sources in the
+  answer.
+- **Shared long-term memory** through [Mem0](https://mem0.ai). It can be shared with other assistants that use the
+  same user ID.
 
-> **Obs:** Webbversionen behöver **inte** `tkinter` – bara Python 3 och Ollama. Perfekt för
-> en server utan skrivbordsmiljö.
+**Engineering & security**
+- **Codex**: a coding agent that runs on your own models. It reads and edits files, runs tests, works with git and
+  opens PRs or MRs. Three permission levels control how much it may do on its own. It can also run commands in an
+  optional Docker sandbox.
+- **Smart model router**: picks a model per task. Claude or Gemini (through Antigravity) handle hard fixes and
+  large contexts; local Llama or Ollama models handle private and offline work.
+- **GitHub view**: lists repositories, issues and PRs, and includes a file-tree explorer and file inspector.
+  Selected issues can be fixed automatically.
+- **Vulnerability Harness**: a six-phase audit.
+  1. Reconnaissance with scanner seeding (Bandit, Semgrep, Gitleaks)
+  2. Coverage ledger
+  3. Hunting with taint tracking
+  4. Candidate generation
+  5. Adversarial validation
+  6. Reports and issues
 
-### Snabbstart (webb)
+  Findings are scored with CVSS v3.1. The harness is grounded in 45 framework-based
+  [SecuritySkills](https://github.com/UnitOneAI/SecuritySkills) playbooks.
+- **Scheduled audits**: recurring security and simplification reviews of GitHub or GitLab repositories. Each
+  finding is filed as an issue.
+- **MCP server**: lets Claude Code, Cursor, Windsurf, Gemini CLI or other agents control Ollama Studio over
+  the Model Context Protocol.
 
-Kör detta **på servern** (exemplet utgår från att koden ligger i `/opt/ollamastudio`):
+**Operations**
+- **Top-bar telemetry**: active model, live throughput (tokens/s, including llama-server metrics), and VRAM, load
+  and temperature for each GPU.
+- **"Saved vs Anthropic" counter**: total tokens processed locally across chat, Codex, the harness and the fixer,
+  with the estimated cost avoided.
+- **Self-update**: **↻ Update** runs `git pull`, then restarts the server if new code arrived and still compiles.
+- **🎓 AI training**: fine-tune a model on your own examples with [Soup](https://github.com/MakazhanAlpamys/Soup),
+  then deploy it to Ollama. This tab is hidden by default.
+
+---
+
+## 🌐 Web app
+
+Run `ollama_web.py` **on the server**. It serves the UI and talks to Ollama locally (`localhost:11434`). Only the
+web app's port needs to be reachable, not Ollama itself. The web app does **not** need `tkinter`.
+
+### Quick start
 
 ```bash
-# 1. Hämta koden (om du inte redan gjort det)
 git clone https://github.com/anderssjoeberg75/ollamastudio.git /opt/ollamastudio
 cd /opt/ollamastudio
-
-# 2. Starta webbservern – nåbar från andra datorer, skyddad med lösenord
-OLLAMA_STUDIO_HOST=0.0.0.0 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
+OLLAMA_STUDIO_HOST=0.0.0.0 OLLAMA_STUDIO_TOKEN=my-secret python3 ollama_web.py
 ```
 
-Du ser då en utskrift med adresser, t.ex.:
+Open the printed address, e.g. `http://192.168.1.50:8080`, from another computer and enter the token.
 
-```
- Öppna i webbläsaren från en annan dator:
-     http://192.168.1.50:8080
-     http://<serverns-namn>:8080
-```
+> Started without `OLLAMA_STUDIO_HOST`, the app listens only on `127.0.0.1`. If you listen on the network
+> without a token, the app generates one, prints it and replaces it on every restart.
+> If the page does not load, open the port in the firewall, e.g. `sudo ufw allow 8080/tcp`.
 
-**Öppna den adressen i webbläsaren på din andra dator** och ange lösenordet – klart! Du kan
-nu installera och avinstallera modeller precis som i skrivbordsappen.
-
-> Startar du bara `python3 ollama_web.py` lyssnar appen **enbart på den här datorn**
-> (`http://127.0.0.1:8080`). Utelämnar du `OLLAMA_STUDIO_TOKEN` men sätter
-> `OLLAMA_STUDIO_HOST=0.0.0.0` genereras ett lösenord automatiskt och skrivs ut vid start.
-
-> Om sidan inte laddas: kontrollera att serverns brandvägg tillåter porten, t.ex.
-> `sudo ufw allow 8080/tcp`.
-
-### Kör den permanent (systemd)
-
-För att webbappen ska starta automatiskt och fortsätta köra i bakgrunden finns en färdig
-systemd-tjänst med i projektet (`ollama-studio-web.service`):
+### Run permanently (systemd)
 
 ```bash
-# Kopiera in tjänsten
 sudo cp /opt/ollamastudio/ollama-studio-web.service /etc/systemd/system/
-
-# (Valfritt) justera sökväg, port och token
-sudo nano /etc/systemd/system/ollama-studio-web.service
-
-# Aktivera och starta
+sudo nano /etc/systemd/system/ollama-studio-web.service   # optional: path, port, host, token
 sudo systemctl daemon-reload
 sudo systemctl enable --now ollama-studio-web
-
-# Kontrollera att den kör
-systemctl status ollama-studio-web
-journalctl -u ollama-studio-web -f     # följ loggen
+journalctl -u ollama-studio-web -f
 ```
 
-Tjänsten är förinställd på sökvägen `/opt/ollamastudio` och port `8080`. Ligger koden någon
-annanstans – ändra `WorkingDirectory` och `ExecStart` i filen.
+The unit assumes the code is in `/opt/ollamastudio` and uses port `8080`, listening on `127.0.0.1`. To expose
+the app on the network, uncomment `OLLAMA_STUDIO_HOST=0.0.0.0` and `OLLAMA_STUDIO_TOKEN=…` in the unit.
 
-Tjänsten lyssnar som standard **bara på `127.0.0.1`**. Ska andra datorer nå den: avkommentera
-raderna `OLLAMA_STUDIO_HOST=0.0.0.0` och `OLLAMA_STUDIO_TOKEN=…` i tjänstefilen och sätt ett
-eget lösenord. (Sätter du bara värden genereras ett lösenord automatiskt – det står i
-`journalctl -u ollama-studio-web`, men byts vid varje omstart.)
+### Configuration (environment variables)
 
-### Inställningar (miljövariabler)
+All variables are optional. Most of them can also be changed under **⚙ Settings** in the UI. Those values are
+stored in a local SQLite database (`ollama_studio.db`; change the path with `OLLAMA_STUDIO_DB`) and **override**
+environment variables, so no restart is needed. The database can contain tokens and is git-ignored.
 
-Webbversionen styrs helt med miljövariabler (alla valfria):
+**Server & access**
 
-| Variabel | Standard | Betydelse |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `OLLAMA_STUDIO_HOST` | `127.0.0.1` | Adress att lyssna på. Standard är **bara den här datorn**. Sätt `0.0.0.0` för att nå appen från andra datorer – då krävs alltid en token (se nästa rader). |
-| `OLLAMA_STUDIO_PORT` | `8080` | Porten webbappen körs på. |
-| `OLLAMA_URL` | `http://localhost:11434` | Var Ollama körs (byt om Ollama körs på annan port/dator). |
-| `OLLAMA_STUDIO_TOKEN` | *(tomt)* | Lösenord för webbappen. Lyssnar servern på nätverket (t.ex. `0.0.0.0`) utan att token är satt **genereras en token automatiskt** vid start och skrivs ut i loggen – sätt en egen för att den inte ska bytas vid varje omstart. |
-| `OLLAMA_STUDIO_LOG_LEVEL` | `INFO` | Loggnivå (till stderr/journalctl). `DEBUG` visar även fel som appen medvetet ignorerar och går vidare från – bra vid felsökning. |
-| `OLLAMA_STUDIO_BACKENDS` | *(tomt)* | Flera Ollama-instanser (t.ex. en per GPU eller optimerad instans). Format: `label,url,gpu ; label,url,gpu`. Se [Flera GPU:er](#välj-vilken-gpu-en-modell-körs-på-en-instans-per-gpu) och [Extra instans med KV-cache-kvantisering](#extra-instans-med-kv-cache-kvantisering-gpu-1-port-11436). |
-| `OLLAMA_FLASH_ATTENTION` | *(sätts på Ollama)* | Sätts på **Ollama-tjänsten** (ej Ollama Studio). Aktiverar FlashAttention (`1`). Krävs bl.a. för kvantiserad KV-cache. Se [Extra instans](#extra-instans-med-kv-cache-kvantisering-gpu-1-port-11436). |
-| `OLLAMA_KV_CACHE_TYPE` | *(sätts på Ollama)* | Sätts på **Ollama-tjänsten** (ej Ollama Studio). Typ av KV-cache, t.ex. `q8_0` för att halvera minnesåtgången för KV-cachen. Kräver `OLLAMA_FLASH_ATTENTION=1`. |
-| `OLLAMA_STUDIO_CHAT_TIME` | `1` (på) | Skickar med serverns datum och tid till modellen i chatten, så den kan svara på "vilken dag är det?" och slutar gissa om pågående händelser. Sätt `0` för att stänga av. |
-| `TZ` | *(systemets)* | Tidszon för datum/tid i chatten, t.ex. `Europe/Stockholm`. Sätts i systemd-tjänsten. Serverns klocka visas i ⚙ Inställningar → Chatt. |
-| `OLLAMA_STUDIO_WEBSEARCH` | `1` (på) | Webbsök i chatten. När modellen är osäker söker den på nätet (DuckDuckGo) och märker svaret med källor. Stäng av med `0`. Kräver att servern har internetåtkomst. |
-| `OLLAMA_STUDIO_KEEP_ALIVE` | `30m` | Hur länge Ollama håller modellen i minnet mellan meddelanden. Ollamas eget standardvärde är 5 minuter, och då tar första frågan efter en paus flera sekunder extra medan modellen läses in igen. `-1` = tills servern startas om, tomt = låt Ollama bestämma. |
-| `OLLAMA_STUDIO_WEBSEARCH_PAGES` | `3` | Hur många av sökträffarna vars sidinnehåll servern läser och matar in i modellen (0–5). `0` = bara rubrik och utdrag, som förut. Fler = bättre svar men långsammare. |
-| `OLLAMA_STUDIO_HF` | `1` (på) | Hugging Face-stödet: träffar i sökningen och den automatiska reserven när ett modellnamn saknas i Ollamas bibliotek. Sätt `0` för att stänga av. Kräver internet på servern. |
-| `OLLAMA_STUDIO_HF_AUTO` | `1` (på) | Ladda ner bästa Hugging Face-träffen automatiskt. Med `0` visas träffarna istället och du väljer själv. |
-| `HF_TOKEN` | *(tomt)* | Valfri Hugging Face-token. Används **bara för sökningen** (högre kvot, egna privata repon) – nedladdningen gör Ollama själv. Kan också sättas i ⚙ Inställningar. |
-| `OLLAMA_STUDIO_TRAIN` | `1` (på) | AI-träningsfliken (kräver att `soup_train.py` finns bredvid appen). Sätt `0` för att stänga av. |
-| `OLLAMA_STUDIO_TRAIN_DIR` | `~/ollama-studio-training` | Mappen där träningskonfig, dataset (`data/`) och tränade modeller (`runs/`) hamnar. |
-| `OLLAMA_STUDIO_SOUP_BIN` | *(tomt)* | Sökväg till `soup`-kommandot om det inte ligger i `PATH` (t.ex. i en egen venv). |
-| `OLLAMA_STUDIO_MEM0` | `0` (av) | Sätt `1` för att slå på delat långtidsminne via Mem0. Kräver också `MEM0_API_KEY` (Mem0 Cloud) eller en egen `MEM0_BASE_URL` (självhostad). |
-| `OLLAMA_STUDIO_CODE` | `1` (på) | Codex (💻-vyn). Fliken syns alltid; Codex blir funktionell först när en giltig `OLLAMA_STUDIO_WORKSPACE` är vald. Sätt `0` för att dölja/stänga av. |
-| `OLLAMA_STUDIO_WORKSPACE` | *(tomt)* | Absolut sökväg till projektmappen kodassistenten får läsa/skriva i (allt utanför blockeras). Sökvägen måste finnas **på servern** – annars stannar Codex i skisslage, och banderollen i vyn talar om vilken sökväg som inte hittades. Behöver inte sättas för hand om du hämtar ett repo från rullmenyn i Codex-vyn. |
-| `OLLAMA_STUDIO_REPOS_DIR` | `~/ollama-studio-repos` | Mappen där repon du hämtar från rullmenyn i Codex hamnar (en undermapp per repo, `ägare__namn`). |
-| `GITHUB_TOKEN` | *(tomt)* | GitHub-token för kodassistentens push och att öppna pull requests. Kan också sättas i ⚙ Inställningar (maskeras och sparas lokalt). |
-| `OLLAMA_STUDIO_GITHUB_BASE` | `main` | Standard bas-gren när kodassistenten öppnar en pull request. |
-| `OLLAMA_STUDIO_GITLAB_URL` | `http://gitlab.andrix.se` | Bas-URL till GitLab-servern (t.ex. din egen instans eller `https://gitlab.com`). |
-| `GITLAB_TOKEN` | *(tomt)* | GitLab Personal Access Token för att lista projekt, pusha och öppna Merge Requests. Kan också sättas i ⚙ Inställningar. |
-| `OLLAMA_STUDIO_GITLAB_BASE` | `main` | Standard bas-gren när kodassistenten öppnar en Merge Request på GitLab. |
-| `OLLAMA_STUDIO_CODE_RUN` | `0` (av) | Sätt `1` för att låta kodassistenten köra kommandon (tester/linters). Huvudströmbrytaren: är den av kör Codex inga kommandon alls, oavsett behörighetsläge. Kommandon på allowlisten körs utan att fråga; övriga kräver ett godkännande (eller läget `full`). |
-| `OLLAMA_STUDIO_CODE_ALLOWLIST` | *(förinställd)* | Tillåtna kommando-prefix (ett per rad/komma), t.ex. `pytest`, `npm test`. Redigeras enklast i ⚙ Inställningar. |
-| `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Max körtid i sekunder per kommando (klamras 1–600). |
-| `OLLAMA_STUDIO_CODE_PERMISSION` | `ask` | Hur självständig Codex är: `ask` (fråga om lov före varje skrivning, kommando och git), `auto_edit` (skriver filer själv, frågar om kommandon/git) eller `full` (fria händer – gör allt utan att fråga, även kommandon utanför allowlisten). Byts enklast i väljaren **Behörighet** överst i Codex-vyn. |
-| `OLLAMA_STUDIO_CODE_STEPS` | `0` (obegränsat) | Tak för antal verktygssteg per körning. **0 = obegränsat** – agenten håller på tills den är klar; en modell som kört fast fångas i stället av loop-detektionen och av **■ Stoppa**. Sätt 1–1000 för ett hårt tak. |
-| `OLLAMA_STUDIO_CODE_CTX` | `8192` | Kontextfönster (`num_ctx`) för Codex. **Viktig:** utan den kör Ollama på sin egen standard (ofta 2048 token), och då trillar instruktionerna ut ur fönstret efter ett par steg så agenten slutar följa protokollet mitt i jobbet. `0` = låt Ollama bestämma. |
-| `OLLAMA_STUDIO_CODE_TEMP` | `0.2` | Temperatur för Codex. Lågt värde ger förutsägbar kod och stabila verktygsanrop. |
-| `OLLAMA_STUDIO_CODE_SANDBOX` | `0` (av) | Sätt `1` för att köra Codex-kommandon i en Docker-container (arbetsytan monteras som `/workspace`). Containern körs med `no-new-privileges` och tak för processer, minne (2 GB) och CPU (2). |
-| `OLLAMA_STUDIO_CODE_SANDBOX_IMAGE` | `python:3.12-slim` | Container-imagen sandlådan använder. |
-| `OLLAMA_STUDIO_CODE_SANDBOX_NO_NET` | `0` (av) | Sätt `1` för att stänga av allt nätverk i sandlådan (`--network none`) – för att köra opålitlig kod. Av som standard eftersom säkerhetstest-verktyg som nmap behöver nätverk. |
-| `OLLAMA_STUDIO_TRAIN_MENU` | `0` (av) | Sätt `1` för att visa **🎓 AI-träning** i menyn. Dold som standard – appen fokuserar på Codex. |
+| `OLLAMA_STUDIO_HOST` | `127.0.0.1` | Listen address. `0.0.0.0` exposes the app on the network and then always requires a token. |
+| `OLLAMA_STUDIO_PORT` | `8080` | Web app port. |
+| `OLLAMA_STUDIO_TOKEN` | *(empty)* | Access token. One is generated automatically when the app listens on the network without one. |
+| `OLLAMA_STUDIO_NO_AUTH` | *(off)* | `1` turns off the token check entirely. Use it only on a trusted, isolated network. |
+| `OLLAMA_STUDIO_MAX_BODY` | `67108864` | Maximum request body size in bytes. |
+| `OLLAMA_STUDIO_LOG_LEVEL` | `INFO` | Log level. `DEBUG` also logs errors that the app deliberately ignores. |
+| `OLLAMA_STUDIO_DB` | `ollama_studio.db` | Settings and history database. |
 
-Delat minne (Mem0) styrs dessutom av (alla valfria utom där annat anges):
+**Model backends**
 
-| Variabel | Standard | Betydelse |
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `MEM0_API_KEY` | *(tomt)* | API-nyckel till **Mem0 Cloud**. Krävs för molnet; tomt för självhostad utan nyckel. |
-| `MEM0_USER_ID` | `default_user` | Identiteten minnet lagras under. **Sätt samma värde som Freja** för att dela minne. |
-| `MEM0_BASE_URL` | `https://api.mem0.ai` | Bas-URL till Mem0. Byt till din egen adress för en **självhostad** Mem0-server. |
-| `MEM0_API_VERSION` | `v1` | API-version i sökvägen (byt bara om din Mem0 kräver det). |
-| `MEM0_AUTH_SCHEME` | `Token` | Schema i `Authorization`-headern (t.ex. `Bearer` för vissa servrar). |
-| `MEM0_ORG_ID` / `MEM0_PROJECT_ID` | *(tomt)* | Valfria org-/projekt-ID för Mem0 Cloud. |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint. |
+| `LLAMA_URL` | *(empty)* | A llama.cpp `llama-server` endpoint. If `OLLAMA_URL` is not set, it is used as the default backend. |
+| `OLLAMA_STUDIO_BACKEND_TYPE` | `auto` | Backend type detection: `auto`, or force a specific type. |
+| `OLLAMA_STUDIO_BACKENDS` | *(empty)* | Several instances in the format `label,url,gpu ; label,url,gpu`. See [multi-GPU](#choosing-the-gpu-per-model-one-instance-per-gpu). |
+| `OMNIROUTE_URL` | *(LAN default)* | OpenAI-compatible router used by the harness and the fixer (`auto/best-coding`, `auto/best-reasoning`). If it is unreachable, the local backend is used. |
+| `AGY_PATH` | *(PATH)* | Path to the `agy` CLI for the Antigravity bridge (Gemini or Claude through your subscription). |
+| `OLLAMA_STUDIO_KEEP_ALIVE` | `30m` | How long models stay loaded between messages. `-1` keeps them until restart; empty uses Ollama's default. |
+| `OLLAMA_FLASH_ATTENTION`, `OLLAMA_KV_CACHE_TYPE` | — | Set on the **Ollama service**, not on this app. See [tuned instance](#extra-instance-with-kv-cache-quantization). |
 
-Exempel – kör på port 9000 med lösenord, nåbar från andra datorer:
+**Chat**
 
-```bash
-OLLAMA_STUDIO_HOST=0.0.0.0 OLLAMA_STUDIO_PORT=9000 OLLAMA_STUDIO_TOKEN=mitthemligalösen python3 ollama_web.py
-```
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OLLAMA_STUDIO_CHAT_TIME` | `1` | Sends the server's date and time to the model. |
+| `TZ` | system | Time zone used for that date and time, e.g. `Europe/Stockholm`. |
+| `OLLAMA_STUDIO_WEBSEARCH` | `1` | Web search in chat. Needs internet access on the server. |
+| `OLLAMA_STUDIO_WEBSEARCH_PAGES` | `3` | How many result pages are read into the prompt (0–5). |
+| `OLLAMA_STUDIO_MEM0` | `0` | `1` turns on Mem0 memory. |
+| `MEM0_API_KEY` | *(empty)* | Mem0 Cloud key. Leave empty for a self-hosted server without a key. |
+| `MEM0_USER_ID` | `default_user` | Memory identity. Use the same value as another assistant to share memory with it. |
+| `MEM0_BASE_URL` | `https://api.mem0.ai` | Set this to a self-hosted Mem0 URL. |
+| `MEM0_API_VERSION`, `MEM0_AUTH_SCHEME`, `MEM0_ORG_ID`, `MEM0_PROJECT_ID` | `v1`, `Token`, —, — | Advanced Mem0 options. |
 
-Exempel – samma minne som Freja (Mem0 Cloud):
+**Codex & repositories**
 
-```bash
-OLLAMA_STUDIO_MEM0=1 MEM0_API_KEY=m0-… MEM0_USER_ID=<samma-som-freja> python3 ollama_web.py
-```
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OLLAMA_STUDIO_CODE` | `1` | Shows Codex. The agent becomes fully functional once a workspace is selected. |
+| `OLLAMA_STUDIO_WORKSPACE` | *(empty)* | Absolute path on the server that Codex may read and write. Not needed if you fetch a repository from the UI. |
+| `OLLAMA_STUDIO_REPOS_DIR` | `~/ollama-studio-repos` | Where fetched repositories are cloned (`owner__name`). |
+| `OLLAMA_STUDIO_CODE_PERMISSION` | `ask` | `ask`, `auto_edit` or `full`. See [permission levels](#permission-levels). |
+| `OLLAMA_STUDIO_CODE_RUN` | `0` | Master switch for running commands. When it is off, Codex runs nothing, whatever the permission level. |
+| `OLLAMA_STUDIO_CODE_ALLOWLIST` | pytest, ruff, npm test… | Command prefixes that run without asking. |
+| `OLLAMA_STUDIO_CODE_RUN_TIMEOUT` | `120` | Seconds per command (1–600). |
+| `OLLAMA_STUDIO_CODE_STEPS` | `0` | Tool steps per run. `0` means unlimited; loop detection and **■ Stop** still apply. |
+| `OLLAMA_STUDIO_CODE_CTX` | `8192` | `num_ctx` for Codex. Without it, Ollama often uses 2048 and the agent loses its instructions. |
+| `OLLAMA_STUDIO_CODE_TEMP` | `0.2` | Temperature for Codex. |
+| `OLLAMA_STUDIO_CODE_SANDBOX` | `0` | `1` runs commands in Docker with the workspace mounted at `/workspace`, `no-new-privileges`, 2 GB RAM and 2 CPUs. |
+| `OLLAMA_STUDIO_CODE_SANDBOX_IMAGE` | `python:3.12-slim` | Sandbox image. |
+| `OLLAMA_STUDIO_CODE_SANDBOX_NO_NET` | `0` | `1` adds `--network none` for untrusted code. |
+| `GITHUB_TOKEN` | *(empty)* | Used to push, open PRs, create issues and use the GitHub view. |
+| `OLLAMA_STUDIO_GITHUB_BASE` | `main` | Base branch for PRs. |
+| `OLLAMA_STUDIO_GITLAB_URL` | `http://gitlab.andrix.se` | GitLab server, e.g. `https://gitlab.com`. |
+| `GITLAB_TOKEN` | *(empty)* | GitLab personal access token. |
+| `OLLAMA_STUDIO_GITLAB_BASE` | `main` | Base branch for merge requests. |
+| `OLLAMA_STUDIO_MCP` | `1` | Turns on the MCP endpoint (`/mcp`). |
+| `OLLAMA_STUDIO_SEC_TARGET`, `OLLAMA_STUDIO_SEC_TOKEN`, `OLLAMA_STUDIO_SEC_MODE` | —, —, `safe` | Target and mode for authorized security testing. |
 
-> **Tips:** Du behöver inte använda miljövariabler för det här. Öppna **⚙ Inställningar** i
-> webb-UI:t och fyll i webbsök- och Mem0-inställningarna där – de sparas i en **lokal
-> SQLite-databas** på servern (`ollama_studio.db`, byt sökväg med `OLLAMA_STUDIO_DB`) och
-> **vinner över miljövariablerna**. Där finns också en **"Testa anslutning"**-knapp för Mem0.
-> Databasen kan innehålla din API-nyckel och är därför `.gitignore`-ad.
+**Hugging Face & training**
 
-### Säkerhet
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OLLAMA_STUDIO_HF` | `1` | Hugging Face search, plus fallback to Hugging Face for unknown model names. |
+| `OLLAMA_STUDIO_HF_AUTO` | `1` | Downloads the best Hugging Face match automatically. `0` shows the choices instead. |
+| `HF_TOKEN` | *(empty)* | Used for search only, for higher quota and private repositories. |
+| `OLLAMA_STUDIO_TRAIN` | `1` | Enables training. Requires `soup_train.py`. |
+| `OLLAMA_STUDIO_TRAIN_MENU` | `0` | `1` shows **🎓 AI training** in the menu. |
+| `OLLAMA_STUDIO_TRAIN_DIR` | `~/ollama-studio-training` | Training configuration, datasets and runs. |
+| `OLLAMA_STUDIO_SOUP_BIN` | *(PATH)* | Path to `soup` if it is not on `PATH`. |
 
-Webbappen kan installera och radera modeller, och Codex kan läsa/skriva filer, köra
-kommandon och starta säkerhetstester. Därför:
+### Security
 
-- **Som standard lyssnar den bara på `127.0.0.1`** – ingen annan dator kommer åt den.
-- **Öppnar du den på nätverket** (`OLLAMA_STUDIO_HOST=0.0.0.0`) krävs alltid en token.
-  Har du inte satt `OLLAMA_STUDIO_TOKEN` genereras en automatiskt vid start och skrivs ut
-  i loggen. Sätt hellre en egen, så att den inte byts vid varje omstart. Webbläsaren frågar
-  efter lösenordet första gången.
-- **Begränsa med brandvägg** så bara ditt nätverk kommer åt porten.
-- **Exponera inte rakt mot internet.** Vill du nå den utifrån, lägg den bakom en
-  reverse proxy (t.ex. Nginx eller Caddy) med HTTPS och inloggning.
+The web app can delete models, write files, run commands, train models and start security scans. To keep it safe:
+
+- By default it listens only on **`127.0.0.1`**. Exposing it on the network always requires a token.
+- Restrict the port with a firewall.
+- **Never expose it directly to the internet.** Put it behind a reverse proxy (Nginx, Caddy) with HTTPS and
+  authentication.
+- Server-side fetches (web search pages, Hugging Face) are limited to http/https. Addresses are pinned against
+  SSRF to private networks.
+- Codex can never leave its workspace. Commands also need `OLLAMA_STUDIO_CODE_RUN=1`, and you can isolate them
+  in the Docker sandbox.
 
 ---
 
-## 🖥️ Skrivbordsapp – kör lokalt
+## 🖥️ Desktop app
 
-Det här är varianten om du sitter vid datorn som har ett skrivbord (Linux/macOS/Windows)
-och vill köra allt lokalt.
+The desktop app is a lightweight `tkinter` model manager for installing, removing and inspecting models on the same
+machine.
 
-### Steg 1 – Installera Python och tkinter
-
-Skrivbordsappen använder `tkinter`, som på de flesta Linux-distar installeras separat:
-
-| Distribution | Kommando |
+| Distribution | Install tkinter |
 | --- | --- |
-| Debian / Ubuntu / Linux Mint / Pop!_OS | `sudo apt install python3 python3-tk` |
+| Debian / Ubuntu / Mint / Pop!_OS | `sudo apt install python3 python3-tk` |
 | Fedora | `sudo dnf install python3 python3-tkinter` |
-| Arch / Manjaro / EndeavourOS | `sudo pacman -S python tk` |
+| Arch / Manjaro | `sudo pacman -S python tk` |
 | openSUSE | `sudo zypper install python3 python3-tk` |
 
-Kontrollera: `python3 -c "import tkinter; print('tkinter OK')"`
-
-> **macOS/Windows:** Ladda ner Python från [python.org](https://www.python.org/downloads/) –
-> där ingår `tkinter` automatiskt.
-
-### Steg 2 – Starta skrivbordsappen
+On macOS and Windows, the installer from [python.org](https://www.python.org/downloads/) already includes tkinter.
 
 ```bash
 git clone https://github.com/anderssjoeberg75/ollamastudio.git
 cd ollamastudio
-./run.sh
+./run.sh                 # or: python3 ollama_studio.py   (Windows: run.bat)
+./install-linux.sh       # optional: add a launcher to the Linux application menu
 ```
-
-`run.sh` kontrollerar att Python, `tkinter` och Ollama finns. Du kan också starta direkt
-med `python3 ollama_studio.py`. På **Windows**: dubbelklicka på `run.bat`.
-
-### Lägg till i programmenyn (Linux)
-
-Vill du starta appen från din vanliga programmeny (GNOME/KDE/XFCE m.fl.):
-
-```bash
-./install-linux.sh
-```
-
-Det skapar en genväg (`~/.local/share/applications/ollama-studio.desktop`). Ta bort den
-igen med `rm ~/.local/share/applications/ollama-studio.desktop`.
 
 ---
 
-## Installera Ollama (behövs för båda)
-
-Ollama Studio är bara ett skal ovanpå **Ollama** – motorn som kör modellerna.
-
-**Installera (Linux):**
+## Installing Ollama
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+curl -fsSL https://ollama.com/install.sh | sh        # Linux (macOS/Windows: installer from ollama.com)
+sudo systemctl enable --now ollama                    # start at boot
+curl http://localhost:11434/api/version               # check that it responds
 ```
 
-> **macOS/Windows:** hämta installationsprogrammet från [ollama.com](https://ollama.com).
-
-**Starta servern** (görs oftast automatiskt vid installation, annars):
-
-```bash
-ollama serve
-```
-
-**Autostart vid uppstart (Linux med systemd):**
-
-```bash
-sudo systemctl enable --now ollama
-```
-
-**Kontrollera att Ollama svarar:**
-
-```bash
-curl http://localhost:11434/api/version
-```
-
-Får du tillbaka ett versionsnummer körs Ollama korrekt.
+Prefer llama.cpp? Point `LLAMA_URL` at a running `llama-server`. See
+[Backends](#-backends-ollama-llama-server-antigravity-omniroute).
 
 ---
 
-## Använda appen
+## Using the app
 
-Gränssnittet är detsamma i både webb- och skrivbordsversionen, med två vyer i menyn till
-vänster.
+### Install, remove, inspect
 
-### Installera en modell
+1. **Discover / Install**: search for a name such as `qwen` or `llama`, then click **↓ Install** on a result. You
+   can also type an exact name (`qwen2.5:7b`, `hf.co/owner/repo:Q4_K_M` or a Hugging Face URL) and click
+   **↓ Download**.
+2. **My Models**: **✕ Uninstall** deletes a model's files. The loaded model shows **● Running**. The list refreshes
+   every 5 seconds.
+3. **↻ Update** in the top right pulls the latest code and restarts if needed, then refreshes the view. Use it
+   after running `ollama pull` in a terminal.
 
-1. Klicka på **Upptäck / Installera**.
-2. Antingen:
-   - **sök** i fältet högst upp (t.ex. `qwen`, `llama`, `kod`) och klicka **↓ Installera**
-     på en träff – listan blandar Ollamas bibliotek och Hugging Face, **eller**
-   - skriv ett **exakt** modellnamn (t.ex. `llama3.2`, `qwen2.5:7b`, `hf.co/ägare/repo:Q4_K_M`
-     eller en Hugging Face-länk) och klicka **↓ Ladda ner**.
-3. En panel längst ner visar nedladdningen i realtid. Du kan **Avbryta** när som helst.
-4. När den är klar hittar du modellen under **Mina modeller**.
+### Hardware filter
 
-### Hårdvarufiltret
-
-Under sökfältet finns kryssrutan **"Dölj modeller som inte får plats på den här datorn"**.
-Med den påslagen döljs modeller som inte kan köras på din hårdvara – valet sparas till nästa
-gång. Bredvid kryssrutan står vad appen hittat, t.ex. *8 GB VRAM + 32 GB RAM*.
-
-Varje modell får också en märkning i listan:
-
-| Märkning | Betyder |
+| Tag | Meaning |
 | --- | --- |
-| ≈ passar din GPU | Ryms i grafikkortets minne – snabbast. |
-| ≈ körs delvis på CPU | Får inte plats i VRAM; Ollama lägger resten i RAM. Fungerar, men långsammare. |
-| ⚠ för stor för din hårdvara | Ryms varken i VRAM eller RAM. Det är dessa som döljs. |
+| ≈ fits your GPU | Fits in VRAM. This is the fastest option. |
+| ≈ runs partly on CPU | Part of the model spills into RAM. It works, but slower. |
+| ⚠ too large | Fits in neither VRAM nor RAM. These models are hidden when the filter is on. |
 
-Så räknas det: taket är **VRAM + 85 % av RAM** (Ollama delar upp modellen mellan GPU och CPU).
-Storleken kommer från katalogens angivna storlek, från bibliotekets parametertaggar (`8b`)
-eller ur modellnamnet (`Qwen3-8B-GGUF`) – och när ett bibliotek har flera varianter räknas
-den **minsta**, så en modell göms aldrig bara för att den *också* finns i en jättestorlek.
-Vet appen inte storleken visas modellen alltid. Siffrorna är uppskattningar (utgår från
-`Q4_K_M`, Ollamas standard), så en modell på gränsen kan behöva provas.
+The limit is **VRAM + 85 % of RAM**. Sizes come from the catalog, the library tags or the model name, and are
+estimated for `Q4_K_M`. A model of unknown size is always shown.
 
-> Hittas inte namnet i Ollamas bibliotek söker appen automatiskt vidare på Hugging Face och
-> fortsätter nedladdningen därifrån – i samma panel. Se nästa avsnitt.
+### Choosing the GPU per model (one instance per GPU)
 
-### Avinstallera en modell
-
-1. Klicka på **Mina modeller**.
-2. Klicka **✕ Avinstallera** och bekräfta. Modellfilerna raderas permanent från disken.
-
-### Se vilken modell som är aktiv
-
-Under **Mina modeller** markeras den modell som just nu är **inläst i minnet** med en grön
-**● Körs nu**-symbol och en banner högst upp ("Aktiv i minnet just nu"). Där ser du också
-om modellen körs på GPU eller CPU, hur mycket VRAM den använder och när den automatiskt
-frigörs. En modell blir aktiv när den används (t.ex. via `ollama run` eller ett chattanrop)
-och listan uppdateras automatiskt var femte sekund.
-
-### System / GPU (webbversionen)
-
-Öppna fliken **System / GPU** för en live-vy (uppdateras varannan sekund) över:
-
-- **CPU** – total användning och load average.
-- **RAM** – använt/totalt minne.
-- **Varje GPU** – namn, användning (%), VRAM (använt/totalt), temperatur och effekt, samt
-  vilka **processer** som ligger på GPU:n (Ollama-processer markeras i grönt).
-
-GPU-informationen läses via `nvidia-smi` (NVIDIA). Saknas det visas bara CPU/RAM.
-
-### Välj vilken GPU en modell körs på (en instans per GPU)
-
-Ollama har **inte** något stöd i sitt API för att låsa en enskild modell till en viss GPU
-per anrop – GPU-valet gäller hela `ollama serve`-processen. Sättet att verkligen styra
-modell → GPU är därför att köra **en Ollama-instans per GPU**, låst med
-`CUDA_VISIBLE_DEVICES`, och låta Ollama Studio välja instans (GPU) per chatt.
-
-Projektet innehåller en färdig systemd-mall, `ollama-gpu@.service`. Exempel med 2 GPU:er:
+Ollama cannot pin a single request to one GPU, so the app runs **one Ollama instance per GPU**, each locked with
+`CUDA_VISIBLE_DEVICES`:
 
 ```bash
-# 1. Stäng av den vanliga Ollama-tjänsten (upptar GPU:erna + port 11434)
 sudo systemctl disable --now ollama
-
-# 2. Installera mallen (en instans per GPU, portar 11434, 11435, ...)
 sudo cp /opt/ollamastudio/ollama-gpu@.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now ollama-gpu@0
-sudo systemctl enable --now ollama-gpu@1
-
-# 3. Peka Ollama Studio på instanserna
-#    (lägg till raden i [Service] i /etc/systemd/system/ollama-studio-web.service).
-#    OBS: citattecken runt hela raden krävs – värdet innehåller mellanslag:
-#    Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1 ; GPU 1 tuned,http://127.0.0.1:11436,1"
-sudo systemctl daemon-reload
-sudo systemctl restart ollama-studio-web
+sudo systemctl enable --now ollama-gpu@0 ollama-gpu@1      # ports 11434, 11435, …
+# In ollama-studio-web.service ([Service]); the quotes are required:
+# Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1"
+sudo systemctl daemon-reload && sudo systemctl restart ollama-studio-web
 ```
 
-Alla instanser delar samma modell-lager på disken, så du behöver bara ladda ner en modell
-en gång. När flera backends är konfigurerade dyker en **GPU-väljare** upp i chatten, och
-under **Mina modeller** visas på vilken GPU varje aktiv modell körs.
+All instances share the same model store. When several backends are configured, chat shows a GPU picker and a
+VRAM warning (green, yellow or red). The `gpu` field is a **label**: if an instance is not pinned with
+`CUDA_VISIBLE_DEVICES`, the UI shows the GPU the model actually runs on and marks it with ⚠. Run `nvidia-smi -L` to
+check the GPU indexes.
 
-> **Kontrollera GPU-index och namn:** kör `nvidia-smi -L` för att se vilka index dina kort
-> har. Justera `User`/`OLLAMA_MODELS` i `ollama-gpu@.service` om din Ollama inte kör som
-> användaren `ollama` (kommentarer finns i filen).
+### Extra instance with KV-cache quantization
 
-### Extra instans med KV-cache-kvantisering (GPU 1, port 11436)
-
-Ollama stödjer optimeringar för att sänka VRAM-åtgången vid längre kontext, framför allt:
-- **`OLLAMA_FLASH_ATTENTION=1`**: Beräknar attention utan att hela attention-matrisen materialiseras i minnet. Snabbare och minnessnålare, särskilt vid lång kontext.
-- **`OLLAMA_KV_CACHE_TYPE=q8_0`**: Lagrar modellens KV-cache (nyckel/värde-cache) i 8-bitars precision i stället för standard 16 bitar (f16). Detta halverar KV-cachens VRAM-åtgång och skapar utrymme för betydligt längre kontextfönster (`num_ctx`) på t.ex. ett 12 GB-grafikkort.
-
-#### Viktigt att veta om optimeringarna:
-1. **De är serverglobala:** Både FlashAttention och KV-cache-typ läses in när `ollama serve`-processen startar. De kan **varken** sättas per API-anrop eller definieras per modell i en `Modelfile` – inställningarna gäller allt som instansen laddar.
-2. **Krav på FlashAttention:** `OLLAMA_KV_CACHE_TYPE=q8_0` kräver att `OLLAMA_FLASH_ATTENTION=1` också är aktivt. Utan FlashAttention faller Ollama tyst tillbaka på standard f16.
-3. **Modellkompatibilitet:** Vissa modellfamiljer (t.ex. Gemma 3, se ollama/ollama#10945 och #11949) kan få kraftigt sämre genomströmning eller försämrad utskriftskvalitet med q8_0 KV-cache. Därför körs optimeringarna som en **separat instans** i stället för att ändra standardmallen: den omodifierade vägen (`ollama-gpu@1` på port 11435) finns kvar intakt, och modeller kan flyttas selektivt till den optimerade instansen via GPU-väljaren i chatten när de fungerar väl där.
-
-#### Installera `ollama-gpu1-tuned.service`
-
-Mallen `ollama-gpu@.service` låser porten till `11434 + GPU-index`. För att köra en andra instans på samma GPU med en frikopplad port finns en färdig unit-fil, `ollama-gpu1-tuned.service`, som lyssnar på port **11436**:
+`OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` roughly halve the VRAM used by the KV cache, which allows
+longer `num_ctx`. Both settings apply to the whole server process. Some model families, such as Gemma 3, lose speed
+or quality with them, so they run in a **separate instance**, `ollama-gpu1-tuned.service` on port **11436**:
 
 ```bash
-# 1. Installera och starta unit-filen
 sudo cp /opt/ollamastudio/ollama-gpu1-tuned.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ollama-gpu1-tuned
-
-# 2. Kontrollera status och logg
-systemctl status ollama-gpu1-tuned
-journalctl -u ollama-gpu1-tuned -f
+sudo systemctl daemon-reload && sudo systemctl enable --now ollama-gpu1-tuned
 curl http://127.0.0.1:11436/api/version
+# Add to the backends:  ; GPU 1 tuned,http://127.0.0.1:11436,1
 ```
-
-Lägg därefter till instansen i `OLLAMA_STUDIO_BACKENDS` i `/etc/systemd/system/ollama-studio-web.service`:
-```systemd
-Environment="OLLAMA_STUDIO_BACKENDS=GPU 0,http://127.0.0.1:11434,0 ; GPU 1,http://127.0.0.1:11435,1 ; GPU 1 tuned,http://127.0.0.1:11436,1"
-```
-och starta om webbtjänsten (`sudo systemctl daemon-reload && sudo systemctl restart ollama-studio-web`). Etiketten ("GPU 1 tuned") är fri text och dyker automatiskt upp i GPU-väljaren i chatten.
 
 > [!WARNING]
-> **VRAM-konflikt – dela inte minnet samtidigt:**
-> Både `ollama-gpu@1` (port 11435) och `ollama-gpu1-tuned` (port 11436) körs på samma fysiska grafikkort (GPU 1). Har båda instanserna en modell inladdad samtidigt ryms de inte i VRAM (t.ex. 12 GB), vilket gör att Ollama tyst flyttar ut lager på CPU/RAM med stor prestandaförlust.
-> Kör bara en modell åt gången på GPU 1. Du kan frigöra VRAM direkt från Ollama Studio via knappen **Ladda ur modell** i vyn **System / GPU**, eller via terminalen med `ollama stop`.
+> `ollama-gpu@1` and `ollama-gpu1-tuned` share the same physical GPU. Keep only one model loaded at a time,
+> otherwise layers spill silently to the CPU. Free VRAM with `ollama stop <model>`.
 
-#### Mäta och jämföra prestanda (eval rate)
+Compare speed with `ollama run --verbose` on port 11435 and on port 11436, and stop the model on the other port
+between runs. In a reference run on an RTX 3060 12 GB, `qwen2.5:14b` reached about 34.6 tokens/s with the f16 KV
+cache and about 33.9 tokens/s with FlashAttention plus q8_0: about the same speed, with much more room for
+context.
 
-Innan en modell rekommenderas för den optimerade instansen bör du jämföra dess tokenhastighet med och utan optimeringarna:
+### Chat
+
+Pick a model and press **Enter** to send (**Shift+Enter** inserts a new line). Use 📎 to attach images for vision
+models. Under **⚙ Settings** you can set:
+- the system prompt, temperature and `num_ctx`
+- keep-alive
+- web search, and how many pages it reads
+- date and time awareness
+- Mem0 memory (**🧠 Show memory** lets you view and edit what it remembers)
+
+Web search works like this:
+1. The model writes a search query.
+2. The server searches DuckDuckGo and fetches the top pages.
+3. Only the paragraphs that match the query are passed to the model. Results are cached for 10 minutes.
+4. The answer ends with *"found via a web search"* and a source list.
+
+### Faster responses
+
+| Symptom | Fix |
+| --- | --- |
+| First reply after a pause is slow | Increase **Keep model loaded** (default 30 min). |
+| Model spills to CPU | Check the VRAM warning, then pick a smaller or more heavily quantized model. |
+| Every reply is slow | Lower `num_ctx`. 4096 is enough for most chats. |
+| Long thread | Start a **＋ New** conversation. |
+| Web search answers are slow | Read fewer pages, or turn search off for questions that don't need current information. |
+
+---
+
+## 💻 Codex – the coding agent
+
+Codex is a coding agent in the style of Claude Code, but it runs **on your own models**. It works in a loop: it
+reads the project, edits files, runs tests and commits, until the task is done.
+
+- **Tools**: `read_file`, which reads 400 lines at a time, so even files of hundreds of kB work. Also `search`
+  (glob, regex, case-insensitive), `tree`, `list_dir`, `edit_file` (exact replacements), `write_file`,
+  `run_command`, `git_status`, `git_diff`, `git_branch`, `git_commit`, `find_symbol` and `todo`, which shows a live
+  checklist.
+- **Repository analysis**: when you select a repository, Codex receives an overview (languages, key files,
+  layout) and a symbol index.
+- **Undo**: every write can be reverted (**↩ Undo** or **Undo last**).
+- **Without a workspace**: Codex works as a code chat. You can also open a **local folder in the browser**
+  (Chrome or Edge, File System Access); Codex then edits files on *your* computer while the server runs elsewhere.
+- **History pruning**: long sessions are trimmed automatically so they fit the model's context.
+- **Agents & skills**: Codex can look up the skills, agents, workflows and rules in `.agents/`. See
+  [below](#agent-skills-agents).
+
+### Permission levels
+
+| Level | Behaviour |
+| --- | --- |
+| 🔒 **Ask** (`ask`) | Every write, command and git action pauses with a diff: *Allow · Always allow · Deny*. |
+| ✍ **Auto-edit** (`auto_edit`) | Writes files on its own, but asks before running commands or using git. |
+| ⚡ **Full** (`full`) | Does everything without asking, including commands outside the allowlist. |
+
+See [`docs/kodassistent.md`](docs/kodassistent.md) for the full architecture (written in Swedish).
+
+---
+
+## 🐙 GitHub & GitLab workspace
+
+- **Fetch a repository**: pick one of your GitHub or GitLab repositories and click **⬇ Fetch & work here**. The
+  repository is cloned to the server and becomes Codex's workspace. **New branch → Commit → Push → Create PR/MR**
+  sends the work back. **🗑 Remove** deletes the clone; it first warns about uncommitted changes and
+  unpushed commits.
+- **GitHub view**: browse repositories, issues and pull requests. A **file-tree explorer and file inspector** let
+  you read code without cloning. The sidebar shows the active repository and branch.
+- **Bulk issue fixing**: tick issues and click **Fix Selected**. See
+  [Issue Fixer](#-issue-fixer--scheduled-audits).
+
+---
+
+## 🛡️ Vulnerability Harness
+
+The **Vuln Harness** view runs a code audit inspired by Cloudflare's and AWS's security-agent designs. A fast
+*hunter* model finds candidates, and an independent *validator* model tries to prove each candidate wrong.
+
+| Phase | What happens |
+| --- | --- |
+| 1. **Reconnaissance** | Collects source, infrastructure, CI and dependency files. Runs **Gitleaks**, **Bandit** and **Semgrep** if they are installed, to seed the hunt. |
+| 2. **Coverage ledger** | Assigns each file an attack class and a priority: auth and session, injection, data access, configuration and secrets, container, CI/CD, IaC, dependencies. Scanner hits come first. |
+| 3–4. **VDH hunting** | The hunter model (`auto/best-coding`) traces source-to-sink taint flow, guided by SecuritySkills playbooks, and emits structured candidates with CWE, framework controls, PoC and fix. |
+| 5. **VVS validation** | The validator model (`auto/best-reasoning`) scores each candidate: confidence = 0.35·taint + 0.25·no-sanitization + 0.20·direct entry point + 0.20·exploitability. Only findings with ≥ 0.70 and a viable PoC are confirmed. **CVSS v3.1** scores are computed server-side and never trusted from the model. CWE IDs are normalized. |
+| 6. **Reporting** | Writes `REPORT.md`, `findings.json` and SecuritySkills-normalized JSON. Can open GitHub issues for confirmed findings. |
+
+**Profiles**: *Quick* covers 8 units, *Standard* 18, and *Deep* 35 including general logic files, with larger skill
+budgets. The target can be the active workspace or any GitHub or GitLab repository, which is cloned automatically.
+The live card shows the stage, counters, applied skills and the log. Tokens are added to the "Saved vs Anthropic"
+counter.
+
+### SecuritySkills playbooks
+
+The harness ships with all 45 skills from [UnitOneAI/SecuritySkills](https://github.com/UnitOneAI/SecuritySkills)
+(MIT), vendored in `studio/harness/security_skills/`. They are grounded in OWASP ASVS, OWASP API & LLM Top 10,
+CWE Top 25, CIS Docker and Kubernetes, SLSA, NIST and more.
+
+- **Automatic selection per file**: each file gets the playbooks that match it.
+
+  | File | Playbooks |
+  | --- | --- |
+  | Route handlers | `secure-code-review` + `api-security` |
+  | Code that calls LLMs or tools | `prompt-injection`, `agent-security`, `llm-top-10` |
+  | Dockerfiles | `container-security` |
+  | CI workflows | `pipeline-security` |
+  | Terraform | `iac-security` |
+  | Manifests | `dependency-scanning` |
+
+- **Budgeted digests**: control tables, checklists and vulnerable patterns are kept; report templates and
+  reference lists are dropped. The budget is about 2.5k, 5k or 9k characters per unit (Quick, Standard, Deep), so
+  local models are not overwhelmed.
+- **Grounded output**: findings carry `framework_refs` such as `OWASP-ASVS V5.3.4`. The validator checks them and
+  also receives the `scanner-tuning` false-positive playbook.
+- **Normalized export**: `.vulnerability-harness/securityskills/<skill>.json` validates against the upstream
+  `finding.schema.json`. Each finding carries evidence, remediation, confidence, blast radius and a test strategy.
+- **UI controls**: **Apply SecuritySkills playbooks** (on by default), plus an optional picker that forces up to
+  6 extra skills on every unit, e.g. `pci-dss-review` or `hipaa-review` for compliance-focused runs.
+
+API:
+
+```text
+GET  /api/harness/skills                  → skill catalog
+POST /api/harness/start                   {project, profile, create_issues, use_skills, skills: [...]}
+GET  /api/harness/runs | /api/harness/run/<id>
+GET  /api/security/overview               → local security overview snapshot
+```
+
+Install the optional scanners to get the strongest seeding:
 
 ```bash
-# 1. Mät på standardinstansen (11435)
-OLLAMA_HOST=127.0.0.1:11436 ollama stop <modell>
-OLLAMA_HOST=127.0.0.1:11435 ollama run --verbose <modell> "Skriv en förklaring av hur neuronnät tränas."
-
-# 2. Mät på den optimerade instansen (11436)
-OLLAMA_HOST=127.0.0.1:11435 ollama stop <modell>
-OLLAMA_HOST=127.0.0.1:11436 ollama run --verbose <modell> "Skriv en förklaring av hur neuronnät tränas."
+pip install bandit semgrep
 ```
-Flaggan `--verbose` skriver ut **eval rate** (tokens/s). `ollama stop` mellan körningarna säkerställer att inte båda instanserna delar minnet. Ligger port 11436 lägre har modellen sannolikt problem med kvantiserad KV-cache.
 
-##### Uppmätt referensmätning (`qwen2.5:14b` på RTX 3060 12 GB)
-- **Port 11435 (standard f16 KV-cache):** eval rate ~**34.6 tokens/s**
-- **Port 11436 (FlashAttention + q8_0 KV-cache):** eval rate ~**33.9 tokens/s**
-Modellen presterar i princip likvärdig tokenhastighet, men med q8_0 KV-cache sparas värdefullt VRAM vilket tillåter längre kontextfönster (`num_ctx`) på 12 GB-kortet utan att minnet tar slut.
+Gitleaks is available from its release page or your package manager.
 
+---
 
+## 🔧 Issue Fixer & scheduled audits
 
-### Uppdatera (hämta senaste kod + starta om)
+- **Issue Fixer**: for each selected GitHub or GitLab issue, the fixer:
+  1. Clones or syncs the repository.
+  2. Asks a specialist model for a minimal patch.
+  3. Verifies the patch with the project's test suite (pytest, npm test, cargo test, go test) plus Bandit,
+     Semgrep, Gitleaks and a harness VDH/VVS pass on the patched code.
+  4. If everything passes, comments with the test evidence and closes the issue.
+- **Audit Schedule** (GitHub view): recurring security or simplification ("ponytail") reviews of chosen
+  repositories. They run in the background, and every finding becomes an issue.
 
-Klicka **↻ Uppdatera** uppe till höger. Knappen gör tre saker i tur och ordning:
+---
 
-1. **Hämtar senaste kod från GitHub** (`git pull --ff-only` i appmappen).
-2. **Startar om servern** om något nytt hämtades, så den nya koden träder i kraft
-   (webbsidan laddas då om automatiskt när servern kommit tillbaka).
-3. **Uppdaterar vyn** som förut (modell-lista, aktiv modell, system/GPU) – t.ex. efter
-   att du kört `ollama pull` i terminalen.
+## 🔌 Backends: Ollama, llama-server, Antigravity, OmniRoute
 
-Om ingen ny kod finns hoppas omstarten över och bara vyn uppdateras. Självuppdateringen
-kräver att projektet är klonat från GitHub (appmappen är ett git-repo) och att `git`
-finns på servern; annars visas ett meddelande och vyn uppdateras ändå. Hämtad kod som
-inte kompilerar gör att omstarten hoppas över (servern kan inte "brickas" av en trasig
-commit).
-
-### Chatta med en modell (webbversionen)
-
-Öppna fliken **Chatta** i menyn (finns i webbversionen). Välj en modell i listan högst upp
-och skriv ett meddelande – tryck **Enter** för att skicka (**Shift+Enter** för ny rad).
-Klicka **📎** för att bifoga en bild till en vision-modell (t.ex. `llava`). Med
-**Konversation**-väljaren högst upp sparar och byter du mellan namngivna trådar (sparas i
-webbläsaren).
-Svaret strömmas fram token för token, och konversationen behålls så modellen minns
-sammanhanget. Klicka **Rensa** för att börja om, eller **Stoppa** för att avbryta ett svar
-som är på väg. Skickar första meddelandet till en modell som inte redan är laddad tar det
-någon sekund extra medan Ollama läser in den i minnet.
-
-Klicka **⚙ Inställningar** i chatten för att sätta en **systemprompt** (ge modellen en roll,
-t.ex. "Du är en hjälpsam assistent som svarar kortfattat på svenska"), **temperatur** (lägre
-= mer fokuserat/förutsägbart) och **kontextlängd** (`num_ctx`). Inställningarna sparas i
-webbläsaren och skickas med som Ollama-`options` vid varje meddelande.
-
-**Datum och tid.** Modellen får med sig serverns datum, tid och veckodag i varje samtal, så
-frågor som "vilken dag är det?", "hur många dagar kvar till jul?" eller "hur gammal är någon
-född 1985?" fungerar. Den får samtidigt veta att dess egen kunskap är äldre än så, vilket gör
-att den säger *"jag har inte aktuell information"* i stället för att svara om pågående
-tävlingar och nyheter som om året vore ett annat – slå på **🌐 Webbsök** för att låta den ta
-reda på svaret i stället.
-
-**Vad webbsöket gör.** Modellen skriver först en sökfråga (på det språk där svaret troligast
-finns), servern söker på DuckDuckGo och **hämtar sedan sidorna bakom de bästa träffarna** och
-plockar ut texten. Av sidan skickas bara de **stycken som matchar sökfrågan** vidare – meny,
-cookierutor och "läs också"-block sållas bort, vilket både snabbar upp svaret och gör det mer
-träffsäkert. Sökningar och hämtade sidor cachas i tio minuter, så följdfrågor i samma ämne
-går direkt. Modellen får både utdragen och sidinnehållet, med instruktionen att svara
-med namn och siffror från källan snarare än ur minnet. Antalet sidor som läses styrs i
-⚙ Inställningar (0–5). Servern hämtar bara vanliga webbsidor över http/https och vägrar
-adresser i det egna nätet, så en manipulerad sökträff inte kan användas för att nå interna
-tjänster. Stäng av med kryssrutan **🕒 Låt modellen veta datum och tid** i
-⚙ Inställningar, där serverns klocka också visas. Visar den fel tid: sätt tidszonen på
-servern, t.ex. `Environment=TZ=Europe/Stockholm` i systemd-tjänsten.
-
-### Snabbare svar
-
-Går svaren långsamt är det oftast något av det här:
-
-| Vad | Gör så här |
+| Backend | How |
 | --- | --- |
-| **Modellen laddas in på nytt** efter en stunds tystnad | ⚙ Inställningar → *Håll modellen laddad* (30 min som standard). Sparar flera sekunder på första frågan efter en paus. |
-| **Modellen är för stor för GPU:n** | Kolla VRAM-varningen ovanför chatten och märkningen i Upptäck / Installera. Spiller modellen över till CPU blir den flera gånger långsammare – välj en mindre eller mer kvantiserad variant. |
-| **För lång kontext** | `num_ctx` i chattens ⚙ Inställningar styr hur stor kontext som allokeras. 4096 räcker för de flesta samtal; 16384 kostar minne och tid i varje svar. |
-| **Lång konversation** | Hela tråden skickas med varje gång. Starta en **＋ Ny** konversation när ämnet byts. |
-| **Webbsöket** | Varje söksvar är två modellanrop plus sökning och sidhämtning. Sänk *Läs innehållet på sökträffarna* till 2 – eller stäng av webbsöket för frågor som inte behöver aktuell information. |
+| **Ollama** | Default. Set `OLLAMA_URL`, or `OLLAMA_STUDIO_BACKENDS` for several instances. |
+| **llama.cpp `llama-server`** | Set `LLAMA_URL`. Uses `/v1/chat/completions` (streaming), `/v1/models`, `/props`, `/health`, and live throughput metrics. |
+| **Google Antigravity** | Runs Gemini and Claude through your existing subscription via the `agy` CLI, with no API keys. Used by chat, Codex and the model router. |
+| **OmniRoute** | OpenAI-compatible multi-model router (`OMNIROUTE_URL`) used by the harness and the fixer. Falls back to the local backend. |
+
+The **smart model router** sends each task to the best fit:
+- **Claude**: critical security fixes and deep refactors
+- **Gemini**: quick fixes, tests and large contexts
+- **Local models**: private and offline work, and authorized security testing (e.g. WhiteRabbitNeo on the tuned
+  instance)
 
 ---
 
-Kör du flera GPU:er visas en **VRAM-varning** ovanför chatten: grön om modellen får plats
-på det valda kortet, gul om det är ont om ledigt VRAM just nu, och röd om modellen är för
-stor för kortet (och då skulle spilla över till CPU och bli långsam). Behovet är en
-uppskattning utifrån modellens storlek – finjustera genom att välja en annan GPU eller en
-mindre/mer kvantiserad modell.
+## 🧩 MCP server
+
+Ollama Studio exposes an MCP endpoint (protocol version `2024-11-05`) at `/mcp`. `GET` lists the tools and `POST`
+accepts JSON-RPC. The tools are:
+- `ollama_list_models`, `ollama_chat`
+- `codex_workspace_info`, `codex_read_file`, `codex_edit_file`, `codex_write_file`, `codex_run_command`,
+  `codex_git_status`
+- `gitlab_create_issue`
+
+Commands obey the same permissions and sandbox as Codex. Turn the endpoint off with `OLLAMA_STUDIO_MCP=0`.
 
 ---
 
-## 🤗 Hugging Face-modeller
+## 🤗 Hugging Face models
 
-Ollamas eget bibliotek täcker de stora modellerna, men [Hugging Face](https://huggingface.co)
-har tusentals fler – inklusive finjusterade och svenska modeller. Ollama kan läsa dem direkt
-så länge de finns i **GGUF-format**, och Ollama Studio kopplar ihop de två.
+Ollama can run any **GGUF** repository from Hugging Face:
 
-### 1. Skriv bara modellnamnet
+1. **Just type a name.** If it is not in the Ollama library, the best GGUF match on Hugging Face is downloaded,
+   using `Q4_K_M` when available. Set `OLLAMA_STUDIO_HF_AUTO=0` to choose manually instead.
+2. **Search and choose a variant.** Hugging Face results appear next to Ollama's. Click **Variants** to choose
+   the quantization:
 
-Skriv namnet i **Upptäck / Installera → Installera valfri modell** och klicka **↓ Ladda ner**.
+   | Quantization | ~Size (7–8B) | Use when |
+   | --- | --- | --- |
+   | `Q4_K_M` | 4.5 GB | Default; good quality |
+   | `Q5_K_M` | 5.5 GB | Slightly better quality |
+   | `Q8_0` | 8 GB | Near-original quality |
+   | `IQ3_XXS` / `Q3_K_M` | 3 GB | The model won't fit otherwise |
 
-1. Appen provar först Ollamas bibliotek (`ollama.com/library`).
-2. Finns modellen inte där söker den vidare på Hugging Face efter en GGUF-version.
-3. Bästa träffen (namnlikhet + antal nedladdningar) laddas ner automatiskt, med
-   kvantiseringen `Q4_K_M` när den finns – samma standard som Ollama själv använder.
-4. Nedladdningspanelen visar vilket repo som valdes, storleken och en länk till det.
-   Blev det fel modell: klicka **Avbryt** och välj någon av de andra träffarna som visas.
+3. **Paste a URL or an `hf.co/owner/repo:QUANT` name.** A link to a `.gguf` file keeps its variant.
 
-Vill du hellre välja själv varje gång: stäng av automatiken med `OLLAMA_STUDIO_HF_AUTO=0`
-(eller kryssrutan i ⚙ Inställningar). Då visas träffarna men ingenting hämtas.
+Only GGUF repositories work. Gated repositories are marked ⚠ and never downloaded automatically. `HF_TOKEN` is used
+for search only. Set `OLLAMA_STUDIO_HF=0` to turn Hugging Face off.
 
-### 2. Sök och välj variant
+---
 
-Sök i fältet under **Upptäck / Installera**. Träffarna från Hugging Face visas i samma lista
-som Ollamas egna, märkta med **Hugging Face** och antal nedladdningar. Klicka **Varianter**
-för att se alla kvantiseringar med storlek, och installera den du vill ha:
+## 🎓 AI training (fine-tuning)
 
-| Kvantisering | Ungefärlig storlek (7–8B) | När |
-| --- | --- | --- |
-| `Q4_K_M` | ~4,5 GB | Standardvalet – bra kvalitet, liten. |
-| `Q5_K_M` | ~5,5 GB | Något bättre kvalitet om minnet räcker. |
-| `Q8_0` | ~8 GB | Nära originalkvalitet, dubbelt så stor. |
-| `IQ3_XXS` / `Q3_K_M` | ~3 GB | När modellen annars inte får plats. |
+Enable the tab with **⚙ Settings → AI training → Show in menu** (`OLLAMA_STUDIO_TRAIN_MENU=1`). Training is done by
+[Soup](https://github.com/MakazhanAlpamys/Soup):
 
-### 3. Skriv namnet direkt
-
-Du kan också klistra in en länk eller skriva Ollamas eget Hugging Face-namn – båda funkar:
-
+```bash
+pip install "soup-cli[train]"    # Python 3.10–3.12; pulls in PyTorch (several GB)
 ```
-https://huggingface.co/bartowski/Qwen3-8B-GGUF        →  hf.co/bartowski/Qwen3-8B-GGUF
-https://huggingface.co/…/blob/main/Qwen3-8B-Q5_K_M.gguf  →  hf.co/…:Q5_K_M   (varianten följer med)
-hf.co/bartowski/Qwen3-8B-GGUF:Q8_0                    →  används som det är
-```
 
-### Bra att veta
-
-- **Bara GGUF.** Ollama kan inte läsa vanliga PyTorch-/safetensors-repon. Sökningen filtrerar
-  därför på GGUF, och repon utan GGUF-filer hoppas över.
-- **Gated repon** (t.ex. Metas officiella Llama) kräver att du godkänner villkoren på
-  Hugging Face och att din Ollama-server är auktoriserad. De markeras med ⚠ och hämtas
-  aldrig automatiskt.
-- **`HF_TOKEN` är valfri** och används bara för *sökningen*. Själva nedladdningen sköter
-  Ollama, som inte tar emot någon token från Ollama Studio.
-- **Kräver internet på servern** (både sökningen och nedladdningen).
-- **Stäng av allt** med `OLLAMA_STUDIO_HF=0`, eller kryssrutan i ⚙ Inställningar. Då beter
-  sig appen exakt som förut: bara Ollamas bibliotek.
-
----
-
-## 🎓 AI-träning – finjustera en egen modell
-
-Fliken **AI-träning** låter dig ta en färdig modell och lära den *dina* exempel – en
-kundtjänstbot som kan era rutiner, en assistent som skriver i din ton, en modell som svarar
-i ett visst format. Allt sker i webbläsaren: du skriver exempel i en tabell, väljer modell och
-hårdvara med knappar, ser förloppet live och lägger in resultatet i Ollama med ett klick.
-
-Själva träningen görs av **[Soup](https://github.com/MakazhanAlpamys/Soup)** (`soup-cli`), ett
-fristående open source-verktyg som installeras separat på servern. Ollama Studio sköter
-formuläret, konfigurationen, förloppet och installationen i Ollama.
-
-### Kom igång
-
-1. **Slå på fliken** under ⚙ Inställningar → AI-träning (den är på som standard).
-2. **Installera Soup.** Fliken visar ett steg 0 med knappen **⬇ Installera Soup** när det
-   saknas – eller kör det själv på servern:
-
-   ```bash
-   pip install "soup-cli[train]"     # kräver Python 3.10–3.12
-   ```
-
-   Paketet drar in PyTorch och kringpaket (flera GB), så första installationen tar några minuter.
-3. **Öppna AI-träning** och följ de fyra stegen i vyn.
-
-### De fyra stegen
-
-| Steg | Vad du gör |
+| Step | What you do |
 | --- | --- |
-| **1. Träningsdata** | Skriv fråga/svar i tabellen, peka ut en `.jsonl`-fil i träningsmappen, eller klistra in JSONL. Knappen **✨ Skapa exempeldata** lägger in ett litet färdigt dataset så du kan prova hela flödet direkt. Appen visar antal rader, upptäckt format, uppskattat antal tokens och en förhandsvisning – och varnar för trasiga rader. |
-| **2. Modell &amp; metod** | Välj basmodell (öppna modeller utan godkännandekrav är omarkerade, gated är märkta ⚠), vad modellen ska lära sig (SFT / DPO / ORPO) och en **hårdvaruprofil**. Profilen sätter kvantisering, LoRA-storlek och kontextlängd åt dig – från "Bara CPU" till "24 GB+". Reglagen för epoker, kontextlängd, inlärningstakt och LoRA-storlek går att finjustera, och du kan när som helst fälla ut den `soup.yaml` som byggs. |
-| **3. Träna** | **▶ Starta träningen** kör `soup train` på servern. Du får progressbar med procent, steg, loss, epok, förbrukad tid och ETA, en **loss-kurva** som ritas medan det pågår, och hela loggen bakom en knapp. Körningen fortsätter även om du stänger fliken – förloppet finns kvar när du kommer tillbaka. **■ Avbryt** stoppar den. |
-| **4. Använd modellen** | **📦 Lägg in i Ollama** kör `soup export --format gguf --deploy ollama`. Modellen dyker upp under **Mina modeller** som `soup-<ditt-namn>` och kan chattas med direkt. |
+| **1. Data** | Write question and answer rows, point to a `.jsonl` file or paste JSONL. **✨ Create sample data** adds a demo set. The app validates the rows and estimates tokens. |
+| **2. Model & method** | Pick a base model, a method (SFT, DPO or ORPO) and a hardware profile from *CPU only* to *24 GB+*. You can fine-tune the sliders and inspect the generated `soup.yaml`. |
+| **3. Train** | Live progress, loss curve and ETA. Training survives closing the tab. **■ Cancel** stops it. |
+| **4. Use** | **📦 Add to Ollama** exports to GGUF and deploys the model as `soup-<name>`. |
 
-### Vad hamnar var?
-
-Allt ligger i träningsmappen (standard `~/ollama-studio-training`, byt med
-`OLLAMA_STUDIO_TRAIN_DIR`):
-
-```
-ollama-studio-training/
-├── soup.yaml            # konfigurationen som byggs av formuläret
-├── data/                # dina dataset (.jsonl) – lägg gärna egna filer här
-└── runs/<ditt-namn>/    # den tränade modellen (adapter, och GGUF efter export)
-```
-
-Du kan alltid köra samma sak från terminalen: `soup train --config soup.yaml`.
-
-### Dataformat
-
-Tabellen sparar formatet `alpaca`. Har du redan data känns dessa igen automatiskt:
-
-```json
-alpaca:   {"instruction": "Vad heter Sveriges huvudstad?", "input": "", "output": "Stockholm."}
-chatml:   {"messages": [{"role": "user", "content": "Hej"}, {"role": "assistant", "content": "Hej!"}]}
-sharegpt: {"conversations": [{"from": "human", "value": "Hej"}, {"from": "gpt", "value": "Hej!"}]}
-dpo:      {"prompt": "Förklara gravitation", "chosen": "Bra svar…", "rejected": "Vet inte"}
-```
-
-### Hur lång tid tar det?
-
-- 50–200 exempel + en 0.5–1.5B-modell på ett vanligt grafikkort: **några minuter**.
-- Samma data på en 7–8B-modell: **en halvtimme till några timmar**.
-- Bara CPU: **timmar** – välj minsta basmodellen och 1 epok.
-
-### Om något går fel
-
-- **Slut på GPU-minne** – välj en mindre basmodell, kortare kontextlängd eller profilen för
-  mindre GPU (4bit + lagerströmning, där basmodellen matas till GPU:n ett lager i taget).
-- **"Gated repo" / 401** – basmodellen kräver godkännande på Hugging Face. Godkänn där och
-  lägg in en HF-token i ⚙ Inställningar, eller välj en öppen modell.
-- **Soup saknas efter installation** – ligger `soup` i en egen venv? Peka ut den med
-  `OLLAMA_STUDIO_SOUP_BIN` eller fältet i ⚙ Inställningar.
-
-> **Säkerhet:** träning skriver till disk och startar processer på servern. Sätt
-> `OLLAMA_STUDIO_TOKEN` om servern nås av andra än du, eller stäng av fliken med
-> `OLLAMA_STUDIO_TRAIN=0`.
+Supported dataset formats are `alpaca`, `chatml`, `sharegpt` and `dpo`. Everything is stored in
+`~/ollama-studio-training` (`soup.yaml`, `data/`, `runs/<name>/`). If the GPU runs out of memory, choose a smaller
+model, a shorter context or a smaller-GPU profile.
 
 ---
 
-## Rekommenderade modeller
+## Recommended models
 
-Osäker på var du ska börja? (Storlekar är ungefärliga.)
-
-| Modell | Namn att skriva | Storlek | Bra för |
+| Model | Name | Size | Good for |
 | --- | --- | --- | --- |
-| Llama 3.2 1B | `llama3.2:1b` | ~1.3 GB | Svaga datorer, maxfart |
-| Llama 3.2 3B | `llama3.2` | ~2.0 GB | Allround, bra att börja med |
-| Qwen 2.5 7B | `qwen2.5` | ~4.7 GB | Bra på svenska/flerspråkigt |
-| Gemma 2 2B | `gemma2:2b` | ~1.6 GB | Liten och pigg (Google) |
-| Mistral 7B | `mistral` | ~4.1 GB | Populär allround |
-| DeepSeek-R1 7B | `deepseek-r1` | ~4.7 GB | Resonemang, matte, kod |
-| LLaVA 7B | `llava` | ~4.7 GB | Kan tolka bilder |
-| Code Llama 7B | `codellama` | ~3.8 GB | Programmering |
+| Llama 3.2 1B | `llama3.2:1b` | ~1.3 GB | Weak hardware, speed |
+| Llama 3.2 3B | `llama3.2` | ~2.0 GB | Good all-round starter |
+| Qwen 2.5 7B | `qwen2.5` | ~4.7 GB | Multilingual |
+| Qwen 2.5 Coder 7B | `qwen2.5-coder` | ~4.7 GB | Codex and the harness on a single GPU |
+| Gemma 2 2B | `gemma2:2b` | ~1.6 GB | Small and fast |
+| DeepSeek-R1 7B | `deepseek-r1` | ~4.7 GB | Reasoning, math, code |
+| LLaVA 7B | `llava` | ~4.7 GB | Images |
 
-> **Tumregel:** en modell behöver ungefär lika mycket ledigt RAM/VRAM som filstorleken.
-> Utan kraftigt grafikkort – börja med en 1–3B-modell.
+Rule of thumb: a model needs about its file size in free VRAM or RAM.
 
 ---
 
-## Felsökning
+## Troubleshooting
 
-| Problem | Lösning |
+| Problem | Fix |
 | --- | --- |
-| **Webb:** sidan laddas inte från andra datorn | Kontrollera att webbservern kör (`systemctl status ollama-studio-web`) och att brandväggen tillåter porten (`sudo ufw allow 8080/tcp`). Testa `curl http://localhost:8080/` på servern. |
-| **Webb:** "Ollama körs inte" i gränssnittet | Ollama svarar inte på servern. Kör `ollama serve` / `systemctl start ollama` och testa `curl http://localhost:11434/api/version`. |
-| **Webb:** frågar efter token hela tiden | Du har satt `OLLAMA_STUDIO_TOKEN`. Ange samma token som i tjänsten; fel token nollställs automatiskt. |
-| **Skrivbord:** `no display name and no $DISPLAY` | Du kör skrivbordsappen på en maskin utan grafik. Använd **webbversionen** i stället (se ovan). |
-| **Skrivbord:** `ModuleNotFoundError: No module named 'tkinter'` | Installera tkinter enligt [Steg 1](#steg-1--installera-python-och-tkinter). |
-| `./run.sh: Permission denied` | Gör skriptet körbart: `chmod +x run.sh`. |
-| Nedladdningen fastnar eller misslyckas | Kontrollera internet och att modellnamnet finns exakt på [ollama.com/library](https://ollama.com/library) (inkl. eventuell tagg efter `:`). |
-| En modell du hämtade i terminalen syns inte | Klicka **↻ Uppdatera**. |
+| Page doesn't load from another computer | Check `systemctl status ollama-studio-web` and the firewall (`sudo ufw allow 8080/tcp`), and test `curl http://localhost:8080/` on the server. |
+| "Ollama is not running" | Start it with `systemctl start ollama`, then check `curl http://localhost:11434/api/version`, or set `OLLAMA_URL` or `LLAMA_URL`. |
+| Token prompt keeps appearing | Enter the same token that is set in the service. |
+| Codex stops following instructions | Increase `OLLAMA_STUDIO_CODE_CTX`, or use a stronger coding model. |
+| Codex won't run commands | Set `OLLAMA_STUDIO_CODE_RUN=1` and check the allowlist and permission level. |
+| Harness finds nothing | Check the log for OmniRoute and local backend errors, install Bandit, Semgrep and Gitleaks, try the *Deep* profile. |
+| Harness LLM calls time out | Prompts are larger when skills are on. Use a faster hunter model or the *Quick* profile, or turn off SecuritySkills. |
+| Desktop: `no $DISPLAY` | You are on a headless machine. Use the web app. |
+| Desktop: no `tkinter` | Install it (see [Desktop app](#️-desktop-app)). |
+| Model pulled in a terminal is missing | Click **↻ Update**. |
 
 ---
 
-## 🛠️ Codex Skills – färdigheter & automatisering
+## Agent skills (`.agents/`)
 
-Projektet innehåller en uppsättning förkonfigurerade **Agent Skills** och regler under mappen [`.agents/`](.agents/) (samt speglade i `.codex/`). Dessa följer den öppna **Agent Skills-standarden** och är direkt kompatibla med Codex, Antigravity och moderna AI-kodassistenter.
+The repository contains a large library of [Agent Skills](https://agentskills.io) in `.agents/`. Codex and external agents such as Claude Code and Antigravity load them through
+[`AGENTS.md`](AGENTS.md) and [`CODEX.md`](CODEX.md):
+- specialised agents (`.agents/agents/`)
+- skills (`.agents/skills/`)
+- workflows (`.agents/workflows/`)
+- rules (`.agents/rules/`)
 
-Instruktioner och skill-index definieras i [`AGENTS.md`](AGENTS.md) och [`CODEX.md`](CODEX.md).
+A skill activates through a slash command (`/ponytail-audit`), trigger phrases ("run a security audit") or an
+explicit request. Some highlights:
 
-### Hur Codex hittar och laddar skills
-
-Codex läser automatiskt projektets [`AGENTS.md`](AGENTS.md) vid start. Varje skill har en `SKILL.md` med YAML-frontmatter och detaljerade instruktioner. Codex aktiverar relevant skill baserat på:
-1. **Slash-kommandon** (t.ex. `/ponytail-audit` eller `/ponytail-review`).
-2. **Nyckelord och triggers** (t.ex. *"kör en security audit"*, *"förenkla koden"*, *"visa ponytail debt"*).
-3. **Explicita uppmaningar** i din prompt.
-
----
-
-### Översikt över tillgängliga skills
-
-| Skill | Sökväg | Syfte / Beskrivning | Typiska triggers & kommandon |
-|---|---|---|---|
-| 🦹 **`ponytail`** | [`.agents/skills/ponytail/`](.agents/skills/ponytail/SKILL.md) | **Lazy Senior Dev Mode**: Tvingar fram den enklaste och mest minimalistiska lösningen. Följer YAGNI, standardbiblioteket före externa paket och minsta möjliga diff. | `/ponytail`, *"var lat"*, *"skriv minimalistisk kod"*, *"YAGNI"*, *"simplest solution"* |
-| 🔍 **`ponytail-audit`** | [`.agents/skills/ponytail-audit/`](.agents/skills/ponytail-audit/SKILL.md) | **Audit för överkonstruktion**: Skannar hela kodbasen och rangordnar vad som kan raderas, förenklas eller ersättas med inbyggda funktioner. | `/ponytail-audit`, *"audit this codebase"*, *"vad kan vi ta bort?"*, *"hitta onödig kod"* |
-| 📜 **`ponytail-debt`** | [`.agents/skills/ponytail-debt/SKILL.md`](.agents/skills/ponytail-debt/SKILL.md) | **Teknisk skuld & genvägsspårare**: Samlar ihop alla `ponytail:`-kommentarer och medvetna genvägar i en överskådlig ledger. | `/ponytail-debt`, *"vad har vi skjutit upp?"*, *"visa ponytail debt"*, *"ponytail ledger"* |
-| 📊 **`ponytail-gain`** | [`.agents/skills/ponytail-gain/`](.agents/skills/ponytail-gain/SKILL.md) | **Effektöversikt**: Visar en kompakt resultattavla över uppmätta besparingar i kodrader, minskat underhåll och ökad hastighet. | `/ponytail-gain`, *"visa ponytail gain"*, *"vad sparar ponytail?"* |
-| ❓ **`ponytail-help`** | [`.agents/skills/ponytail-help/`](.agents/skills/ponytail-help/SKILL.md) | **Lathund & referenskort**: Snabbguide över alla Ponytail-lägen, intensiteter och kommandon. | `/ponytail-help`, *"ponytail help"*, *"hur använder jag ponytail?"* |
-| ✂️ **`ponytail-review`** | [`.agents/skills/ponytail-review/`](.agents/skills/ponytail-review/SKILL.md) | **Förenklande kodgranskning**: Granskar en git diff eller specifik fil enbart med fokus på att hitta och stryka överflödig komplexitet. | `/ponytail-review`, *"granska för överkonstruktion"*, *"simplify review"*, *"vad kan tas bort här?"* |
-| 🛡️ **`security-audit`** | [`.agents/skills/security-audit/`](.agents/skills/security-audit/SKILL.md) | **Säkerhetsgranskning & sårbarhetsanalys**: Djupgående säkerhetsanalys, hotmodellering, källkodsgranskning och prioritering av åtgärder. | *"kör en security audit"*, *"hitta sårbarheter i API:et"*, *"pen-testa auth-flödet"* |
-
----
-
-### Detaljerade instruktioner & exempel
-
-#### 1. `ponytail` – Lazy Senior Dev Mode
-Använd denna när du vill implementera nya funktioner, buggfixar eller refaktoriseringar utan onödig "bloat", onödiga bibliotek eller överflödiga klasshierarkier.
-- **Intensitetsnivåer**:
-  - `lite`: Mjukare förenkling, fokuserar på att undvika onödiga paket.
-  - `full` (standard): Standardbiblioteket först, en rad istället för femtio, inga oombedda abstraktioner.
-  - `ultra`: Extrem minimalism.
-- **Exempel i Codex**:
-  > *"Skriv en funktion som hämtar GPU-statistik, men använd ponytail-läget så vi bara nyttjar standardbiblioteket."*
-
-#### 2. `ponytail-audit` – Hel-repo audit
-Skannar hela repot och genererar en rapport med konkreta förslag på kod, moduler eller beroenden som kan tas bort eller förenklas.
-- **Exempel i Codex**:
-  > *"/ponytail-audit"*
-  > *"Gör en audit på hela repot och lista allt vi kan rensa bort."*
-
-#### 3. `ponytail-review` – Kodgranskning mot komplexitet
-Till skillnad från vanliga kodgranskningar letar `ponytail-review` specifikt efter återuppfunna hjul, spekulativ generalisering och död flexibilitet.
-- **Exempel i Codex**:
-  > *"/ponytail-review på senaste commiten"*
-  > *"Granska ändringarna i `studio/web/routes_codex.py` och visa vad som kan förenklas."*
-
-#### 4. `ponytail-debt` – Spåra genvägar
-När Ponytail implementerar en medveten förenkling märks koden med kommentaren `# ponytail: <beskrivning och tak>`. Detta kommando sammanställer alla sådana kommentarer till en rapport.
-- **Exempel i Codex**:
-  > *"/ponytail-debt"*
-
-#### 5. `security-audit` – Säkerhetsgranskning
-Innehåller metodik för att identifiera sårbarheter, brister i autentisering/auktorisering, injektionsrisker och felaktig dataisolering.
-- **Två lägen**:
-  - **Guidance mode** (standard): Svarar på specifika säkerhetsfrågor, granskar enskilda funktioner eller triagerar misstänkta sårbarheter.
-  - **Full audit mode**: Körs vid uttrycklig begäran och går igenom alla sex faser (kartläggning, attack-klasser, verifiering, rapport).
-- **Exempel i Codex**:
-  > *"Gör en security-audit på hur tokens och sessioner hanteras i webbservern."*
-  > *"Kör en fullständig säkerhetsgranskning av API-endpoints."*
-
----
-
-### Projektregler (`.agents/rules/`)
-
-Codex följer dessutom automatiskt de fastställda reglerna i mappen [`.agents/rules/`](.agents/rules/):
-- [`ponytail.md`](.agents/rules/ponytail.md) – Grundläggande principer: YAGNI, standardbiblioteket först, inga onödiga abstraktioner.
-- [`compile.md`](.agents/rules/compile.md) – Instruktioner för Python-miljö, virtuella miljöer och testkörning.
-- [`accounts.md`](.agents/rules/accounts.md) – Regler kring miljövariabler, lokala konton och hemligheter.
-- [`github.md`](.agents/rules/github.md) – Riktlinjer för git-grenar, commits och pull requests.
-
----
-
-### Skapa egna skills
-
-För att lägga till en ny skill för Codex:
-1. Skapa en mapp: `.agents/skills/<min-nya-skill>/`
-2. Skapa en fil: `.agents/skills/<min-nya-skill>/SKILL.md`
-3. Lägg till YAML-frontmatter överst:
-   ```markdown
-   ---
-   name: min-nya-skill
-   description: Beskrivning av vad skillen gör och när den ska aktiveras.
-   ---
-   
-   # Instruktioner för skillen
-   ...
-   ```
-Codex kommer då automatiskt att upptäcka och kunna använda skillen direkt.
-
----
-
-## Så fungerar det (teknik)
-
-Båda varianterna pratar med Ollamas HTTP-API:
-
-| Funktion | Ollama-API |
+| Skill | Purpose |
 | --- | --- |
-| Statusindikator | `GET /api/version` |
-| Lista "Mina modeller" | `GET /api/tags` |
-| Aktiv modell ("körs nu") | `GET /api/ps` |
-| Installera / ladda ner | `POST /api/pull` (strömmar nedladdningsstatus) |
-| Modellsök | `GET https://ollama.com/search` + `GET https://huggingface.co/api/models` (utanför Ollamas API) |
-| AI-träning | `soup train` / `soup export --deploy ollama` som underprocess (utanför Ollama) |
-| Avinstallera | `DELETE /api/delete` |
-| Chatta (webbversionen) | `POST /api/chat` (strömmar svaret) |
+| `ponytail` | "Lazy senior dev" mode: simplest solution, standard library first, smallest diff. |
+| `ponytail-audit` / `ponytail-review` | Find over-engineering in the whole repository or in a diff. |
+| `ponytail-debt` / `ponytail-gain` | Track deliberate shortcuts and measure savings. |
+| `security-audit` | Guidance mode, or a full six-phase audit (recon, attack classes, verification, report). |
 
-Sökfältet frågar två källor parallellt: Ollamas biblioteksida (`ollama.com/search`, vars
-HTML tolkas – det finns inget publikt API) och Hugging Faces API. Går någon av dem inte att
-nå visas resten av träffarna ändå, med den inbyggda katalogen i `catalog.py` som botten.
+Project rules are in `.agents/rules/`. `ponytail.md` sets YAGNI and stdlib-first, `compile.md` covers the
+environment and tests, `accounts.md` covers secrets, and `github.md` covers branches and PRs.
 
-AI-träningen startar `soup` som en vanlig process på servern och läser dess utdata tecken
-för tecken (progressbarer skriver `\r` utan radbrytning). Raderna tolkas till procent, steg,
-loss och ETA, och webbläsaren hämtar dem med korta anrop till `/api/train/log` – så förloppet
-överlever att du stänger fliken. Modulen `soup_train.py` är valfri: saknas den döljs fliken.
-
-Hugging Face-stödet är ett lager ovanpå `POST /api/pull`: misslyckas en nedladdning med
-"modellen finns inte" söker servern på Hugging Faces öppna API, väljer repo och kvantisering
-och gör om anropet med namnet `hf.co/ägare/repo:kvantisering` – i **samma** ström, så
-webbläsaren ser en enda nedladdning som byter källa. Modulen `huggingface.py` är valfri:
-saknas den fungerar allt som förut, utan Hugging Face.
-
-System-/GPU-vyn läser CPU/RAM från `/proc` och GPU-info via `nvidia-smi` – inget av det går
-via Ollama. Kör du flera Ollama-instanser (en per GPU) slår webbappen ihop `/api/ps` från
-alla och märker varje aktiv modell med rätt GPU.
-
-- **Skrivbordsappen** (`ollama_studio.py`) använder `tkinter` för gränssnittet och `urllib`
-  för nätverk.
-- **Webbversionen** (`ollama_web.py`) är en liten webbserver byggd på `http.server` som
-  serverar ett HTML/JS-gränssnitt och proxar anropen vidare till Ollama.
-
-Allt bygger enbart på Pythons standardbibliotek – inga `pip install` behövs.
-
-| Fil | Beskrivning |
-| --- | --- |
-| `ollama_web.py` | Webbversionen (server + inbyggt webb-UI) |
-| `ollama_studio.py` | Skrivbordsappen (tkinter) |
-| `catalog.py` | Delad lista över populära modeller (används av båda) |
-| `huggingface.py` | Delad Hugging Face-hjälp: sök, GGUF-filer, kvantiseringsval |
-| `soup_train.py` | AI-träningen: bygger `soup.yaml`, granskar data, tolkar träningsloggen |
-| `ollama-studio-web.service` | systemd-tjänst för webbversionen |
-| `run.sh` / `run.bat` | Startskript för skrivbordsappen (Linux-mac / Windows) |
-| `install-linux.sh` / `icon.svg` | Menygenväg + ikon (skrivbordsappen på Linux) |
+To add a skill, create `.agents/skills/<name>/SKILL.md` with `name` and `description` frontmatter.
 
 ---
 
-## Licens
+## How it works
 
-MIT – se [LICENSE](LICENSE). Fritt att använda, ändra och dela vidare.
+The web app is a small `http.server` application. At startup it bakes the UI (`studio/web/assets/`) into one page,
+so the browser loads no external files except icon fonts. The server proxies calls to the model backends.
+
+| Feature | Backend API |
+| --- | --- |
+| Status / models / running model | `GET /api/version`, `/api/tags`, `/api/ps` |
+| Install / delete | `POST /api/pull` (streamed), `DELETE /api/delete` |
+| Chat | `POST /api/chat` (Ollama) or `/v1/chat/completions` (llama-server, OmniRoute) |
+| Model search | `ollama.com/search` (parsed HTML) + Hugging Face API, with `catalog.py` as fallback |
+| Unload / VRAM | `keep_alive: 0` on the instance that holds the model |
+| GPU telemetry | `nvidia-smi`, `/proc`, llama-server metrics |
+
+| Path | Purpose |
+| --- | --- |
+| `ollama_web.py` | Web app entry point |
+| `ollama_studio.py` | Desktop app (tkinter) |
+| `catalog.py`, `huggingface.py`, `soup_train.py` | Shared model catalog, Hugging Face helpers, training |
+| `studio/config.py` | Settings registry (env + SQLite) |
+| `studio/backends.py`, `runtime.py`, `sysinfo.py` | Backends, loaded models, system and GPU info |
+| `studio/llama_bridge.py`, `antigravity_bridge.py`, `huggingface_bridge.py` | Backend bridges |
+| `studio/websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `scheduler.py` | Chat services, training, updates, scheduled audits |
+| `studio/codex/` | Agent: workspace, permissions, protocol, commands, sandbox, network policy, git, GitHub, GitLab, router, fixer, testing, skills |
+| `studio/harness/` | Vulnerability Harness (`engine.py`), SecuritySkills integration (`skills.py`, `security_skills/`), CVSS v3.1, security overview, Ghidra worker |
+| `studio/mcp/` | MCP server |
+| `studio/web/` | Routing (`server.py`), `routes_*.py`, UI assets |
+| `*.service` | systemd units: web app, one Ollama instance per GPU, tuned instance |
+
+---
+
+## Development & tests
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+CI runs the same suite (`.github/workflows/ci.yml`). This repository also keeps a [graphify](CLAUDE.md) knowledge
+graph; run `graphify update .` after code changes.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+Third-party content: the SecuritySkills playbooks in `studio/harness/security_skills/` are © UnitOne.ai, MIT
+(see the [LICENSE](studio/harness/security_skills/LICENSE) file in that folder).
