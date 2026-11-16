@@ -345,6 +345,10 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             if path == "/api/antigravity/status":
                 from studio.antigravity_bridge import antigravity_status
                 return self._send_json(antigravity_status())
+            if path == "/api/harness/skills":
+                from studio.harness.skills import list_skills, UPSTREAM_REPO, UPSTREAM_COMMIT
+                return self._send_json({"ok": True, "skills": list_skills(),
+                                        "source": UPSTREAM_REPO, "commit": UPSTREAM_COMMIT})
             if path == "/api/harness/runs":
                 from studio.harness import list_harness_runs
                 return self._send_json({"ok": True, "runs": list_harness_runs()})
@@ -484,12 +488,18 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             create_issues = bool(data.get("create_issues", False))
             raw_target = data.get("target_dir")
             target_dir = str(raw_target).strip() if raw_target is not None and not isinstance(raw_target, bool) else ""
+            use_skills = data.get("use_skills", True)
+            use_skills = use_skills if isinstance(use_skills, bool) else str(use_skills).lower() not in ("0", "false", "no", "off")
+            raw_skills = data.get("skills") or []
+            extra_skills = [str(x).strip() for x in raw_skills if isinstance(x, str) and x.strip()] if isinstance(raw_skills, list) else []
             from studio.harness import start_vulnerability_harness
             run_id = start_vulnerability_harness(
                 project=proj or "local-workspace",
                 profile=profile,
                 target_dir=target_dir or None,
-                create_issues=create_issues
+                create_issues=create_issues,
+                use_skills=use_skills,
+                extra_skills=extra_skills
             )
             return self._send_json({"ok": True, "run_id": run_id})
 
