@@ -5580,14 +5580,15 @@ async function populateHarnessSkills() {
       byDomain[domain].forEach(s => {
         const opt = document.createElement('option');
         opt.value = s.name;
-        opt.textContent = `${s.name} — ${(s.frameworks || []).join(', ')}`;
+        opt.textContent = `${s.source === 'acs' ? '◆ ' : ''}${s.name} — ${(s.frameworks || []).join(', ')}`;
         opt.title = s.description || '';
         grp.appendChild(opt);
       });
       sel.appendChild(grp);
     });
     const src = document.getElementById('harnessSkillsSource');
-    if (src) src.textContent = `UnitOneAI/SecuritySkills · ${skills.length} skills · MIT`;
+    const nAcs = skills.filter(s => s.source === 'acs').length;
+    if (src) src.textContent = `UnitOneAI/SecuritySkills (${skills.length - nAcs}, MIT) + ◆ Anthropic-Cybersecurity-Skills (${nAcs}, Apache-2.0)`;
     _harnessSkillsLoaded = true;
   } catch(e) {}
 }

@@ -12,7 +12,8 @@ class TestSecuritySkillsCatalog(unittest.TestCase):
 
     def test_catalog_loads_all_vendored_skills(self):
         cat = S.load_catalog()
-        self.assertEqual(len(cat), 45)
+        self.assertEqual(len(cat), 67)
+        self.assertEqual(sum(1 for v in cat.values() if v["source"] == "acs"), 22)
         scr = cat["secure-code-review"]
         self.assertEqual(scr["domain"], "appsec")
         self.assertIn("OWASP-ASVS", scr["frameworks"])
@@ -27,12 +28,87 @@ class TestSecuritySkillsCatalog(unittest.TestCase):
         self.assertEqual(fm["frameworks"], ["A", "B"])
         self.assertIn("# body", body)
 
+    def test_minimal_parser_block_lists(self):
+        text = "---\nname: y\ntags:\n- a\n- 'b'\nmitre_attack:\n  - T1190\nversion: '1.0'\n---\nx\n"
+        with patch.dict("sys.modules", {"yaml": None}):
+            fm, _ = S._parse_frontmatter(text)
+        self.assertEqual(fm["tags"], ["a", "b"])
+        self.assertEqual(fm["mitre_attack"], ["T1190"])
+        self.assertEqual(fm["version"], "1.0")
+
     def test_list_skills_marks_code_audit_domains(self):
         items = S.list_skills()
-        self.assertEqual(len(items), 45)
+        self.assertEqual(len(items), 67)
         by = {i["name"]: i for i in items}
         self.assertTrue(by["api-security"]["code_audit"])
         self.assertFalse(by["ir-playbook"]["code_audit"])
+
+
+class TestSpecialistSkills(unittest.TestCase):
+
+    def test_acs_skills_have_frameworks_and_domain(self):
+        cat = S.load_catalog()
+        for name, sk in cat.items():
+            if sk["source"] != "acs":
+                continue
+            self.assertTrue(sk["frameworks"], name)
+            self.assertIn(sk["domain"], S.CODE_AUDIT_DOMAINS, name)
+            self.assertTrue(sk["sections"], name)
+
+    def test_no_scripts_vendored(self):
+        for root, _dirs, files in os.walk(S.ACS_ROOT):
+            for f in files:
+                self.assertTrue(f.endswith(".md") or f == "LICENSE", os.path.join(root, f))
+
+    def test_every_trigger_points_at_a_vendored_skill(self):
+        cat = S.load_catalog()
+        for name, _regexes, _exts in S.SPECIALIST_TRIGGERS:
+            self.assertIn(name, cat)
+            self.assertEqual(cat[name]["source"], "acs")
+
+    def test_specialists_triggered_by_code_signals(self):
+        pick = lambda p, c, n=3: S.select_skills_for_unit({"path": p, "attack_class": "x"}, c, max_skills=n)
+        self.assertIn("exploiting-prototype-pollution-in-javascript", pick("a.js", "_.merge({}, req.body)"))
+        self.assertNotIn("exploiting-prototype-pollution-in-javascript", pick("a.py", "_.merge({}, x)"))
+        self.assertIn("exploiting-type-juggling-vulnerabilities", pick("a.php", "if ($h == '0e1') {}"))
+        self.assertIn("testing-jwt-token-security", pick("a.py", "import jwt\njwt.decode(t, verify=False)"))
+        self.assertIn("auditing-mcp-servers-for-tool-poisoning", pick("srv.py", "@mcp.tool()\ndef f(): pass"))
+        self.assertIn("testing-for-open-redirect-vulnerabilities",
+                      pick("v.py", "return redirect(request.args.get('next'))"))
+        # Båda villkoren krävs för open redirect.
+        self.assertNotIn("testing-for-open-redirect-vulnerabilities", pick("v.py", "return redirect('/home')"))
+
+    def test_new_file_kinds(self):
+        pick = lambda p: S.select_skills_for_unit({"path": p, "attack_class": "x"})
+        self.assertEqual(pick("contracts/Token.sol")[0], "auditing-foundry-smart-contract-security")
+        self.assertEqual(pick("app/src/main/AndroidManifest.xml")[0], "performing-android-app-static-analysis-with-mobsf")
+        self.assertEqual(pick("ios/App/Info.plist")[0], "performing-ios-app-security-assessment")
+        self.assertEqual(pick("serverless.yml")[0], "performing-serverless-function-security-review")
+
+    def test_specialist_comes_right_after_primary_skill(self):
+        names = S.select_skills_for_unit(
+            {"path": "api/routes.py", "attack_class": "Injection & Input Validation"},
+            "@app.get('/x')\nimport jwt", max_skills=2)
+        self.assertEqual(names, ["secure-code-review", "testing-jwt-token-security"])
+
+    def test_acs_digest_drops_tooling_sections(self):
+        d = S.skill_digest("testing-jwt-token-security", ["token"], budget=5000)
+        self.assertIn("SKILL: testing-jwt-token-security", d)
+        self.assertNotIn("#### Prerequisites", d)
+        self.assertNotIn("#### Tools & Systems", d)
+        self.assertLess(len(d), 5600)
+
+    def test_acs_envelope_validates(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        cand = TestNormalizedExport()._cand(skills_applied=["testing-jwt-token-security"], cwe="CWE-347",
+                                            framework_refs=[])
+        envs = S.build_normalized_envelopes("vh-acs", "p", [cand])
+        env = envs["testing-jwt-token-security"]
+        jsonschema.validate(env, S.finding_schema())
+        self.assertIn("MITRE-ATT&CK", env["skill"]["frameworks"])
 
 
 class TestSkillSelection(unittest.TestCase):
@@ -142,8 +218,12 @@ class TestEngineIntegration(unittest.TestCase):
 
     def test_ledger_covers_infra_files(self):
         runner = VulnerabilityHarnessRunner(run_id="t-ledger", project="p")
-        units = runner._build_coverage_ledger(["Dockerfile", ".github/workflows/ci.yml", "requirements.txt"])
+        units = runner._build_coverage_ledger(["Dockerfile", ".github/workflows/ci.yml", "requirements.txt",
+                                               "contracts/Vault.sol", "AndroidManifest.xml", "serverless.yml"])
         classes = [u["attack_class"] for u in units]
+        self.assertIn("Smart Contract Security", classes)
+        self.assertIn("Mobile App Security", classes)
+        self.assertIn("Serverless Function Security", classes)
         self.assertIn("Container & Orchestration Hardening", classes)
         self.assertIn("CI/CD Pipeline & Supply Chain", classes)
         self.assertIn("Dependency & Supply-Chain Risk", classes)

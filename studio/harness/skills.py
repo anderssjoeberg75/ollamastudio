@@ -1,7 +1,15 @@
 """SecuritySkills-integration för Vulnerability Harness.
 
-Vendrade skills från https://github.com/UnitOneAI/SecuritySkills (MIT, se
-security_skills/LICENSE). Modulen:
+Två vendrade skill-paket:
+- security_skills/      https://github.com/UnitOneAI/SecuritySkills (MIT) — 45 breda,
+                        ramverksförankrade granskningsplaybooks (ASVS, API/LLM Top 10, CIS …).
+- security_skills_acs/  https://github.com/mukul975/Anthropic-Cybersecurity-Skills (Apache-2.0)
+                        — 22 specialist-skills för sårbarhetsklasser som det första paketet
+                        saknar (prototype pollution, JWT, OAuth, request smuggling, MCP tool
+                        poisoning, mobil, smart contracts …). Dubbletter av befintliga skills
+                        valdes bort; se security_skills_acs/README.md.
+
+Modulen:
 
 1. Läser in alla SKILL.md (frontmatter + sektioner) till en katalog.
 2. Väljer vilka skills som gäller för en coverage-enhet (fil + attackklass +
@@ -23,16 +31,40 @@ SKILLS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "security
 UPSTREAM_REPO = "https://github.com/UnitOneAI/SecuritySkills"
 UPSTREAM_COMMIT = "70bc259bb01abb3015ad2ad859ad5253cbf0bcab"
 
+ACS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "security_skills_acs")
+ACS_REPO = "https://github.com/mukul975/Anthropic-Cybersecurity-Skills"
+ACS_COMMIT = "54a798831d2266a3ca61ce68a7acb80b81160d57"
+
+SOURCES = [
+    {"id": "unitone", "name": "UnitOneAI/SecuritySkills", "repo": UPSTREAM_REPO,
+     "commit": UPSTREAM_COMMIT, "license": "MIT"},
+    {"id": "acs", "name": "mukul975/Anthropic-Cybersecurity-Skills", "repo": ACS_REPO,
+     "commit": ACS_COMMIT, "license": "Apache-2.0"},
+]
+
+# ACS-underdomän -> harnessens domän.
+_ACS_DOMAINS = {
+    "web-application-security": "appsec",
+    "api-security": "appsec",
+    "ai-security": "ai-security",
+    "cloud-security": "cloud",
+    "cryptography": "cryptography",
+    "mobile-security": "mobile",
+    "blockchain-security": "blockchain",
+}
+
 # Domäner som är relevanta för kodgranskning; övriga (IR, SecOps, compliance …)
 # används bara om användaren uttryckligen väljer dem.
-CODE_AUDIT_DOMAINS = {"appsec", "ai-security", "devsecops", "cloud", "vuln-management", "identity"}
+CODE_AUDIT_DOMAINS = {"appsec", "ai-security", "devsecops", "cloud", "vuln-management", "identity",
+                      "cryptography", "mobile", "blockchain"}
 
 # Sektioner som aldrig hjälper en hunter-modell att hitta buggar.
 _SKIP_SECTION_RE = re.compile(
     r"(output format|report|references?$|changelog|limitations|when to use|"
     r"context the agent needs|^context$|prerequisites|overview|executive summary|"
     r"summary table|recommendations|scan schedul|environment$|^summary$|"
-    r"prompt injection safety notice|common pitfalls)",
+    r"prompt injection safety notice|common pitfalls|tools (&|and) (systems|resources)|"
+    r"expected output|disclaimer|legal notice|^finding:|finding$)",
     re.IGNORECASE,
 )
 
@@ -62,6 +94,10 @@ def _parse_frontmatter(text):
         pass
     data, key, folded = {}, None, []
     for line in raw.splitlines():
+        item = re.match(r"^\s*-\s+(.*)$", line)
+        if item and key and isinstance(data.get(key), list):
+            data[key].append(item.group(1).strip().strip("'\""))
+            continue
         if folded is not None and key and line.startswith("  "):
             folded.append(line.strip())
             data[key] = " ".join(folded)
@@ -71,7 +107,9 @@ def _parse_frontmatter(text):
             continue
         key, val = mm.group(1), mm.group(2).strip()
         folded = None
-        if val in (">", "|", ">-", "|-"):
+        if val == "":
+            data[key] = []          # blocklista ("- a" på följande rader) eller tomt värde
+        elif val in (">", "|", ">-", "|-", ">+", "|+"):
             folded = []
             data[key] = ""
         elif val.startswith("[") and val.endswith("]"):
@@ -105,22 +143,52 @@ def _split_sections(body):
     return out
 
 
-def _load_skill(path, domain):
+def _derive_frameworks(fm):
+    """ACS-skills saknar 'frameworks'; härled från deras mappningsfält."""
+    fws = [str(f) for f in (fm.get("frameworks") or [])]
+    for key, label in (("mitre_attack", "MITRE-ATT&CK"), ("atlas_techniques", "MITRE-ATLAS"),
+                       ("nist_csf", "NIST-CSF-2.0"), ("nist_ai_rmf", "NIST-AI-RMF-1.0"),
+                       ("swc_registry", "SWC-Registry")):
+        if fm.get(key) and label not in fws:
+            fws.append(label)
+    if any("owasp" in str(t).lower() for t in (fm.get("tags") or [])) and "OWASP" not in fws:
+        fws.append("OWASP")
+    return fws
+
+
+def _load_skill(path, domain, root=SKILLS_ROOT, source="unitone"):
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     fm, body = _parse_frontmatter(text)
     name = str(fm.get("name") or os.path.basename(os.path.dirname(path)))
     desc = re.sub(r"\s+", " ", str(fm.get("description") or "")).strip()
+    sections = _split_sections(body)
+    # Referensfiler (checklistor, standarder) blir extra sektioner; verktygs-API:er hoppas över.
+    ref_dir = os.path.join(os.path.dirname(path), "references")
+    if os.path.isdir(ref_dir):
+        for ref in sorted(os.listdir(ref_dir)):
+            if not ref.endswith(".md") or ref.startswith("api-reference"):
+                continue
+            with open(os.path.join(ref_dir, ref), "r", encoding="utf-8", errors="replace") as fh:
+                for sec in _split_sections(fh.read()):
+                    if sec["heading"]:
+                        sec["heading"] = f"{sec['heading']} (ref: {ref[:-3]})"
+                        sections.append(sec)
+    controls = []
+    for key in ("mitre_attack", "atlas_techniques", "swc_registry"):
+        controls.extend(str(c) for c in (fm.get(key) or []))
     return {
         "name": name,
         "domain": domain,
+        "source": source,
         "description": desc,
         "version": str(fm.get("version") or "1.0.0"),
-        "frameworks": [str(f) for f in (fm.get("frameworks") or [])],
+        "frameworks": _derive_frameworks(fm),
+        "control_ids": controls,
         "tags": [str(t) for t in (fm.get("tags") or [])],
         "injection_hardened": bool(fm.get("injection-hardened", False)),
-        "path": os.path.relpath(path, SKILLS_ROOT).replace("\\", "/"),
-        "sections": _split_sections(body),
+        "path": os.path.relpath(path, root).replace("\\", "/"),
+        "sections": sections,
         "size": len(text),
     }
 
@@ -146,6 +214,21 @@ def load_catalog(force=False):
                             cat[s["name"]] = s
                         except Exception:
                             continue
+        acs_base = os.path.join(ACS_ROOT, "skills")
+        if os.path.isdir(acs_base):
+            for sk in sorted(os.listdir(acs_base)):
+                p = os.path.join(acs_base, sk, "SKILL.md")
+                if not os.path.isfile(p):
+                    continue
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                        fm, _ = _parse_frontmatter(fh.read())
+                    domain = _ACS_DOMAINS.get(str(fm.get("subdomain") or ""), "appsec")
+                    s = _load_skill(p, domain, root=os.path.dirname(ACS_ROOT), source="acs")
+                    if s["name"] not in cat:      # första paketet vinner vid namnkrock
+                        cat[s["name"]] = s
+                except Exception:
+                    continue
         _catalog = cat
         return cat
 
@@ -160,6 +243,7 @@ def list_skills():
             "description": s["description"],
             "frameworks": s["frameworks"],
             "version": s["version"],
+            "source": s.get("source", "unitone"),
             "code_audit": s["domain"] in CODE_AUDIT_DOMAINS,
         })
     out.sort(key=lambda x: (not x["code_audit"], x["domain"], x["name"]))
@@ -191,6 +275,83 @@ _DEP_FILES = {
 }
 
 
+# Specialist-skills (ACS-paketet) aktiveras av konkreta kodsignaler. Ordningen är
+# prioritet: tidigare poster tar plats före senare när budgeten är snål.
+# (skill, [regex som alla måste matcha], tillåtna filändelser eller None)
+_I = re.IGNORECASE
+SPECIALIST_TRIGGERS = [
+    ("auditing-mcp-servers-for-tool-poisoning",
+     [re.compile(r"(FastMCP|@mcp\.tool|mcp\.server|modelcontextprotocol|tools/list|tools/call|MCP_TOOLS)", _I)], None),
+    ("testing-jwt-token-security",
+     [re.compile(r"(\bjwt\b|jsonwebtoken|\bjose\b|\bJWS\b|\bHS256\b|\bRS256\b)", _I)], None),
+    ("testing-oauth2-implementation-flaws",
+     [re.compile(r"(redirect_uri|code_verifier|code_challenge|authorization_code|\boauth2?\b|client_secret)", _I)], None),
+    ("exploiting-prototype-pollution-in-javascript",
+     [re.compile(r"(__proto__|constructor\.prototype|Object\.assign\(|\b(_|lodash)\.(merge|defaultsDeep|set|setWith)\(|"
+                 r"deepmerge|\bmerge\(|extend\(\s*true)")],
+     (".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx")),
+    ("exploiting-type-juggling-vulnerabilities",
+     [re.compile(r"[^=!<>]==[^=]|in_array\(|strcmp\(|\bswitch\s*\(")], (".php",)),
+    ("exploiting-race-condition-vulnerabilities",
+     [re.compile(r"\b(balance|withdraw\w*|redeem\w*|coupon|voucher|inventory|stock_?count|quota|credits?|wallet|"
+                 r"refund\w*|one[-_ ]?time|single[-_ ]use)\b", _I)], None),
+    ("testing-for-open-redirect-vulnerabilities",
+     [re.compile(r"(redirect\(|sendRedirect|HttpResponseRedirect|header\(\s*['\"]Location|['\"]Location['\"])", _I),
+      re.compile(r"\b(next|return_?(url|to)|redirect_?(url|uri|to)|continue|dest(ination)?|goto|callback)\b", _I)], None),
+    ("testing-for-host-header-injection",
+     [re.compile(r"(HTTP_HOST|X-Forwarded-Host|request\.host\b|req\.hostname|headers\.host|get_host\(|"
+                 r"headers\.get\(\s*['\"]host|getServerName|build_absolute_uri|url_root|host_url)", _I)], None),
+    ("exploiting-http-request-smuggling",
+     [re.compile(r"(Transfer-Encoding|ReverseProxy|proxy_pass|ProxyPass|http-proxy|BaseHTTPRequestHandler|rfile\.read)", _I)],
+     None),
+    ("testing-websocket-api-security",
+     [re.compile(r"(WebSocket|\bwebsockets\b|socket\.io|\bwss?://|SocketIO|AsyncWebsocketConsumer)", _I)], None),
+    ("performing-soap-web-service-security-testing",
+     [re.compile(r"(\bwsdl\b|SOAPAction|soap:Envelope|\bzeep\b|\bsuds\b|JAX-WS|@WebService|\bspyne\b)", _I)], None),
+    ("performing-serverless-function-security-review",
+     [re.compile(r"(lambda_handler|def handler\(\s*event|exports\.handler|functions_framework|"
+                 r"@app\.function_name|AWS::Serverless|aws_lambda_function)", _I)], None),
+    ("testing-android-intents-for-vulnerabilities",
+     [re.compile(r"(import android\.|android\.content\.Intent|getIntent\(|<activity|android:exported)")], None),
+    ("exploiting-deeplink-vulnerabilities",
+     [re.compile(r"(intent-filter|android:scheme|CFBundleURLSchemes|applinks:|onOpenURL|open url:|"
+                 r"handleDeepLink|deep_?link)", _I)], None),
+    ("exploiting-insecure-data-storage-in-mobile",
+     [re.compile(r"(SharedPreferences|openFileOutput|getExternalStorage|MODE_WORLD_|UserDefaults|"
+                 r"kSecAttrAccessibleAlways|NSFileProtectionNone)")], None),
+    ("performing-ios-app-security-assessment",
+     [re.compile(r"(import UIKit|import SwiftUI|NSAppTransportSecurity|SecItemAdd|WKWebView)")], None),
+    ("auditing-foundry-smart-contract-security",
+     [re.compile(r"pragma solidity")], None),
+    ("performing-cryptographic-audit-of-application",
+     [re.compile(r"(hashlib\.(md5|sha1)|from Crypto\b|cryptography\.hazmat|crypto\.create(Cipher|Hash|Hmac|Sign)|"
+                 r"javax\.crypto|MessageDigest|Cipher\.getInstance|\bECB\b|\bDES\b|Math\.random|"
+                 r"random\.(random|randint|choice)\(|pbkdf2|bcrypt|scrypt|argon2|AES)")], None),
+    ("performing-web-cache-poisoning-attack",
+     [re.compile(r"(Cache-Control|\bVary\b|X-Cache|s-maxage|cache_page|proxy_cache|varnish|cloudfront|fastly)", _I)],
+     None),
+    ("performing-http-parameter-pollution-attack",
+     [re.compile(r"(getlist\(|getAll\(|parse_qsl?\(|getParameterValues|\$_GET\[|URLSearchParams)")], None),
+    ("migrating-to-post-quantum-cryptography",
+     [re.compile(r"(rsa\.generate|RSA\.generate|generate_private_key|ec\.generate|\bECDSA\b|\bECDH\b|"
+                 r"DiffieHellman|KeyPairGenerator|secp256)")], None),
+]
+
+
+def specialist_skills(path, content):
+    """Returnerar specialist-skills som kodens innehåll motiverar, i prioritetsordning."""
+    if not content:
+        return []
+    ext = os.path.splitext(path.lower())[1]
+    out = []
+    for name, regexes, exts in SPECIALIST_TRIGGERS:
+        if exts and ext not in exts:
+            continue
+        if all(r.search(content) for r in regexes):
+            out.append(name)
+    return out
+
+
 def classify_path(path):
     """Grov filtyp-klassificering som styr vilka skills som är relevanta."""
     low = path.lower().replace("\\", "/")
@@ -208,6 +369,12 @@ def classify_path(path):
         return "dependency"
     if base.endswith((".service", ".env")) or base == ".env":
         return "config"
+    if base in ("androidmanifest.xml", "info.plist") or base.endswith((".swift", ".m", ".mm")):
+        return "mobile"
+    if base.endswith(".sol"):
+        return "smart_contract"
+    if base in ("serverless.yml", "serverless.yaml"):
+        return "serverless"
     return "code"
 
 
@@ -235,6 +402,21 @@ def select_skills_for_unit(unit, content="", extra_skills=None, max_skills=3):
     elif kind == "dependency":
         add("dependency-scanning")
         add("model-supply-chain" if _AI_CONTENT_RE.search(content or "") else "sbom-analysis")
+    elif kind == "mobile":
+        base = os.path.basename(path.lower())
+        if base == "androidmanifest.xml":
+            add("performing-android-app-static-analysis-with-mobsf")
+            add("testing-android-intents-for-vulnerabilities")
+        else:
+            add("performing-ios-app-security-assessment")
+        add("exploiting-deeplink-vulnerabilities")
+        add("exploiting-insecure-data-storage-in-mobile")
+    elif kind == "smart_contract":
+        add("auditing-foundry-smart-contract-security")
+    elif kind == "serverless":
+        add("performing-serverless-function-security-review")
+        add("iac-security")
+        add("secrets-management")
     else:
         is_ai = bool(_AI_CONTENT_RE.search(content or "")) or any(
             k in path.lower() for k in ("llm", "prompt", "agent", "chat", "ollama", "openai", "mcp", "rag"))
@@ -271,6 +453,15 @@ def select_skills_for_unit(unit, content="", extra_skills=None, max_skills=3):
         if _SECRET_CONTENT_RE.search(content or ""):
             add("secrets-management")
 
+    # Specialist-skills bygger på konkreta kodsignaler och får platserna närmast efter
+    # den primära breda skillen; övriga breda skills fyller på därefter.
+    if kind == "code":
+        specials = [n for n in specialist_skills(path, content) if n in cat and n not in picks]
+        if re.search(r"(import android\.|android\.app\.)", content or "") and \
+                "performing-android-app-static-analysis-with-mobsf" in cat:
+            specials.insert(0, "performing-android-app-static-analysis-with-mobsf")
+        n_special = max(1, max_skills - 1)
+        picks = picks[:1] + specials[:n_special] + picks[1:] + specials[n_special:]
     selected = picks[:max_skills]
     for name in extra_skills or []:
         if name in cat and name not in selected:
@@ -349,8 +540,12 @@ def skill_digest(name, keywords=None, budget=3000, target=""):
             score += 2.0
         if "controls to verify" in hl or "|" in txt[:400]:
             score += 1.5
-        if "vulnerable pattern" in hl:
-            score += 1.0
+        if "vulnerable pattern" in hl or "key concepts" in hl or "vulnerability-checklist" in hl:
+            score += 1.5
+        if "common scenarios" in hl or "validation criteria" in hl:
+            score += 0.75
+        if "automated tool" in hl or "with burp" in hl:
+            score -= 0.75
         if "findings classification" in hl or "severity" in hl:
             score += 0.5
         candidates.append((score, idx, h, _compact(txt.replace("$ARGUMENTS", target or "the file under review"))))

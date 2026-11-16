@@ -8,7 +8,8 @@ Implementerar en rigorös 6-fasig sårbarhetsgranskning enligt Cloudflares arkit
 5. VVS: Adversarial Validation (Oberoende modell motbevisar/verifierar fynden)
 6. Target-Neutral Reporting & Issue Creation (Genererar REPORT.md, findings.json samt GitHub Issues)
 
-SecuritySkills-integration (UnitOneAI, MIT — se skills.py):
+SecuritySkills-integration (UnitOneAI SecuritySkills, MIT + 22 specialist-skills från
+mukul975/Anthropic-Cybersecurity-Skills, Apache-2.0 — se skills.py):
 - Varje coverage-enhet får 1–4 framework-förankrade skill-playbooks (OWASP ASVS, API Top 10,
   LLM Top 10, CIS Docker/K8s, SLSA …) injicerade i VDH-prompten inom en profilbaserad budget.
 - VVS använder scanner-tuning-skillens falsklarmsklassning.
@@ -237,9 +238,11 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self._log(f"Audit target directory: {target_path}")
             if self.use_skills:
                 from .skills import load_catalog
-                n_skills = len(load_catalog())
+                cat = load_catalog()
+                n_acs = sum(1 for v in cat.values() if v.get("source") == "acs")
                 extra = f" (+ forced: {', '.join(self.extra_skills)})" if self.extra_skills else ""
-                self._log(f"SecuritySkills enabled: {n_skills} framework-grounded playbooks loaded{extra}.")
+                self._log(f"SecuritySkills enabled: {len(cat) - n_acs} framework playbooks + "
+                          f"{n_acs} specialist skills loaded{extra}.")
 
             # ========================================================
             # PHASE 1: Reconnaissance & Multi-Scanner Seeding (Bandit, Gitleaks, Semgrep)
@@ -315,8 +318,10 @@ class VulnerabilityHarnessRunner(threading.Thread):
         exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java", ".php", ".rb", ".cs", ".c", ".cpp", ".html", ".sh", ".json", ".sql"}
         if self.use_skills:
             # Infrastruktur-, pipeline- och beroendefiler täcks av SecuritySkills (container/IaC/CI/SCA).
-            exts |= {".yml", ".yaml", ".tf", ".toml", ".bicep", ".service"}
-        named = {"dockerfile", "jenkinsfile", "requirements.txt", "gemfile", "pipfile", "go.mod", "cargo.toml"}
+            exts |= {".yml", ".yaml", ".tf", ".toml", ".bicep", ".service",
+                     ".kt", ".kts", ".swift", ".m", ".mm", ".sol"}
+        named = {"dockerfile", "jenkinsfile", "requirements.txt", "gemfile", "pipfile", "go.mod", "cargo.toml",
+                 "androidmanifest.xml", "info.plist"}
         ignore_dirs = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", "dist", "build", ".idea", ".vscode"}
         allowed_hidden = {".github", ".gitlab"} if self.use_skills else set()
         collected = []
@@ -453,6 +458,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
             "pipeline": ("CI/CD Pipeline & Supply Chain", "high"),
             "iac": ("Infrastructure-as-Code Misconfiguration", "medium"),
             "dependency": ("Dependency & Supply-Chain Risk", "medium"),
+            "mobile": ("Mobile App Security", "high"),
+            "smart_contract": ("Smart Contract Security", "critical"),
+            "serverless": ("Serverless Function Security", "high"),
         }.get(kind)
 
     def _execute_vdh_hunting(self, root_dir, units, scanner_seeds=None):
