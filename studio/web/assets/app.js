@@ -5640,6 +5640,12 @@ function renderHarnessSkillsUsed(run) {
   const names = Object.keys(used).sort((a, b) => used[b] - used[a]);
   if (!names.length) { wrap.style.display = 'none'; el.innerHTML = ''; return; }
   wrap.style.display = 'block';
+  const cov = document.getElementById('harnessSkillsCoverage');
+  const avail = run && run.report && run.report.skills_available;
+  if (cov) {
+    const unmatched = (run.report.skills_unmatched || []).length;
+    cov.textContent = avail ? `— ${names.length} of ${avail} applied` + (run.report.skills_mode === 'all' && unmatched && run.status !== 'running' ? ` · ${unmatched} had no matching code` : '') : '';
+  }
   el.innerHTML = names.map(n => `<span class="tele-pill" title="${esc(n)} applied to ${used[n]} coverage unit(s)">${esc(n)} &middot; ${used[n]}</span>`).join('');
 }
 
