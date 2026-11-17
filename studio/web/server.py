@@ -365,8 +365,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 from studio.antigravity_bridge import antigravity_status
                 return self._send_json(antigravity_status())
             if path == "/api/harness/skills":
-                from studio.harness.skills import list_skills, UPSTREAM_REPO, UPSTREAM_COMMIT
-                return self._send_json({"ok": True, "skills": list_skills(),
+                from studio.harness.skills import list_skills, SOURCES, UPSTREAM_REPO, UPSTREAM_COMMIT
+                return self._send_json({"ok": True, "skills": list_skills(), "sources": SOURCES,
                                         "source": UPSTREAM_REPO, "commit": UPSTREAM_COMMIT})
             if path == "/api/harness/runs":
                 from studio.harness import list_harness_runs

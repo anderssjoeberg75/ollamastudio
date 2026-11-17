@@ -90,7 +90,8 @@ harness.
   6. Reports and issues
 
   Findings are scored with CVSS v3.1. The harness is grounded in 45 framework-based
-  [SecuritySkills](https://github.com/UnitOneAI/SecuritySkills) playbooks.
+  [SecuritySkills](https://github.com/UnitOneAI/SecuritySkills) playbooks, plus 22 specialist skills from
+  [Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills).
 - **Scheduled audits**: recurring security and simplification reviews of GitHub or GitLab repositories. Each
   finding is filed as an issue.
 - **MCP server**: lets Claude Code, Cursor, Windsurf, Gemini CLI or other agents control Ollama Studio over
@@ -442,6 +443,9 @@ CWE Top 25, CIS Docker and Kubernetes, SLSA, NIST and more.
   | CI workflows | `pipeline-security` |
   | Terraform | `iac-security` |
   | Manifests | `dependency-scanning` |
+  | Android (`AndroidManifest.xml`, Kotlin/Java) and iOS (`Info.plist`, Swift/ObjC) | mobile specialist skills |
+  | Solidity (`.sol`) | `auditing-foundry-smart-contract-security` |
+  | `serverless.yml`, Lambda handlers | `performing-serverless-function-security-review` |
 
 - **Budgeted digests**: control tables, checklists and vulnerable patterns are kept; report templates and
   reference lists are dropped. The budget is about 2.5k, 5k or 9k characters per unit (Quick, Standard, Deep), so
@@ -451,7 +455,40 @@ CWE Top 25, CIS Docker and Kubernetes, SLSA, NIST and more.
 - **Normalized export**: `.vulnerability-harness/securityskills/<skill>.json` validates against the upstream
   `finding.schema.json`. Each finding carries evidence, remediation, confidence, blast radius and a test strategy.
 - **UI controls**: **Apply SecuritySkills playbooks** (on by default), plus an optional picker that forces up to
-  6 extra skills on every unit, e.g. `pci-dss-review` or `hipaa-review` for compliance-focused runs.
+  6 extra skills on every unit, e.g. `pci-dss-review` or `hipaa-review` for compliance-focused runs. Specialist
+  skills are marked ◆ in the picker.
+
+### Specialist skills (Anthropic-Cybersecurity-Skills)
+
+The [Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills) repository
+(Apache-2.0) has 818 skills. Only the **22** that meet both conditions below are vendored in
+`studio/harness/security_skills_acs/`:
+- they can be checked from repository files
+- they cover a vulnerability class the UnitOne playbooks miss
+
+Skills that do the same job as an existing one under another name are left out (e.g. SSRF, XXE, CORS, BOLA,
+typosquatting, Kubernetes hardening). So are near-identical variants within the repository itself (four JWT skills
+became one). [`security_skills_acs/README.md`](studio/harness/security_skills_acs/README.md) has the full selection
+and dedupe table.
+
+| Area | Specialist skills |
+| --- | --- |
+| Web | prototype pollution (JS), type juggling (PHP), race conditions, host-header injection, open redirect, HTTP request smuggling, parameter pollution, web cache poisoning |
+| API & auth | JWT, OAuth 2.0 flows, WebSocket, SOAP/WSDL |
+| AI | MCP server tool poisoning |
+| Cloud | serverless function review |
+| Cryptography | application crypto audit, post-quantum migration |
+| Mobile | Android static analysis, intents, deep links, insecure data storage, iOS assessment |
+| Blockchain | Solidity / Foundry smart-contract audit |
+
+Specialists are triggered by **concrete code signals**, never by file names alone. Examples:
+- `_.merge(` in a JS file triggers the prototype-pollution skill.
+- `import jwt` triggers the JWT skill.
+- `@mcp.tool` triggers the MCP tool-poisoning skill.
+- An open redirect needs both a `redirect(` call and a user-controlled `next`/`return_url` parameter.
+
+A specialist takes the slot right after the primary playbook. Only the `SKILL.md` and reference checklists are
+vendored, never the upstream scripts.
 
 API:
 
@@ -643,7 +680,7 @@ so the browser loads no external files except icon fonts. The server proxies cal
 | `studio/llama_bridge.py`, `antigravity_bridge.py`, `huggingface_bridge.py` | Backend bridges |
 | `studio/websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `scheduler.py` | Chat services, training, updates, scheduled audits |
 | `studio/codex/` | Agent: workspace, permissions, protocol, commands, sandbox, network policy, git, GitHub, GitLab, router, fixer, testing, skills |
-| `studio/harness/` | Vulnerability Harness (`engine.py`), SecuritySkills integration (`skills.py`, `security_skills/`), CVSS v3.1, security overview, Ghidra worker |
+| `studio/harness/` | Vulnerability Harness (`engine.py`), skill integration (`skills.py`, `security_skills/`, `security_skills_acs/`), CVSS v3.1, security overview, Ghidra worker |
 | `studio/mcp/` | MCP server |
 | `studio/web/` | Routing (`server.py`), `routes_*.py`, UI assets |
 | `*.service` | systemd units: web app, one Ollama instance per GPU, tuned instance |
@@ -665,5 +702,8 @@ graph; run `graphify update .` after code changes.
 
 MIT. See [LICENSE](LICENSE).
 
-Third-party content: the SecuritySkills playbooks in `studio/harness/security_skills/` are © UnitOne.ai, MIT
-(see the [LICENSE](studio/harness/security_skills/LICENSE) file in that folder).
+Third-party content:
+- The SecuritySkills playbooks in `studio/harness/security_skills/` are © UnitOne.ai, MIT. See the
+  [LICENSE](studio/harness/security_skills/LICENSE) file in that folder.
+- The specialist skills in `studio/harness/security_skills_acs/` come from mukul975/Anthropic-Cybersecurity-Skills,
+  Apache-2.0. See the [LICENSE](studio/harness/security_skills_acs/LICENSE) file in that folder.
