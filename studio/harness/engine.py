@@ -171,6 +171,19 @@ class VulnerabilityHarnessRunner(threading.Thread):
         self.use_skills = bool(use_skills)
         self.extra_skills = list(extra_skills or [])
         self.skills_used = {}
+        self.start_time = time.time()
+        self.duration_seconds = 0.0
+
+    def _format_duration(self, seconds):
+        """Formaterar sekunder till läsbar text, t.ex. '45s', '2m 15s' eller '1h 5m 20s'."""
+        sec = max(0, int(round(seconds)))
+        if sec < 60:
+            return f"{sec}s"
+        mins, s = divmod(sec, 60)
+        if mins < 60:
+            return f"{mins}m {s}s"
+        hrs, m = divmod(mins, 60)
+        return f"{hrs}h {m}m {s}s"
 
     def _log(self, msg):
         timestamp = time.strftime("%H:%M:%S")
@@ -183,6 +196,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
         with _settings_lock:
             conn = sqlite3.connect(config.DB_PATH)
             try:
+                dur_sec = max(0.0, time.time() - getattr(self, "start_time", time.time()))
                 report_data = {
                     "coverage_units": self.coverage_units,
                     "candidates": self.candidates,
@@ -190,7 +204,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
                     "rejected": self.rejected,
                     "skills_used": self.skills_used,
                     "skills_enabled": self.use_skills,
-                    "extra_skills": self.extra_skills
+                    "extra_skills": self.extra_skills,
+                    "duration_seconds": round(dur_sec, 2),
+                    "duration_formatted": self._format_duration(dur_sec)
                 }
                 conn.execute(
                     "UPDATE vulnerability_harness_runs SET "
@@ -210,6 +226,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 conn.close()
 
     def run(self):
+        self.start_time = time.time()
         self._log(f"Starting Cloudflare Vulnerability Harness for project {self.project} (Profile: {self.profile})...")
         try:
             target_path = self.target_dir
@@ -291,7 +308,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
             # ========================================================
             self.stage = "reporting"
             self.progress = 95
-            self._log("PHASE 6: Generating final report (REPORT.md & findings.json)...")
+            self.duration_seconds = max(0.0, time.time() - getattr(self, "start_time", time.time()))
+            dur_str = self._format_duration(self.duration_seconds)
+            self._log(f"PHASE 6: Generating final report (REPORT.md & findings.json) — Duration so far: {dur_str}...")
             self._save_artifacts(target_path)
 
             if self.create_issues and self.confirmed:
@@ -305,7 +324,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self.status = "completed"
             self.stage = "done"
             self.progress = 100
-            self._log(f"Harness completed! Confirmed findings: {len(self.confirmed)}, Rejected false positives: {len(self.rejected)}.")
+            self.duration_seconds = max(0.0, time.time() - getattr(self, "start_time", time.time()))
+            total_dur = self._format_duration(self.duration_seconds)
+            self._log(f"Harness completed in {total_dur}! Confirmed findings: {len(self.confirmed)}, Rejected false positives: {len(self.rejected)}.")
         except Exception as e:
             self.status = "error"
             self._log(f"Unexpected error in harness: {e}")
@@ -707,10 +728,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
                     self._log(f"SecuritySkills normalized findings written for {len(envelopes)} skill(s) in {ss_dir}")
 
             report_path = os.path.join(harness_dir, "REPORT.md")
+            dur_text = self._format_duration(max(0.0, time.time() - getattr(self, "start_time", time.time())))
             lines = [
                 f"# Vulnerability Harness Security Report ({self.project})",
-                f"**Run ID**: `{self.run_id}` | **Profile**: `{self.profile}` | **Date**: `{time.strftime('%Y-%m-%d %H:%M:%S')}`\n",
+                f"**Run ID**: `{self.run_id}` | **Profile**: `{self.profile}` | **Duration**: `{dur_text}` | **Date**: `{time.strftime('%Y-%m-%d %H:%M:%S')}`\n",
                 "## Executive Summary",
+                f"- **Audit Duration**: {dur_text}",
                 f"- **Coverage Units Audited**: {len(self.coverage_units)}",
                 f"- **Raw VDH Candidates**: {len(self.candidates)}",
                 f"- **Confirmed Vulnerabilities (Post-VVS)**: {len(self.confirmed)}",
@@ -767,7 +790,8 @@ class VulnerabilityHarnessRunner(threading.Thread):
         confirmed_count = len(self.confirmed)
         rejected_count = len(self.rejected)
         units_count = len(self.coverage_units)
-        subject = f"[Security Report] Vulnerability Harness: {self.project} ({confirmed_count} confirmed, {rejected_count} rejected)"
+        dur_text = self._format_duration(max(0.0, time.time() - getattr(self, "start_time", time.time())))
+        subject = f"[Security Report] Vulnerability Harness: {self.project} ({confirmed_count} confirmed, {rejected_count} rejected) - {dur_text}"
 
         body_lines = [
             f"Vulnerability Harness Security Audit Report",
@@ -775,6 +799,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
             f"Project: {self.project}",
             f"Run ID: {self.run_id}",
             f"Profile: {self.profile}",
+            f"Audit Duration: {dur_text}",
             f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
             f"Coverage Units Audited: {units_count}",
             f"Raw VDH Candidates: {len(self.candidates)}",

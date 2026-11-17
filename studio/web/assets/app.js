@@ -5556,6 +5556,17 @@ async function loadHarnessRuns() {
     listEl.innerHTML = runs.map(run => {
       const statusColor = run.status === 'completed' ? 'var(--accent)' : (run.status === 'error' ? 'var(--danger, #ef4444)' : 'var(--warning, #f59e0b)');
       const dateStr = run.created_at ? new Date(run.created_at * 1000).toLocaleString('en-US') : '';
+      let durText = '';
+      if (run.created_at && run.finished_at && run.finished_at >= run.created_at) {
+        const sec = Math.round(run.finished_at - run.created_at);
+        if (sec < 60) durText = `${sec}s`;
+        else {
+          const m = Math.floor(sec / 60);
+          const s = sec % 60;
+          durText = `${m}m ${s}s`;
+        }
+      }
+      const durBadge = durText ? ` &middot; <span style="color:var(--accent);font-weight:600"><i class="ph ph-clock"></i> ${durText}</span>` : '';
       return `
         <div class="card" style="padding:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
           <div>
@@ -5565,7 +5576,7 @@ async function loadHarnessRuns() {
               <span style="font-size:11px;color:var(--fg-subtle);font-family:var(--font-mono)">(${esc(run.run_id)})</span>
             </div>
             <div style="font-size:12px;color:var(--fg-muted);margin-top:4px">
-              Profile: <b>${esc(run.profile)}</b> &middot; ${dateStr}
+              Profile: <b>${esc(run.profile)}</b> &middot; ${dateStr}${durBadge}
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:14px">
