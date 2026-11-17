@@ -20,6 +20,33 @@ CODE_RUN_OUTPUT_CAP = 20000
 # (t.ex. python -c "print(1)").
 _SHELL_META = re.compile(r"[;&|<>`\n\r]")
 
+# Issue #27: Delad säker miljö som rensar alla tokens och hemligheter
+_SECRET_ENV_RE = re.compile(r"(TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE)", re.I)
+
+
+def safe_env(extra=None):
+    """Rensar bort alla hemligheter ur processmiljön före kommandokörning (Issue #27)."""
+    env = {k: v for k, v in os.environ.items() if not _SECRET_ENV_RE.search(k)}
+    if extra:
+        env.update(extra)
+    return env
+
+
+# Issue #18: Argument som kan köra godtycklig kod trots tillåtet grundkommando
+DENY_FLAGS = {
+    "make": ("--eval", "-E", "-f", "--file", "-C", "--directory", "SHELL="),
+    "go": ("-exec", "-toolexec", "-ldflags", "-gcflags"),
+    "pytest": ("-p", "--pyargs", "-c", "--rootdir", "-o", "--confcutdir"),
+    "npm": ("--script-shell", "--prefix", "-c", "--call", "--node-options"),
+}
+
+
+def _arg_denied(tool, arg):
+    for flag in DENY_FLAGS.get(tool, ()):
+        if arg == flag or arg.startswith(flag + "=") or (flag.endswith("=") and arg.startswith(flag)):
+            return True
+    return False
+
 
 def code_run_enabled():
     return code_enabled() and setting_bool("code_run_enabled")
@@ -56,7 +83,7 @@ def _split_cmd(cmd):
 
 
 def code_run_allowed(cmd):
-    """Är kommandot tillåtet enligt allowlist? Token-medveten prefixmatchning."""
+    """Är kommandot tillåtet enligt allowlist? Kontrollerar allowlist och deny-flags (Issue #18)."""
     cmd = (cmd or "").strip()
     if not cmd or _SHELL_META.search(cmd):
         return False
@@ -66,12 +93,21 @@ def code_run_allowed(cmd):
         return False
     if not toks:
         return False
+
     for allowed in code_run_allowlist():
         try:
             atoks = _split_cmd(allowed)
         except ValueError:
             continue
         if atoks and toks[:len(atoks)] == atoks:
+            # Om kommandot har extra argument, kontrollera DENY_FLAGS
+            extra_args = toks[len(atoks):]
+            tool = atoks[0].lower()
+            if tool in ("python", "python3") and len(atoks) >= 3 and atoks[1] == "-m":
+                tool = atoks[2].lower()
+            if any(_arg_denied(tool, a) for a in extra_args):
+                return False
+            # Om allowlist-posten inte slutar med wildcard eller har extra argument utan strikt matchning
             return True
     return False
 
@@ -82,7 +118,9 @@ def run_command(cmd, force=False):
     `force` hoppar över allowlisten – används bara när användaren uttryckligen
     godkänt kommandot i rutan, eller kör i läget "fria händer". Skyddet som ALLTID
     gäller: ingen shell, ingen kedjning, kör i arbetsytan, timeout och utskriftstak."""
-    root = code_workspace_root() or os.getcwd()
+    root = code_workspace_root()
+    if not root:
+        return False, "Ingen Codex-arbetsyta är konfigurerad"
     if not code_run_enabled() and not force:
         return False, "Command execution is disabled (enable it under ⚙ Settings)"
     if not force and not code_run_allowed(cmd):
@@ -95,14 +133,7 @@ def run_command(cmd, force=False):
         toks = _split_cmd(cmd)
     except ValueError as e:
         return False, "Could not parse the command: %s" % e
-    env = dict(os.environ)
-    # Rensa bort känsliga API-nycklar och tokens så subprocesser inte kan komma åt dem
-    for k in list(env.keys()):
-        kl = k.lower()
-        if (k in ("GITLAB_TOKEN", "GITHUB_TOKEN", "HF_TOKEN", "MEM0_API_KEY",
-                  "OLLAMA_STUDIO_TOKEN", "TOKEN", "AWS_SECRET_ACCESS_KEY")
-                or any(sub in kl for sub in ("token", "secret", "password", "api_key"))):
-            del env[k]
+    env = safe_env()
     from .sandbox import run_in_sandbox, sandbox_enabled
     if sandbox_enabled():
         return run_in_sandbox(toks, cwd=root, timeout=code_run_timeout(), env=env,

@@ -11,8 +11,8 @@ import json
 import os
 import urllib.request
 
-from ..config import OLLAMA_URL, code_workspace_root, setting_bool
-from ..codex.commands import run_command
+from ..config import OLLAMA_URL, code_enabled, code_workspace_root, setting_bool
+from ..codex.commands import code_run_enabled, run_command
 from ..codex.gitlab import gitlab_create_issue
 from ..codex.gitops import git_status_info
 from ..codex.sandbox import sandbox_info
@@ -161,28 +161,40 @@ def handle_tool_call(name, args):
             "sandbox": sbox
         }, indent=2, ensure_ascii=False)
 
+    CODEX_TOOLS = {"codex_run_command", "codex_write_file", "codex_edit_file", "codex_read_file"}
+    if name in CODEX_TOOLS and (not code_enabled() or code_workspace_root() is None):
+        raise ValueError("Codex-arbetsyta är inte konfigurerad/aktiverad")
+
     if name == "codex_read_file":
         path = args.get("path", "")
-        start = int(args.get("start", 1))
+        try:
+            start = int(args.get("start", 1))
+        except (TypeError, ValueError):
+            start = 1
         res = ws_read_file(path, start=start)
-        return res.get("text", res.get("error", "Error reading file"))
+        text = res.get("content", "")
+        if res.get("end", 0) < res.get("total", 0):
+            text += f"\n… (fler rader, fortsätt med start={res['end'] + 1})"
+        return text
 
     if name == "codex_edit_file":
         path = args.get("path", "")
         old_text = args.get("old_text", "")
         new_text = args.get("new_text", "")
         res = ws_edit_file(path, old_text, new_text)
-        return res.get("text", res.get("error", "Error editing file"))
+        return "OK: ändrade %s\n%s" % (res.get("path"), res.get("diff", ""))
 
     if name == "codex_write_file":
         path = args.get("path", "")
         content = args.get("content", "")
         res = ws_write_file(path, content)
-        return res.get("text", res.get("error", "Error writing file"))
+        return "OK: skrev %s\n%s" % (res.get("path"), res.get("diff", ""))
 
     if name == "codex_run_command":
+        if not code_run_enabled():
+            raise ValueError("Kommandokörning är avstängd i inställningarna")
         cmd = args.get("cmd", "")
-        ok, out = run_command(cmd, force=True)
+        ok, out = run_command(cmd, force=False)
         return out
 
     if name == "codex_git_status":
@@ -193,8 +205,10 @@ def handle_tool_call(name, args):
         title = args.get("title", "")
         desc = args.get("description", "")
         labels = args.get("labels", "security")
-        res = gitlab_create_issue(title, desc, labels=labels)
-        return res.get("text", res.get("error", "Error creating issue"))
+        ok, res = gitlab_create_issue(title, desc, labels=labels)
+        if not ok:
+            raise ValueError(f"Error creating issue: {res}")
+        return f"Issue created: {res}"
 
     return f"Unknown tool: {name}"
 
@@ -209,9 +223,15 @@ def process_mcp_request(body_bytes):
     except Exception as e:
         return {"jsonrpc": "2.0", "error": {"code": -32700, "message": f"Parse error: {e}"}}
 
+    if not isinstance(req, dict):
+        return {"jsonrpc": "2.0", "error": {"code": -32600, "message": "Invalid Request: expected JSON object"}}
+
     msg_id = req.get("id")
     method = req.get("method")
-    params = req.get("params") or {}
+    params = req.get("params")
+    if params is not None and not isinstance(params, dict):
+        return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32600, "message": "Invalid params"}}
+    params = params or {}
 
     if method == "initialize":
         return {
@@ -244,20 +264,35 @@ def process_mcp_request(body_bytes):
     if method == "tools/call":
         tool_name = params.get("name")
         tool_args = params.get("arguments") or {}
-        output = handle_tool_call(tool_name, tool_args)
-        return {
-            "jsonrpc": "2.0",
-            "id": msg_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": str(output)
-                    }
-                ],
-                "isError": False
+        try:
+            output = handle_tool_call(tool_name, tool_args)
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": str(output)
+                        }
+                    ],
+                    "isError": False
+                }
             }
-        }
+        except Exception as e:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": str(e)
+                        }
+                    ],
+                    "isError": True
+                }
+            }
 
     return {
         "jsonrpc": "2.0",

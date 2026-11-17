@@ -11,6 +11,7 @@ Själva arbetet ligger i rutt-modulerna som Handler ärver från:
 """
 import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -70,11 +71,51 @@ from studio.logging_util import get_logger as _get_logger
 _log = _get_logger(__name__)
 
 
+_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def _resolve_repo_dir(slug):
+    """Säker uppslagning av ett repos lokala katalog (Issue #16)."""
+    if not slug:
+        return code_workspace_root()
+    if not _SLUG_RE.match(slug) or ".." in slug.split("/"):
+        return None
+    root = os.path.realpath(code_repos_root() or "")
+    if not root:
+        return None
+    # Slå upp mot kända lokala repon först
+    for lr in local_repos():
+        if lr.get("slug") == slug:
+            p = os.path.realpath(lr.get("path") or "")
+            if os.path.commonpath([root, p]) == root and os.path.isdir(p):
+                return p
+    # Kontrollera via repo_dir_name
+    cand = os.path.realpath(os.path.join(root, repo_dir_name(slug)))
+    if os.path.commonpath([root, cand]) != root or not os.path.isdir(cand):
+        return None
+    return cand
+
+
+def _safe_join(base, rel):
+    """Säker hopslagning av filkatalog och relativ sökväg inom repot (Issue #16)."""
+    if not rel or os.path.isabs(rel) or ".." in rel.replace("\\", "/").split("/"):
+        return None
+    base = os.path.realpath(base)
+    full = os.path.realpath(os.path.join(base, rel))
+    if os.path.islink(os.path.join(base, rel)):
+        return None
+    if os.path.commonpath([base, full]) != base:
+        return None
+    return full
+
+
 class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
     """HTTP-hanteraren: routingtabellen, byggd av rutt-modulerna ovan."""
 
     # ---- GET ----
     def do_GET(self):
+        if not self._host_ok():
+            return self._send_json({"error": "bad host"}, 403)
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
             self.send_response(200)
@@ -83,6 +124,7 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
             self.send_header("Content-Length", str(len(_PAGE_BYTES)))
+            self._security_headers()
             self.end_headers()
             self.wfile.write(_PAGE_BYTES)
             return
@@ -151,33 +193,22 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 except Exception as e:
                     return self._send_json({"error": str(e)}, 400)
             if path == "/api/github/tree":
+                if not code_toggle_on():
+                    return self._send_json({"error": "Codex är av"}, 403)
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
                 slug = q.get("repo", [""])[0].strip()
-                # Find local path for this slug
-                repos_root = code_repos_root() or ""
-                target_path = None
-                if slug and repos_root:
-                    for lr in local_repos():
-                        if lr.get("slug") == slug:
-                            target_path = lr.get("path")
-                            break
-                    if not target_path:
-                        # Fallback to repo_dir_name
-                        owner, _, rname = slug.partition("/")
-                        cand = os.path.join(repos_root, f"{owner}__{rname}" if rname else slug)
-                        if os.path.isdir(cand):
-                            target_path = cand
-                elif not slug:
-                    target_path = code_workspace_root()
+                target_path = _resolve_repo_dir(slug)
 
                 if not target_path or not os.path.isdir(target_path):
                     return self._send_json({"ok": False, "repo": slug, "cloned": False, "files": [], "root": None})
 
                 out = []
                 for dirpath, dirnames, filenames in os.walk(target_path):
-                    dirnames[:] = sorted(d for d in dirnames if d not in CODE_SKIP_DIRS)
+                    dirnames[:] = sorted(d for d in dirnames if d not in CODE_SKIP_DIRS and not os.path.islink(os.path.join(dirpath, d)))
                     for name in sorted(filenames):
                         full = os.path.join(dirpath, name)
+                        if os.path.islink(full):
+                            continue
                         rel = os.path.relpath(full, target_path).replace(os.sep, "/")
                         out.append(rel)
                         if len(out) >= 800:
@@ -187,31 +218,19 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"ok": True, "repo": slug, "cloned": True, "files": out, "root": target_path})
 
             if path == "/api/github/file":
+                if not code_toggle_on():
+                    return self._send_json({"error": "Codex är av"}, 403)
                 q = urllib.parse.parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
                 slug = q.get("repo", [""])[0].strip()
                 rel = q.get("path", [""])[0].strip()
                 if not rel:
                     return self._send_json({"error": "Path required"}, 400)
-                repos_root = code_repos_root() or ""
-                target_path = None
-                if slug and repos_root:
-                    for lr in local_repos():
-                        if lr.get("slug") == slug:
-                            target_path = lr.get("path")
-                            break
-                    if not target_path:
-                        owner, _, rname = slug.partition("/")
-                        cand = os.path.join(repos_root, f"{owner}__{rname}" if rname else slug)
-                        if os.path.isdir(cand):
-                            target_path = cand
-                elif not slug:
-                    target_path = code_workspace_root()
-
+                target_path = _resolve_repo_dir(slug)
                 if not target_path:
                     return self._send_json({"error": "Repo not found on server"}, 404)
 
-                full = os.path.normpath(os.path.join(target_path, rel))
-                if not full.startswith(os.path.abspath(target_path)):
+                full = _safe_join(target_path, rel)
+                if not full:
                     return self._send_json({"error": "Path traversal prohibited"}, 403)
                 if not os.path.isfile(full):
                     return self._send_json({"error": "File not found"}, 404)
@@ -388,15 +407,27 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         self.send_error(404, "Not found")
     # ---- POST ----
     def do_POST(self):
+        if not self._host_ok():
+            return self._send_json({"error": "bad host"}, 403)
         path = self.path.split("?", 1)[0]
         if not self._auth_ok():
             return self._send_json({"error": "unauthorized"}, 401)
         if not self._csrf_ok():
             return self._send_json({"error": "cross-site request blocked (CSRF)"}, 403)
 
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        # Issue #29: Säker validering av Content-Length och chunked encoding
+        cl_hdr = self.headers.get("Content-Length")
+        try:
+            length = int(cl_hdr or 0)
+        except (ValueError, TypeError):
+            return self._send_json({"error": "ogiltig Content-Length"}, 400)
+        if length < 0:
+            return self._send_json({"error": "ogiltig Content-Length"}, 400)
         if length > MAX_BODY_BYTES:
             return self._send_json({"error": "body för stor"}, 413)
+        if (self.headers.get("Transfer-Encoding") or "").lower() == "chunked":
+            return self._send_json({"error": "chunked stöds inte"}, 411)
+
         raw = self.rfile.read(length) if length else b"{}"
         if path in ("/mcp", "/api/mcp"):
             res = process_mcp_request(raw)
@@ -411,13 +442,19 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
         except Exception:
             _log.debug("ignored exception", exc_info=True)
             data = {}
-        name = (data.get("name") or "").strip()
+
+        if not isinstance(data, dict):
+            return self._send_json({"error": "JSON-objekt förväntades"}, 400)
+
+        name = (data.get("name") or "").strip() if isinstance(data.get("name"), str) else ""
 
         if path == "/api/codex/terminal/run":
-            cmd = (data.get("cmd") or "").strip()
+            if not code_enabled() or not code_run_enabled():
+                return self._send_json({"ok": False, "error": "Kommandokörning är avstängd"}, 403)
+            cmd = (data.get("cmd") or "").strip() if isinstance(data.get("cmd"), str) else ""
             if not cmd:
                 return self._send_json({"error": "cmd saknas"}, 400)
-            ok, out = run_command(cmd, force=True)
+            ok, out = run_command(cmd, force=(code_mode() == "full"))
             return self._send_json({"ok": ok, "output": out})
 
         if path == "/api/delete":
@@ -485,7 +522,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             proj = str(raw_proj).strip() if raw_proj is not None and not isinstance(raw_proj, bool) else ""
             raw_prof = data.get("profile")
             profile = str(raw_prof).strip() if raw_prof is not None else "standard"
-            create_issues = bool(data.get("create_issues", False))
+            create_issues = bool(data.get("create_issues", True))
+            send_email = bool(data.get("send_email", True))
+            email_to = str(data.get("email_to") or "anders@andrix.se").strip()
             raw_target = data.get("target_dir")
             target_dir = str(raw_target).strip() if raw_target is not None and not isinstance(raw_target, bool) else ""
             use_skills = data.get("use_skills", True)
@@ -498,6 +537,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 profile=profile,
                 target_dir=target_dir or None,
                 create_issues=create_issues,
+                send_email=send_email,
+                email_to=email_to,
                 use_skills=use_skills,
                 extra_skills=extra_skills
             )
@@ -505,7 +546,11 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
 
         if path == "/api/issue/fix":
             repo = str(data.get("repo", "")).strip()
-            issue_number = int(data.get("issue_number", 0))
+            raw_num = data.get("issue_number")
+            try:
+                issue_number = int(raw_num)
+            except (ValueError, TypeError):
+                return self._send_json({"error": "ogiltigt issue_number"}, 400)
             issue_title = str(data.get("issue_title", "")).strip()
             issue_body = str(data.get("issue_body", "")).strip()
             if not repo or not issue_number:

@@ -90,9 +90,10 @@ def git_remote_info():
         gl_host = urllib.parse.urlparse(gl_url).netloc or gl_url.replace("http://", "").replace("https://", "").split("/")[0]
 
     provider = "git"
-    if "github.com" in host.lower():
+    h_low = host.lower()
+    if h_low == "github.com":
         provider = "github"
-    elif "gitlab" in host.lower() or (gl_host and gl_host == host.lower()):
+    elif gl_host and gl_host == h_low:
         provider = "gitlab"
 
     return {

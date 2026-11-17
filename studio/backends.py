@@ -117,20 +117,22 @@ def select_optimal_backend(preferred_url=None, task=None):
     if preferred_url and _backend_is_alive(preferred_url):
         return preferred_url
 
-    # Auto-upptäckt: om vi har en instans på port 11434 eller 8080
+    # Auto-upptäckt: endast om backend_autodiscover är påslaget i inställningar (Issue #32)
+    from .config import setting_bool
     known_urls = {b.get("url") or "" for b in backends_list}
     expanded = list(backends_list)
-    for b in backends_list:
-        url = b.get("url") or ""
-        if ":11434" in url:
-            u_llama = url.replace(":11434", ":8080")
-            if u_llama not in known_urls:
-                expanded.append({"label": "Llama Server", "url": u_llama, "gpu": "0"})
-                known_urls.add(u_llama)
-            u_gpu1 = url.replace(":11434", ":11435")
-            if u_gpu1 not in known_urls:
-                expanded.append({"label": "GPU 1", "url": u_gpu1, "gpu": "1"})
-                known_urls.add(u_gpu1)
+    if setting_bool("backend_autodiscover"):
+        for b in backends_list:
+            url = b.get("url") or ""
+            if ":11434" in url:
+                u_llama = url.replace(":11434", ":8080")
+                if u_llama not in known_urls:
+                    expanded.append({"label": "Llama Server", "url": u_llama, "gpu": "0"})
+                    known_urls.add(u_llama)
+                u_gpu1 = url.replace(":11434", ":11435")
+                if u_gpu1 not in known_urls:
+                    expanded.append({"label": "GPU 1", "url": u_gpu1, "gpu": "1"})
+                    known_urls.add(u_gpu1)
 
     # Poängsätt alla definierade och upptäckta backends
     scored = []

@@ -537,10 +537,14 @@ def agent_tool_exec(name, args, ctx=None):
                 return ("ERROR: the file %s does not exist. Use write_file to create it." % path,
                         {"summary": "ingen fil: " + path})
 
-            # 1. Batch edits
+            # 1. Batch edits (Issue #59)
             if isinstance(edits, list) and edits:
                 cur = ws_current(path)
-                preview = "Batch edits (%d stycken)" % len(edits)
+                from .workspace import apply_batch
+                modified, applied, errs = apply_batch(cur, edits)
+                if errs:
+                    return "ERROR: " + "; ".join(errs), {"summary": "valideringsfel i batch"}
+                preview = ws_diff(cur, modified, path) or ("Batch edits (%d stycken)" % len(edits))
                 if not ctx.ask("edit", "edit:" + path, "Ändra i filen %s (%d ändringar)" % (path, len(edits)), preview):
                     return _denied("editing " + path), {"summary": "nekat: " + path, "denied": True}
                 r = ws_edit_file_batch(path, edits)
@@ -634,11 +638,19 @@ def agent_tool_exec(name, args, ctx=None):
             labels = args.get("labels") or args.get("etiketter") or "security"
             if not title:
                 return "ERROR: title missing", {"summary": "fel: title saknas"}
-            is_gh = bool(setting_str("github_token"))
-            prov_name = "GitHub" if is_gh else "GitLab"
-            if ctx.mode == "ask" and not ctx.ask("git", "issue:" + title, f"Skapa {prov_name} Issue: " + title, desc):
+
+            # Issue #24: Kontrollera remote info för rätt provider
+            rem_info = git_remote_info()
+            prov = rem_info.get("provider")
+            if prov not in ("github", "gitlab"):
+                return ("ERROR: could not determine git provider from remote (must be github.com or configured gitlab)",
+                        {"summary": "fel: okänd provider"})
+
+            prov_name = "GitHub" if prov == "github" else "GitLab"
+            if ctx.mode in ("ask", "auto_edit") and not ctx.ask("git", "issue:" + title, f"Skapa {prov_name} Issue: " + title, desc):
                 return _denied("creating an issue"), {"summary": "nekat", "denied": True}
-            if is_gh:
+
+            if prov == "github":
                 ok, res = github_create_issue(title, desc, labels=labels)
             else:
                 ok, res = gitlab_create_issue(title, desc, labels=labels)

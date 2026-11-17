@@ -543,22 +543,27 @@
             <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px">
               <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                 <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
-                  <input type="checkbox" id="harnessUseSkills" checked onchange="toggleHarnessSkillPicker()">
-                  <span><b>Apply SecuritySkills playbooks</b> &mdash; framework-grounded checklists (OWASP ASVS, API &amp; LLM Top 10, CIS, SLSA) plus specialist skills (JWT, OAuth, prototype pollution, request smuggling, MCP, mobile, smart contracts) auto-selected per file</span>
+                  <input type="checkbox" id="harnessUseSkills" checked style="pointer-events:none">
+                  <span><b>All 67 security skills active</b> &mdash; 45 framework playbooks (OWASP ASVS, API &amp; LLM Top 10, CIS, NIST, SLSA) + 22 specialist skills (JWT, OAuth, prototype pollution, request smuggling, MCP, mobile, smart contracts) applied to all tests</span>
                 </label>
                 <a href="https://github.com/UnitOneAI/SecuritySkills" target="_blank" rel="noopener" style="font-size:11.5px;color:var(--fg-subtle)" id="harnessSkillsSource">UnitOneAI/SecuritySkills &middot; MIT</a>
               </div>
-              <div id="harnessSkillPickerWrap" style="margin-top:10px">
-                <label style="font-size:12px;color:var(--fg-muted);display:block;margin-bottom:4px">Force extra skills on every unit (optional, Ctrl/Cmd-click for multiple, max 6)</label>
-                <select id="harnessExtraSkills" multiple size="5" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font-size:12.5px"></select>
+              <div id="harnessSkillPickerWrap" style="margin-top:8px;display:none">
+                <select id="harnessExtraSkills" multiple style="display:none"></select>
               </div>
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-              <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
-                <input type="checkbox" id="harnessCreateIssues">
-                <span>Automatically create GitHub Issues for confirmed vulnerabilities</span>
-              </label>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
+                  <input type="checkbox" id="harnessCreateIssues" checked>
+                  <span>Automatically create GitHub Issues for confirmed vulnerabilities</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
+                  <input type="checkbox" id="harnessSendEmail" checked>
+                  <span>Email report to <b>anders@andrix.se</b> when audit completes</span>
+                </label>
+              </div>
               <button class="btn accent" id="harnessStartBtn" onclick="startHarnessRun()">
                 <i class="ph-bold ph-play"></i> <span>Start Vulnerability Harness</span>
               </button>

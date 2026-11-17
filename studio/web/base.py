@@ -3,6 +3,7 @@
 Åtkomstkontroll, JSON-svar, och det som alla rutter delar: att prata
 uppströms med Ollama och att strömma tillbaka till webbläsaren."""
 import hmac
+import ipaddress
 import json
 import os
 import sys
@@ -11,24 +12,51 @@ import urllib.parse
 import urllib.request
 
 from http.server import BaseHTTPRequestHandler
-from http.server import BaseHTTPRequestHandler
 from studio import backends as _backends
-from studio.config import TOKEN, keep_alive_value
+from studio.config import TOKEN, LISTEN_HOST, keep_alive_value
 from studio.logging_util import get_logger as _get_logger
 _log = _get_logger(__name__)
 
 
 MAX_BODY_BYTES = int(os.environ.get("OLLAMA_STUDIO_MAX_BODY", str(64 * 1024 * 1024)))
 
+_ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"} | {
+    h.strip().lower() for h in os.environ.get("OLLAMA_STUDIO_ALLOWED_HOSTS", "").split(",") if h.strip()
+}
+if LISTEN_HOST not in ("0.0.0.0", "::", ""):
+    _ALLOWED_HOSTS.add(LISTEN_HOST.lower())
+
+
+def _host_name(value):
+    value = (value or "").strip().lower()
+    if value.startswith("["):
+        idx = value.find("]")
+        if idx != -1:
+            return value[1:idx]
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
 
 class BaseHandler(BaseHTTPRequestHandler):
     """Grundplattan för HTTP-hanteraren."""
+
+    timeout = 30
 
     # Tystare loggning
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     # ---- hjälpare ----
+    def _host_ok(self):
+        """Host-validering mot DNS-rebinding (Issue #14)."""
+        name = _host_name(self.headers.get("Host"))
+        if not name or name in _ALLOWED_HOSTS:
+            return True
+        try:
+            ipaddress.ip_address(name)
+            return True
+        except ValueError:
+            return False
+
     def _auth_ok(self):
         if not TOKEN:
             return True
@@ -37,10 +65,16 @@ class BaseHandler(BaseHTTPRequestHandler):
             auth_header = self.headers.get("Authorization", "")
             if auth_header.lower().startswith("bearer "):
                 client_token = auth_header[7:].strip()
-        return bool(client_token) and hmac.compare_digest(client_token, TOKEN)
+        # Hantera icke-ASCII-tokens säkert med compare_digest (Issue #37)
+        if not client_token:
+            return False
+        return hmac.compare_digest(
+            client_token.encode("utf-8", "surrogateescape"),
+            TOKEN.encode("utf-8")
+        )
 
     def _csrf_ok(self):
-        """CSRF-skydd: verifierar att tillståndsförändrande POST-anrop inte kommer cross-site."""
+        """CSRF-skydd: verifierar att tillståndsförändrande POST-anrop inte kommer cross-site (Issue #14)."""
         if TOKEN and self._auth_ok():
             return True
 
@@ -49,32 +83,50 @@ class BaseHandler(BaseHTTPRequestHandler):
             return False
 
         origin = self.headers.get("Origin")
-        req_host = (self.headers.get("Host") or "").lower()
-        if origin:
-            try:
-                origin_host = urllib.parse.urlparse(origin).netloc.lower()
-                if origin_host and req_host and origin_host != req_host:
-                    return False
-            except Exception:
-                _log.debug("ignored exception", exc_info=True)
+        if origin is not None:
+            if origin == "null":
                 return False
-        else:
-            referer = self.headers.get("Referer")
-            if referer:
-                try:
-                    ref_host = urllib.parse.urlparse(referer).netloc.lower()
-                    if ref_host and req_host and ref_host != req_host:
-                        return False
-                except Exception:
-                    _log.debug("ignored exception", exc_info=True)
-                    return False
-        return True
+            try:
+                origin_host = _host_name(urllib.parse.urlparse(origin).netloc)
+                return origin_host in _ALLOWED_HOSTS
+            except Exception:
+                return False
+
+        ref = self.headers.get("Referer")
+        if ref:
+            try:
+                ref_host = _host_name(urllib.parse.urlparse(ref).netloc)
+                return ref_host in _ALLOWED_HOSTS
+            except Exception:
+                return False
+
+        # Om varken Origin eller Referer finns:
+        # Om anropet kommer från lokal loopback (t.ex. automatiserade verktyg, curl, interna python-tester) tillåter vi det,
+        # eller om anropet har custom header X-Requested-With.
+        if self.headers.get("X-Requested-With") == "ollama-studio":
+            return True
+
+        # Om anropet kommer utan browser-headers mot en tillåten loopback-host
+        req_host = _host_name(self.headers.get("Host"))
+        if req_host in ("127.0.0.1", "localhost", "::1"):
+            return True
+
+        return False
+
+    def _security_headers(self):
+        """Säkerhetsheaders mot clickjacking, MIME-sniffing m.m. (Issue #33)."""
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy",
+                         "frame-ancestors 'none'; object-src 'none'; base-uri 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(body)
 

@@ -230,11 +230,20 @@ def apply_profile(form):
 
 
 def validate(form):
-    """Returnera en lista med felmeddelanden (tom lista = allt ok)."""
+    """Returnera en lista med felmeddelanden (tom lista = allt ok) (Issue #35)."""
     form = form or {}
     errors = []
-    if not (form.get("base") or "").strip():
+    # Kontrollera att inga formulärfält innehåller radbrytningar (skydd mot YAML-injektion)
+    for k, v in form.items():
+        if isinstance(v, str) and ("\n" in v or "\r" in v):
+            errors.append(f"Fältet '{k}' får inte innehålla radbrytningar.")
+
+    base = (form.get("base") or "").strip()
+    if not base:
         errors.append("Välj en basmodell att träna vidare på.")
+    elif not re.match(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$", base):
+        errors.append("Basmodellen måste vara på formen 'ägare/modellnamn'.")
+
     if not (form.get("data") or "").strip():
         errors.append("Välj en datafil att träna på.")
     task = (form.get("task") or "sft").strip()
@@ -246,9 +255,15 @@ def validate(form):
     epochs = _num(form.get("epochs"), 3)
     if epochs <= 0 or epochs > 100:
         errors.append("Antal epoker måste vara mellan 1 och 100.")
+
+    batch_size = str(form.get("batch_size") or "auto").strip()
+    if not re.match(r"^(auto|\d{1,4})$", batch_size):
+        errors.append("Batchstorlek måste vara 'auto' eller ett heltal.")
+
     lr = (str(form.get("lr") or "2e-5")).strip()
     try:
-        if not 0 < float(lr) < 1:
+        val_lr = float(lr)
+        if not 0 < val_lr < 1:
             raise ValueError
     except ValueError:
         errors.append('Inlärningstakten ska vara ett litet tal, t.ex. "2e-5".')

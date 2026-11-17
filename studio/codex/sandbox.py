@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 
 from ..config import setting_bool, setting_str
 from studio.logging_util import get_logger as _get_logger
@@ -88,8 +89,10 @@ def run_in_sandbox(toks, cwd, timeout=120, env=None, output_cap=20000):
     # capabilities are left intact on purpose so that security-testing tools
     # (nmap raw sockets etc.) still work; isolate further per deployment if the
     # sandbox is only used for building/running untrusted code.
+    cname = "ostudio-" + uuid.uuid4().hex[:12]
     cmd = [
         "docker", "run", "--rm", "-i",
+        "--name", cname,
         "--security-opt", "no-new-privileges",
         "--pids-limit", "512",
         "--memory", "2g", "--memory-swap", "2g",
@@ -121,7 +124,12 @@ def run_in_sandbox(toks, cwd, timeout=120, env=None, output_cap=20000):
             stdin=subprocess.DEVNULL
         )
     except subprocess.TimeoutExpired:
-        return False, f"Sandlådekommandot avbröts (timeout efter {timeout}s)"
+        # Issue #56: Döda containern vid timeout
+        try:
+            subprocess.run(["docker", "rm", "-f", cname], capture_output=True, timeout=15)
+        except Exception:
+            pass
+        return False, f"Timeout efter {timeout}s – containern {cname} stoppad"
     except Exception as e:
         return False, f"Kunde inte köra i sandlåda: {e}"
 

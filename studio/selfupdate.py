@@ -43,14 +43,27 @@ def self_update():
     already = ("already up to date" in low or "already up-to-date" in low
                or "up to date" in low)
     if not already:
-        # Säkerhetsnät: starta bara om ifall den hämtade koden faktiskt kompilerar,
-        # annars kan en trasig commit "bricka" servern (execv startar då aldrig).
-        chk = subprocess.run([sys.executable, "-m", "py_compile",
-                              os.path.join(d, "ollama_web.py")],
-                             capture_output=True, text=True)
+        # Säkerhetsnät: starta bara om ifall den hämtade koden faktiskt kompilerar och kan importeras (Issue #53)
+        # Om repot har ett studio/-paket kontrollerar vi import av studio.web.server och ollama_web,
+        # annars (t.ex. minimala testrepon) kompileras alla befintliga python-filer.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            test_env = dict(os.environ, OLLAMA_STUDIO_DB=os.path.join(tmp, "check.db"))
+            test_env["PYTHONPATH"] = d + (os.pathsep + test_env["PYTHONPATH"] if "PYTHONPATH" in test_env else "")
+            if os.path.isdir(os.path.join(d, "studio")):
+                chk = subprocess.run(
+                    [sys.executable, "-c", "import studio.web.server, ollama_web"],
+                    cwd=d, env=test_env, capture_output=True, text=True, timeout=60
+                )
+            else:
+                chk = subprocess.run(
+                    [sys.executable, "-m", "compileall", "-q", d],
+                    cwd=d, env=test_env, capture_output=True, text=True, timeout=60
+                )
         if chk.returncode != 0:
+            subprocess.run(["git", "reset", "--hard", "ORIG_HEAD"], cwd=d)
             return {"ok": False,
-                    "output": "Ny kod hämtades men den kompilerar inte – startar INTE om:\n"
+                    "output": "Ny kod importeras inte – återställd, startar INTE om:\n"
                               + ((chk.stderr or chk.stdout or "").strip()),
                     "restart": False}
     return {"ok": True, "output": out or "Redan uppdaterad.",

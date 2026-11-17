@@ -182,7 +182,8 @@ class TrainJob:
             }
 
     def running(self):
-        return self.state == "kör"
+        """Körs fortfarande? Kontrollerar både tillstånd och faktisk process (Issue #61)."""
+        return self.state == "kör" or (self.proc is not None and self.proc.poll() is None)
 
 
 _train_job = None                 # den enda körningen i taget

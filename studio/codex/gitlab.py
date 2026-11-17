@@ -26,8 +26,8 @@ _repos_lock = threading.Lock()
 
 
 def gitlab_base_url():
-    """Hämtar bas-URL för GitLab från inställningar eller standard."""
-    raw = setting_str("gitlab_url") or "http://gitlab.andrix.se"
+    """Hämtar bas-URL för GitLab från inställningar (Issue #19, #28)."""
+    raw = setting_str("gitlab_url")
     return raw.strip().rstrip("/")
 
 
@@ -50,7 +50,9 @@ def parse_gitlab_target(target):
     if m_ssh:
         host = m_ssh.group(1)
         slug = m_ssh.group(2).strip("/")
-        scheme = "http" if "192.168." in host or "10." in host else "https"
+        base = gitlab_base_url()
+        parsed_base = urllib.parse.urlparse(base) if base else None
+        scheme = parsed_base.scheme if parsed_base and parsed_base.scheme else "https"
         clean_url = "%s://%s/%s.git" % (scheme, host, slug)
         return scheme, host, slug, clean_url
 

@@ -93,9 +93,11 @@ class AgentRun:
     """Tillståndet för EN Codex-körning: behörighetsläge, ström till webbläsaren och
     de svar användaren redan gett ("tillåt alltid" gäller resten av körningen)."""
 
-    def __init__(self, emit, mode=None):
+    def __init__(self, emit, mode=None, headless=False, policy=None):
         self.emit = emit
         self.mode = mode if mode in CODE_MODES else code_mode()
+        self.headless = bool(headless)
+        self.policy = dict(policy or {})
         self.always = set()      # nycklar användaren sagt "tillåt alltid" för
         self.writes = []         # filer agenten ändrat (för sammanfattningen)
         self.commands = 0        # kommandon som körts
@@ -110,9 +112,16 @@ class AgentRun:
         return True
 
     def ask(self, kind, key, title, detail="", danger=False):
-        """Fråga användaren om lov. True = kör på."""
+        """Fråga användaren om lov. True = kör på (Issue #51)."""
         if not self.needs_ok(kind) or key in self.always:
             return True
+        if self.headless:
+            # I bakgrundskörningar finns ingen webbläsare som kan svara – kolla policy direkt
+            allowed = bool(self.policy.get(kind, False))
+            _log.info("headless ask %s %s -> %s", kind, key, allowed)
+            if not allowed:
+                self.denied += 1
+            return allowed
         aid = approval_open()
         self.emit({"type": "ask", "id": aid, "kind": kind, "title": title,
                    "detail": detail or "", "danger": bool(danger)})

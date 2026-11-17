@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 from ..config import code_workspace_root
+from .commands import safe_env
 from studio.logging_util import get_logger as _get_logger
 _log = _get_logger(__name__)
 
@@ -26,7 +27,6 @@ def find_test_runner(root=None):
         os.path.join(workspace, "venv", "bin", "pytest"),
         os.path.join(workspace, ".venv", "bin", "pytest"),
         f"/opt/{repo_name}/venv/bin/pytest",
-        "/opt/Freja-AI-assistant/venv/bin/pytest",
         "pytest",
         "python3 -m pytest",
     ]
@@ -86,7 +86,7 @@ def run_project_tests(root=None, timeout=120):
     if not cmd:
         return True, "Inga automatiserade tester konfigurerade", runner_type
 
-    env = dict(os.environ)
+    env = safe_env()
     env["PYTHONPATH"] = f".:{env.get('PYTHONPATH', '')}"
 
     try:
