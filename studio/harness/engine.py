@@ -237,9 +237,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self._log(f"Audit target directory: {target_path}")
             if self.use_skills:
                 from .skills import load_catalog
-                n_skills = len(load_catalog())
-                extra = f" (+ forced: {', '.join(self.extra_skills)})" if self.extra_skills else ""
-                self._log(f"SecuritySkills enabled: {n_skills} framework-grounded playbooks loaded{extra}.")
+                all_catalog = load_catalog()
+                n_skills = len(all_catalog)
+                # Om inga specifika extra_skills valts körs ALLA tillgängliga skills automatiskt
+                if not self.extra_skills:
+                    self.extra_skills = list(all_catalog.keys())
+                self._log(f"SecuritySkills enabled: All {n_skills} framework-grounded playbooks will be applied across the test suite.")
 
             # ========================================================
             # PHASE 1: Reconnaissance & Multi-Scanner Seeding (Bandit, Gitleaks, Semgrep)
@@ -778,10 +781,13 @@ def start_vulnerability_harness(project, profile="standard", target_dir=None, cr
                                 use_skills=True, extra_skills=None):
     init_harness_db()
     run_id = "vh-" + uuid.uuid4().hex[:8]
+    from .skills import load_catalog
+    known = load_catalog()
     if extra_skills:
-        from .skills import load_catalog
-        known = load_catalog()
-        extra_skills = [s for s in extra_skills if s in known][:6]
+        extra_skills = [s for s in extra_skills if s in known]
+    elif use_skills:
+        # Standard: alla skills används automatiskt vid test
+        extra_skills = list(known.keys())
     runner = VulnerabilityHarnessRunner(
         run_id=run_id,
         project=project,

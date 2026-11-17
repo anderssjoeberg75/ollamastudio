@@ -5620,8 +5620,8 @@ async function startHarnessRun() {
   const createIssues = issuesChk ? issuesChk.checked : false;
   const skillsChk = document.getElementById('harnessUseSkills');
   const useSkills = skillsChk ? skillsChk.checked : true;
-  const extraSel = document.getElementById('harnessExtraSkills');
-  const extraSkills = (useSkills && extraSel) ? Array.from(extraSel.selectedOptions).map(o => o.value).slice(0, 6) : [];
+  // Always apply all skills automatically without manual picking
+  const extraSkills = [];
 
   if (startBtn) {
     startBtn.disabled = true;
