@@ -780,7 +780,8 @@ class OllamaManagerApp:
         try:
             models = self.client.list_models()
         except Exception as e:
-            self.root.after(0, lambda: self._on_server_down(str(e)))
+            err_msg = str(e)
+            self.root.after(0, lambda msg=err_msg: self._on_server_down(msg))
             return
         running = self.client.running_models()
         self.root.after(0, lambda: self._on_models_loaded(version, models, running))
@@ -1020,7 +1021,8 @@ class OllamaManagerApp:
                 self.client.delete(name)
                 self.root.after(0, lambda: self._toast(f"\"{name}\" avinstallerad"))
             except Exception as e:
-                self.root.after(0, lambda: self._toast(f"Kunde inte ta bort: {e}", error=True))
+                err_msg = str(e)
+                self.root.after(0, lambda msg=err_msg: self._toast(f"Kunde inte ta bort: {msg}", error=True))
             self.root.after(0, self.refresh_all)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1088,7 +1090,8 @@ class OllamaManagerApp:
             try:
                 ref, best, quant = self.client.hf_resolve(name)
             except Exception as e:
-                self.root.after(0, lambda d=f"{err}\nSökningen på Hugging Face misslyckades: {e}":
+                err_msg = str(e)
+                self.root.after(0, lambda d=f"{err}\nSökningen på Hugging Face misslyckades: {err_msg}":
                                 self._on_pull_done(name, "error", d))
                 return
             if not ref:

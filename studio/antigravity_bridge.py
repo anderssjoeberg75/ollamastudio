@@ -3,6 +3,7 @@
 Använder användarens aktiva Antigravity-inloggning/abonnemang (via agy CLI)
 för att köra Gemini och Claude direkt i Codex och chatten i Ollama Studio.
 """
+import collections
 import json
 import os
 import shutil
@@ -176,6 +177,8 @@ class AntigravityStream:
             cwd = ws
             cmd.extend(["--add-dir", ws])
 
+        self._stderr_lines = collections.deque(maxlen=200)
+
         self.proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -186,6 +189,15 @@ class AntigravityStream:
             bufsize=1,
             cwd=cwd
         )
+
+        def _drain_stderr():
+            try:
+                for line in self.proc.stderr:
+                    self._stderr_lines.append(line)
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain_stderr, daemon=True).start()
         self._closed = False
 
     def __iter__(self):
@@ -228,13 +240,8 @@ class AntigravityStream:
                     yield b'{"ping": true, "message": {"role": "assistant", "content": ""}}\n'
 
             if not emitted_any and not self._closed:
-                # Processen avslutades utan output på stdout – kontrollera stderr
-                err_text = ""
-                try:
-                    err_text = self.proc.stderr.read() or ""
-                except Exception:
-                    _log.debug("ignored exception", exc_info=True)
-                    pass
+                # Processen avslutades utan output på stdout – hämta dränerad stderr (Issue #34)
+                err_text = "".join(self._stderr_lines)
                 if not err_text:
                     rc = self.proc.poll()
                     if rc not in (None, 0):

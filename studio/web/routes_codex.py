@@ -198,22 +198,6 @@ class CodexRoutes(BaseHandler):
                 msg = strip_edits(full)
                 if msg:
                     self._emit({"type": "message", "text": msg})
-                    if not getattr(ctx, "issues_created", 0):
-                        findings = extract_findings_from_text(msg)
-                        for f in findings:
-                            is_gh = bool(setting_str("github_token"))
-                            if is_gh:
-                                ok, res = github_create_issue(f["title"], f["description"], labels=f.get("labels"))
-                                prov_label = "GitHub Issue: "
-                            else:
-                                ok, res = gitlab_create_issue(f["title"], f["description"], labels=f.get("labels"))
-                                prov_label = "GitLab Issue: "
-                            if ok:
-                                ctx.issues_created = getattr(ctx, "issues_created", 0) + 1
-                                self._emit({"type": "tool", "name": "create_issue",
-                                            "args": {"title": f["title"]},
-                                            "summary": "Skapade " + prov_label + f["title"],
-                                            "url": res, "ok": True})
                 finished = True
                 break
             if not finished and max_steps:

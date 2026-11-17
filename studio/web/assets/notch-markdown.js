@@ -43,8 +43,8 @@ function render(md) {
   while (i < lines.length) {
     const line = lines[i];
 
-    // fenced code block (``` or ```lang) — content kept verbatim
-    const fence = line.match(/^\s*(`{3,}|~{3,})\s*([A-Za-z0-9_+#.-]*)\s*$/);
+    // fenced code block (``` or ```lang or ```lang title=...) — content kept verbatim (Issue #42)
+    const fence = line.match(/^\s*(`{3,}|~{3,})\s*([^\s`]*)[^`]*$/);
     if (fence) {
       const marker = fence[1][0];
       const lang = fence[2] || "";
@@ -105,7 +105,12 @@ function render(md) {
       para.push(lines[i]);
       i++;
     }
-    if (para.length) out.push("<p>" + renderInline(para.join("\n")).replace(/\n/g, "<br>") + "</p>");
+    if (para.length) {
+      out.push("<p>" + renderInline(para.join("\n")).replace(/\n/g, "<br>") + "</p>");
+    } else {
+      out.push("<p>" + renderInline(lines[i]) + "</p>");
+      i++;
+    }
   }
   return out.join("");
 }

@@ -100,15 +100,12 @@ def compute_next_run(interval_hours, run_time="", from_time=None):
                 target_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 if target_today > now:
                     return target_today.timestamp()
-                # Klockslaget har redan passerat idag
-                if interval < 24:
-                    cand = target_today
-                    while cand <= now:
-                        cand += datetime.timedelta(hours=interval)
-                    return cand.timestamp()
-                else:
-                    days = max(1, interval // 24)
-                    return (target_today + datetime.timedelta(days=days)).timestamp()
+                # Klockslaget har redan passerat idag (Issue #40)
+                cand = target_today
+                step_delta = datetime.timedelta(hours=interval)
+                while cand <= now:
+                    cand += step_delta
+                return cand.timestamp()
         except Exception:
             _log.debug("ignored exception", exc_info=True)
             pass
@@ -581,7 +578,7 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": prompt}
     ]
-    ctx = AgentRun(lambda ev: None, mode)
+    ctx = AgentRun(lambda ev: None, mode, headless=True, policy={"git": False, "run": False, "edit": True})
     guard = RepeatGuard()
     max_steps = 25
     base = base_url or backends.select_optimal_backend()
@@ -828,7 +825,8 @@ def _run_resolve_findings_pass(project_slug, status_cb=None, base_url=None):
             continue
 
         diff = git_diff_text()
-        if diff and not diff.startswith("FEL:") and len(diff.strip()) > 0:
+        has_diff = diff and not diff.startswith("FEL:") and not diff.startswith("ERROR:") and len(diff.strip()) > 0
+        if has_diff:
             commit_msg = (
                 "fix: resolve %s (issue #%s)\n\n"
                 "Auto-resolved by Ollama Studio Codex using model %s."
@@ -929,8 +927,7 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     if not ok or not target_dir:
         return False, "Kunde inte hämta repot: " + msg, 0, 0
 
-    prev_workspace = setting_str("code_workspace")
-    settings_set({"code_workspace": target_dir})
+    from .config import workspace_override
 
     sec_count = 0
     pny_count = 0
@@ -938,31 +935,30 @@ def run_headless_audit(project, branch="", run_security=True, run_ponytail=True,
     errors = []
 
     try:
-        if run_security:
-            sec_prompt = SECURITY_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
-            if status_cb:
-                status_cb("Kör säkerhetsgranskning (kod/SAST, läge: %s) mot %s (%s på %s)..." % (mode, project, sec_model, base_url))
-            sec_count, sec_err = _run_single_headless_pass(sec_prompt, sec_model, project, base_url=base_url)
-            if sec_err:
-                errors.append("Säkerhetsgranskning: " + sec_err)
+        with workspace_override(target_dir):
+            if run_security:
+                sec_prompt = SECURITY_AUDIT_PROMPT + "\n\n" + mode_instructions.get(mode, mode_instructions["safe"])
+                if status_cb:
+                    status_cb("Kör säkerhetsgranskning (kod/SAST, läge: %s) mot %s (%s på %s)..." % (mode, project, sec_model, base_url))
+                sec_count, sec_err = _run_single_headless_pass(sec_prompt, sec_model, project, base_url=base_url)
+                if sec_err:
+                    errors.append("Säkerhetsgranskning: " + sec_err)
 
-        if run_ponytail:
-            if status_cb:
-                status_cb("Kör ponytail-audit mot %s (%s på %s)..." % (project, pny_model, base_url))
-            pny_count, pny_err = _run_single_headless_pass(PONYTAIL_AUDIT_PROMPT, pny_model, project, base_url=base_url)
-            if pny_err:
-                errors.append("Ponytail-audit: " + pny_err)
+            if run_ponytail:
+                if status_cb:
+                    status_cb("Kör ponytail-audit mot %s (%s på %s)..." % (project, pny_model, base_url))
+                pny_count, pny_err = _run_single_headless_pass(PONYTAIL_AUDIT_PROMPT, pny_model, project, base_url=base_url)
+                if pny_err:
+                    errors.append("Ponytail-audit: " + pny_err)
 
-        if run_resolve:
-            if status_cb:
-                status_cb("Hämtar öppna fynd och kör automatisk åtgärd (Auto-Fix)...")
-            res_count, res_errs = _run_resolve_findings_pass(project, status_cb=status_cb, base_url=base_url)
-            if res_errs:
-                errors.append("Åtgärda fynd: " + "; ".join(res_errs))
-
-    finally:
-        if prev_workspace and prev_workspace != target_dir:
-            settings_set({"code_workspace": prev_workspace})
+            if run_resolve:
+                if status_cb:
+                    status_cb("Hämtar öppna fynd och kör automatisk åtgärd (Auto-Fix)...")
+                res_count, res_errs = _run_resolve_findings_pass(project, status_cb=status_cb, base_url=base_url)
+                if res_errs:
+                    errors.append("Åtgärda fynd: " + "; ".join(res_errs))
+    except Exception as e:
+        errors.append(f"Fel under granskning: {e}")
 
     total = sec_count + pny_count + res_count
     models_used = []
@@ -1023,6 +1019,13 @@ def _execute_job(job_id):
         if not target_token:
             target_token = eff.get("prod_token", "")
 
+        interval = max(1, job.get("interval_hours", 24))
+        run_time = job.get("run_time", "")
+        next_run = compute_next_run(interval, run_time, from_time=time.time())
+
+        # Claim tidigt så att next_run flyttas fram även om fel inträffar (Issue #39)
+        _update_job_status(job_id, status="Kör granskning…", next_run=next_run)
+
         ok, summary, sec, pny = run_headless_audit(
             project=job["project"],
             branch=job.get("branch", ""),
@@ -1037,13 +1040,13 @@ def _execute_job(job_id):
         )
         finish_str = time.strftime("%Y-%m-%d %H:%M")
         status_text = ("%s (%s)" % (summary, finish_str)) if ok else ("Fel: %s (%s)" % (summary, finish_str))
-        interval = max(1, job.get("interval_hours", 24))
-        run_time = job.get("run_time", "")
-        next_run = compute_next_run(interval, run_time, from_time=time.time())
         _update_job_status(job_id, status=status_text, last_run=time.time(), next_run=next_run)
     except Exception as e:
         finish_str = time.strftime("%Y-%m-%d %H:%M")
-        _update_job_status(job_id, status="Oväntat fel: %s (%s)" % (e, finish_str))
+        interval = max(1, job.get("interval_hours", 24)) if isinstance(job, dict) else 24
+        run_time = job.get("run_time", "") if isinstance(job, dict) else ""
+        next_run = compute_next_run(interval, run_time, from_time=time.time())
+        _update_job_status(job_id, status="Oväntat fel: %s (%s)" % (e, finish_str), next_run=next_run)
     finally:
         with _running_lock:
             _running_jobs.discard(job_id)

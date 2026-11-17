@@ -16,21 +16,25 @@ _log = _get_logger(__name__)
 # --------------------------------------------------------------------------
 # Kodassistent – arbetsyta (jail), verktyg och agent-protokoll
 # --------------------------------------------------------------------------
-# All disk-åtkomst sker under arbetsytans rot (path-jail). Agenten har både läs- och
-# skrivverktyg; hur mycket den får göra utan att fråga styrs av behörighetsläget
-# (code_permission): "ask" frågar om varje skrivning/kommando/git, "auto_edit" skriver
-# filer själv, "full" ger fria händer. Varje skrivning går att ångra (undo-stacken).
 CODE_MAX_STEPS = 0            # 0 = obegränsat antal verktygsvarv (⚙ Inställningar)
 CODE_READ_LINES = 400         # rader per read_file utan uttryckligt intervall
-# read_file och search läser RADVIS och behöver aldrig hela filen i minnet – därför
-# får de arbeta med stora filer. edit_file/write_file måste däremot hålla hela
-# innehållet i minnet för att byta ut en textbit, och har ett rejält men verkligt tak.
-# (Gamla taket på 200 kB gjorde att Codex inte kunde läsa, söka i eller ändra
-# projektets egen huvudfil – och search hoppade över den UTAN att säga något.)
 CODE_MAX_EDIT_BYTES = 5000000     # 5 MB – tak för edit_file/write_file
 CODE_SEARCH_MAX_BYTES = 20000000  # 20 MB – search hoppar bara över absurt stora filer
 CODE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
                   ".idea", ".vscode", "dist", "build", ".mypy_cache"}
+
+_PROTECTED_DIRS = {".git"}
+
+
+def _ws_guard_write(full):
+    """Spärr mot skrivning i skyddade kataloger som .git/ (Issue #58)."""
+    root = os.path.realpath(code_workspace_root() or "")
+    if not root:
+        return
+    rel = os.path.relpath(os.path.realpath(full), root)
+    parts = [p.lower().rstrip(". ") for p in rel.replace("\\", "/").split("/")]
+    if any(p in _PROTECTED_DIRS for p in parts):
+        raise ValueError("Skrivning i .git/ är inte tillåten")
 
 
 def ws_resolve(rel):
@@ -196,6 +200,7 @@ def ws_write_file(rel, content, mode="overwrite"):
     Returnerar en diff. Det gamla innehållet läggs på ångra-stacken så en skrivning alltid
     går att backa (även i fria händer-läget)."""
     full = ws_resolve(rel)
+    _ws_guard_write(full)
     if content is None:
         raise ValueError("No content")
     is_append = str(mode or "").strip().lower() == "append"
@@ -227,6 +232,7 @@ def ws_edit_file(rel, old_text, new_text):
     Biten måste finnas exakt EN gång (eller entydigt med fuzzy whitespace-matching);
     annars vet vi inte vilken som menades."""
     full = ws_resolve(rel)
+    _ws_guard_write(full)
     if not os.path.isfile(full):
         raise ValueError("No such file: " + rel)
     if os.path.getsize(full) > CODE_MAX_EDIT_BYTES:
@@ -264,7 +270,12 @@ def ws_edit_file(rel, old_text, new_text):
     updated = norm_cur.replace(match_used, norm_new, 1)
     if len(updated.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
         raise ValueError("Content too large (>%d B)" % CODE_MAX_EDIT_BYTES)
-    with open(full, "w", encoding="utf-8") as f:
+
+    # Issue #46: Bevara CRLF om originalfilen använde det
+    if "\r\n" in cur:
+        updated = updated.replace("\n", "\r\n")
+
+    with open(full, "w", encoding="utf-8", newline="") as f:
         f.write(updated)
     rel_path = _ws_rel(full)
     undo_push(rel_path, cur)
@@ -273,23 +284,14 @@ def ws_edit_file(rel, old_text, new_text):
             "diff": ws_diff(cur, updated, rel_path)}
 
 
-def ws_edit_file_batch(rel, edits):
-    """Applicera en lista med kirurgiska sök-och-ersätt ändringar [{old_text, new_text}, ...]
-    i filen sekventiellt i ett enda svep."""
-    if not isinstance(edits, list) or not edits:
-        raise ValueError("edits must be a non-empty list of {old_text, new_text}")
-    full = ws_resolve(rel)
-    if not os.path.isfile(full):
-        raise ValueError("No such file: " + rel)
-    with open(full, "r", encoding="utf-8", errors="replace") as f:
-        cur = f.read()
-
-    norm_cur = cur.replace("\r\n", "\n")
+def apply_batch(text, edits):
+    """Applicera batch-edits utan att skriva till disk. Returnerar (modified_text, applied_count, errors) (Issue #59)."""
+    norm_cur = text.replace("\r\n", "\n")
     modified = norm_cur
     applied_count = 0
     errors = []
 
-    for i, ed in enumerate(edits):
+    for i, ed in enumerate(edits or []):
         if not isinstance(ed, dict):
             errors.append("edit %d: must be an object with old_text and new_text" % i)
             continue
@@ -312,6 +314,22 @@ def ws_edit_file_batch(rel, edits):
             continue
         modified = modified.replace(old, new, 1)
         applied_count += 1
+    return modified, applied_count, errors
+
+
+def ws_edit_file_batch(rel, edits):
+    """Applicera en lista med kirurgiska sök-och-ersätt ändringar [{old_text, new_text}, ...]
+    i filen sekventiellt i ett enda svep (Issue #46, #58, #59)."""
+    if not isinstance(edits, list) or not edits:
+        raise ValueError("edits must be a non-empty list of {old_text, new_text}")
+    full = ws_resolve(rel)
+    _ws_guard_write(full)
+    if not os.path.isfile(full):
+        raise ValueError("No such file: " + rel)
+    with open(full, "r", encoding="utf-8", errors="replace") as f:
+        cur = f.read()
+
+    modified, applied_count, errors = apply_batch(cur, edits)
 
     if errors:
         raise ValueError("; ".join(errors) + (" (applied %d changes before the error)" % applied_count if applied_count else ""))
@@ -319,7 +337,11 @@ def ws_edit_file_batch(rel, edits):
     if len(modified.encode("utf-8")) > CODE_MAX_EDIT_BYTES:
         raise ValueError("Content too large (>%d B)" % CODE_MAX_EDIT_BYTES)
 
-    with open(full, "w", encoding="utf-8") as f:
+    # Issue #46: Bevara CRLF om originalfilen använde det
+    if "\r\n" in cur:
+        modified = modified.replace("\n", "\r\n")
+
+    with open(full, "w", encoding="utf-8", newline="") as f:
         f.write(modified)
     rel_path = _ws_rel(full)
     undo_push(rel_path, cur)

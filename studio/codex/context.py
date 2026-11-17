@@ -96,21 +96,24 @@ def prune_convo(convo, budget):
         if target < len(cur):
             msg["content"] = cap_tool_result(cur, target)
 
-    # Steg 3: om konversationen fortfarande överskrider budgeten (t.ex. vid många upprepade användarprompter
-    # eller lång assistenthistorik): beskär äldre meddelanden bakifrån för att skydda modellens kontextfönster.
-    # Systemprompten (out[0]) och det allra sista meddelandet lämnas alltid intakta.
+    # Steg 3: om konversationen fortfarande överskrider budgeten (Issue #60):
+    # Fäst systemprompten (out[0]) och användarens ursprungliga uppgiftsfråga (inte verktygsresultat).
+    # Kasta istället äldre par av assistent och verktygsresultat från mitten.
     if total() > budget and len(out) > 2:
-        system_msg = out[0]
-        convo_tail = out[1:]
-        while len(convo_tail) > 1 and total() > budget:
-            convo_tail.pop(0)
-            out = [system_msg] + convo_tail
-        if total() > budget and convo_tail:
-            last = convo_tail[-1]
-            last_content = str(last.get("content") or "")
-            sys_len = len(str(system_msg.get("content") or ""))
-            avail = max(1000, budget - sys_len - 200)
-            if len(last_content) > avail:
-                last["content"] = cap_tool_result(last_content, avail)
-            out = [system_msg] + convo_tail
+        # Hitta index för första riktiga användarfrågan
+        pinned_indices = {0}
+        for idx, m in enumerate(out):
+            if m.get("role") == "user" and not is_tool_result(m):
+                pinned_indices.add(idx)
+                break  # Fäst den första användarfrågan
+
+        i = 1
+        while i < len(out) - 1 and total() > budget:
+            if i in pinned_indices:
+                i += 1
+                continue
+            # Ta bort opinnade äldre turer (assistant eller gamla tool_results)
+            out.pop(i)
+            # Justera pinned_indices
+            pinned_indices = {idx if idx < i else idx - 1 for idx in pinned_indices}
     return out

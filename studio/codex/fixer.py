@@ -32,10 +32,24 @@ from .github import github_close_issue, github_comment_issue, github_fetch_repo,
 from .testing import run_project_tests
 
 log = get_logger("ollamastudio.issue_fixer")
-OMNIROUTE_URL = os.environ.get("OMNIROUTE_URL", "http://192.168.107.15:20128/v1")
+OMNIROUTE_URL = os.environ.get("OMNIROUTE_URL", "").strip()
 
 _active_fix_tasks = {}
 _fix_tasks_lock = threading.Lock()
+
+
+def _safe_repo_path(repo_dir, rel):
+    """Säker sökvägskontroll som förhindrar path traversal och symlänkflykt (Issue #17)."""
+    if not rel or os.path.isabs(rel) or ".." in rel.replace("\\", "/").split("/"):
+        return None
+    root = os.path.realpath(repo_dir)
+    p = os.path.join(root, rel)
+    if os.path.islink(p):
+        return None
+    full = os.path.realpath(p)
+    if os.path.commonpath([root, full]) != root or not os.path.isfile(full):
+        return None
+    return full
 
 
 def init_fixer_db():
@@ -139,23 +153,31 @@ class IssueFixerRunner(threading.Thread):
 
             self._log(f"Target Issue: #{self.issue_number} - {self.issue_title}")
 
-            # 3. Extrahera filnamn ur beskrivning eller sökning
+            # 3. Extrahera filnamn ur beskrivning eller sökning med säker path-kontroll (Issue #17)
             target_file = None
+            full_path = None
             m = re.search(r"[`'\"]([a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+)[`'\"]", self.issue_body)
             if m:
                 cand = m.group(1).replace("\\", "/")
-                if os.path.exists(os.path.join(repo_dir, cand)):
-                    target_file = cand
+                safe_cand = _safe_repo_path(repo_dir, cand)
+                if safe_cand:
+                    target_file = os.path.relpath(safe_cand, repo_dir).replace("\\", "/")
+                    full_path = safe_cand
 
-            # Om inte hittad via regex, sök i repo
+            # Om inte hittad via regex, sök säkert i repo
             if not target_file:
-                for root, _, files in os.walk(repo_dir):
-                    if ".git" in root:
-                        continue
+                for root, dirs, files in os.walk(repo_dir):
+                    dirs[:] = [d for d in dirs if d != ".git" and not os.path.islink(os.path.join(root, d))]
                     for f in files:
+                        p_file = os.path.join(root, f)
+                        if os.path.islink(p_file):
+                            continue
                         if f in self.issue_body and f.endswith((".py", ".js", ".ts", ".go", ".rs")):
-                            target_file = os.path.relpath(os.path.join(root, f), repo_dir).replace("\\", "/")
-                            break
+                            safe_cand = _safe_repo_path(repo_dir, os.path.relpath(p_file, repo_dir))
+                            if safe_cand:
+                                target_file = os.path.relpath(safe_cand, repo_dir).replace("\\", "/")
+                                full_path = safe_cand
+                                break
                     if target_file:
                         break
 
@@ -165,10 +187,11 @@ class IssueFixerRunner(threading.Thread):
 
             # 4. Läs källkod
             file_content = ""
-            full_path = os.path.join(repo_dir, target_file) if target_file else None
-            if full_path and os.path.exists(full_path):
+            original_code = ""
+            if full_path and os.path.isfile(full_path):
                 with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                     file_content = fh.read(15000)
+                original_code = file_content
 
             # 5. Fråga OmniRoute / LLM om minimal och säker patch
             self._log("Consulting AI model (auto/best-coding via OmniRoute) for verified fix patch...")
@@ -212,9 +235,16 @@ class IssueFixerRunner(threading.Thread):
                 self._log(f"OmniRoute request failed: {e}")
 
             if full_path and updated_code and len(updated_code) > 20:
-                with open(full_path, "w", encoding="utf-8") as fh:
-                    fh.write(updated_code)
-                self._log(f"Patch applied to {target_file} ({len(updated_code)} bytes).")
+                # Kontrollera igen och skriv med O_NOFOLLOW
+                safe_write = _safe_repo_path(repo_dir, target_file)
+                if safe_write:
+                    flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+                    fd = os.open(safe_write, flags)
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(updated_code)
+                    self._log(f"Patch applied to {target_file} ({len(updated_code)} bytes).")
+                else:
+                    self._log("Rejected writing to untrusted or external file path.")
             else:
                 self._log("Warning: Could not automatically patch specific file. Continuing to test verification.")
 
@@ -309,29 +339,36 @@ class IssueFixerRunner(threading.Thread):
             self.test_passed = passed_tests
 
             # ========================================================
-            # 7. AVSLUTNING, GITHUB KOMMENTAR & STÄNGNING
+            # 7. AVSLUTNING, GITHUB KOMMENTAR & STÄNGNING (Issue #38)
             # ========================================================
             self.stage = "closing_issue"
             self.progress = 90
 
+            patched = bool(full_path and updated_code and updated_code != original_code)
             comment_body = (
                 f"### 🛡️ Automated Issue Fix & Verification Report\n\n"
-                f"Ollama Studio has resolved this issue in workspace `{self.repo}`.\n\n"
+                f"Ollama Studio fix processing in workspace `{self.repo}`:\n\n"
+                f"- **Patch applicerad**: {'Ja' if patched else 'Nej'}\n"
+                f"- **Tester**: {'Godkända' if passed_tests else 'MISSLYCKADES'}\n\n"
                 f"#### Verification & Test Results:\n"
-                f"```text\n{self.test_output}\n```\n\n"
-                f"All security and regression checks passed. Closing issue."
+                f"```text\n{self.test_output}\n```\n"
             )
 
-            # Kommentera och stäng på GitHub
-            github_comment_issue(self.issue_number, comment_body, project_slug=self.repo)
-            ok_close, msg_close = github_close_issue(self.issue_number, project_slug=self.repo)
-
-            if ok_close:
-                self._log(f"GitHub Issue #{self.issue_number} successfully closed on GitHub!")
+            if patched and passed_tests:
+                comment_body += "\nAll security and regression checks passed. Closing issue."
+                github_comment_issue(self.issue_number, comment_body, project_slug=self.repo)
+                ok_close, msg_close = github_close_issue(self.issue_number, project_slug=self.repo)
+                if ok_close:
+                    self._log(f"GitHub Issue #{self.issue_number} successfully closed on GitHub!")
+                else:
+                    self._log(f"Note on GitHub issue closing: {msg_close}")
+                self.status = "completed"
             else:
-                self._log(f"Note on GitHub issue closing: {msg_close}")
+                comment_body += "\n⚠️ Checks or patch not fully passed. Keeping issue open for human review."
+                github_comment_issue(self.issue_number, comment_body, project_slug=self.repo)
+                self.status = "needs_review"
+                self._log(f"Issue #{self.issue_number} marked as needs_review (patched={patched}, tests_passed={passed_tests}).")
 
-            self.status = "completed"
             self.stage = "done"
             self.progress = 100
             self._log(f"Issue #{self.issue_number} fix and verification fully completed!")

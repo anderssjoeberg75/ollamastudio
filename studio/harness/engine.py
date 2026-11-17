@@ -38,7 +38,7 @@ from ..logging_util import get_logger
 
 log = get_logger("ollamastudio.harness")
 
-OMNIROUTE_URL = os.environ.get("OMNIROUTE_URL", "http://192.168.107.15:20128/v1")
+OMNIROUTE_URL = os.environ.get("OMNIROUTE_URL", "").strip()
 _active_runners = {}
 _runner_lock = threading.Lock()
 
@@ -47,31 +47,32 @@ def _llm_chat(prompt, system_prompt="You are a professional security researcher.
     """Anropar LLM via OmniRoute (i första hand) eller lokal llama-server.
     Returnerar (content, total_tokens).
     """
-    # 1. Prova OmniRoute
-    try:
-        req_url = OMNIROUTE_URL.rstrip("/") + "/chat/completions"
-        target_model = model or "auto/best-coding"
-        payload = {
-            "model": target_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1,
-            "max_tokens": 4096
-        }
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace"))
-            tokens = data.get("usage", {}).get("total_tokens", 0)
-            if not tokens:
-                tokens = (len(prompt) + len(system_prompt) + 500) // 4
-            choices = data.get("choices") or []
-            if choices:
-                return choices[0].get("message", {}).get("content", "").strip(), tokens
-    except Exception as e:
-        log.warning("OmniRoute anrop misslyckades (%s), provar lokal backend: %s", req_url, e)
+    # 1. Prova OmniRoute (endast om konfigurerad)
+    if OMNIROUTE_URL:
+        try:
+            req_url = OMNIROUTE_URL.rstrip("/") + "/chat/completions"
+            target_model = model or "auto/best-coding"
+            payload = {
+                "model": target_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.1,
+                "max_tokens": 4096
+            }
+            body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+                tokens = data.get("usage", {}).get("total_tokens", 0)
+                if not tokens:
+                    tokens = (len(prompt) + len(system_prompt) + 500) // 4
+                choices = data.get("choices") or []
+                if choices:
+                    return choices[0].get("message", {}).get("content", "").strip(), tokens
+        except Exception as e:
+            log.warning("OmniRoute anrop misslyckades (%s), provar lokal backend: %s", req_url, e)
 
     # 2. Fallback: Lokal llama-server / Ollama
     base = backends.select_optimal_backend()
@@ -228,8 +229,8 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 self._log(f"Repository cloned/synced to server disk: {target_path}")
 
             if not target_path:
-                from ..codex.workspace import ws_current
-                target_path = ws_current()
+                from ..config import code_workspace_root
+                target_path = code_workspace_root()
 
             if not target_path or not os.path.exists(target_path):
                 self.status = "error"
@@ -623,8 +624,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
             resp, tok = _llm_chat(prompt, system_prompt=system_prompt, model="auto/best-reasoning", timeout=50)
             self.tokens_used += tok
             parsed = self._extract_json(resp)
-            verdict = parsed.get("verdict", "").lower() if isinstance(parsed, dict) else ""
-            conf_score = parsed.get("calculated_confidence", 0) if isinstance(parsed, dict) else 0
+            verdict = str(parsed.get("verdict", "")).lower() if isinstance(parsed, dict) else ""
+            raw_conf = parsed.get("calculated_confidence", 0) if isinstance(parsed, dict) else 0
+            try:
+                conf_score = float(raw_conf)
+            except (ValueError, TypeError):
+                conf_score = 0.0
 
             cand["vvs_validation"] = parsed if isinstance(parsed, dict) else {"verdict": "rejected", "reasoning": "Parse error in VVS"}
             if isinstance(parsed, dict) and parsed.get("poc"):

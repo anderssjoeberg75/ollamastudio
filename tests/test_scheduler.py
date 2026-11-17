@@ -301,13 +301,19 @@ class TestScheduler(unittest.TestCase):
         self.assertEqual(fallback, "some-basic-model:latest")
 
     def test_select_optimal_backend(self):
-        from studio import backends
+        from studio import backends, config
         with patch.object(backends, "_backend_is_alive") as mock_alive:
             # Simulera att port 8080 och 11434 är vid liv
             mock_alive.side_effect = lambda u: ":8080" in u or ":11434" in u
             with patch.dict(backends.BACKENDS[0], {"url": "http://127.0.0.1:11434"}):
+                # Standard: backend_autodiscover är av, konfigurerad Ollama väljs
                 chosen = backends.select_optimal_backend()
-                self.assertIn(":8080", chosen)
+                self.assertEqual(chosen, "http://127.0.0.1:11434")
+
+                # Med autodiscover aktivt: :8080 upptäcks och föredras
+                with patch.object(config, "setting_bool", side_effect=lambda k: True if k == "backend_autodiscover" else False):
+                    chosen_auto = backends.select_optimal_backend()
+                    self.assertIn(":8080", chosen_auto)
 
 
 if __name__ == "__main__":

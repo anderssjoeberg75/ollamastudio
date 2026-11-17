@@ -53,11 +53,38 @@ def code_repos_root(create=False):
     return path
 
 
-def repo_dir_name(slug):
-    """Mappnamn för ett repo: "ägare__namn" (platt och förutsägbart)."""
-    owner, _, name = (slug or "").partition("/")
-    return "%s__%s" % (re.sub(r"[^A-Za-z0-9._-]", "-", owner),
-                       re.sub(r"[^A-Za-z0-9._-]", "-", name))
+_GH_URL_RE = re.compile(r"^(?:https?://github\.com/|git@github\.com:)?([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+
+
+def _normalize_gh_slug(slug_or_url):
+    """Normaliserar full GitHub-URL eller slug till 'ägare/repo' (Issue #57)."""
+    val = (slug_or_url or "").strip()
+    if not val:
+        return ""
+    m = _GH_URL_RE.match(val)
+    if m:
+        return m.group(1).rstrip("/")
+    if "/" in val:
+        parts = [p for p in val.strip("/").split("/") if p]
+        if len(parts) >= 2:
+            return f"{parts[-2]}/{parts[-1].removesuffix('.git')}"
+    return val
+
+
+def repo_dir_name(slug, host="github.com"):
+    """Entydigt mappnamn för ett repo inklusive host och hash mot kollisioner (Issue #55)."""
+    norm_slug = _normalize_gh_slug(slug)
+    parts = [p for p in norm_slug.strip("/").split("/") if p]
+    if host.lower() in ("github.com", "github") and len(parts) == 2:
+        # Bakåtkompatibel standard för GitHub owner/repo: owner__name
+        safe = "%s__%s" % (re.sub(r"[^A-Za-z0-9._-]", "-", parts[0]),
+                           re.sub(r"[^A-Za-z0-9._-]", "-", parts[1]))
+        return safe
+    # För subgroups (GitLab) eller andra hosts: undvik kollisioner med hash
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", norm_slug.replace("/", "__"))
+    import hashlib
+    h = hashlib.sha1(f"{host.lower()}/{norm_slug.lower()}".encode()).hexdigest()[:8]
+    return f"{safe}__{h}"
 
 
 def github_list_repos(limit=100, ttl=120):
@@ -385,7 +412,7 @@ def github_list_issues(project_slug=None, state="open", max_items=200):
     if not token:
         return []
 
-    slug = (project_slug or "").strip()
+    slug = _normalize_gh_slug(project_slug)
     if not slug:
         owner, repo = git_remote_slug()
         if owner and repo:
@@ -440,7 +467,7 @@ def github_comment_issue(issue_number, note, project_slug=None):
     if not token or not note:
         return False, "Ingen token eller anteckning"
 
-    slug = (project_slug or "").strip()
+    slug = _normalize_gh_slug(project_slug)
     if not slug:
         owner, repo = git_remote_slug()
         if owner and repo:
@@ -475,7 +502,7 @@ def github_close_issue(issue_number, project_slug=None):
     if not token:
         return False, "Ingen GitHub-token"
 
-    slug = (project_slug or "").strip()
+    slug = _normalize_gh_slug(project_slug)
     if not slug:
         owner, repo = git_remote_slug()
         if owner and repo:

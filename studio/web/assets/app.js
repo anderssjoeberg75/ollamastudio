@@ -188,6 +188,7 @@ function gpuMismatch(e){
 function headers(json){
   const h = json ? {'Content-Type':'application/json'} : {};
   if(AUTH && token) h['X-Auth-Token'] = token;
+  h['X-Requested-With'] = 'ollama-studio';
   return h;
 }
 function ensureToken(){
@@ -198,6 +199,11 @@ function ensureToken(){
 }
 async function api(path, opts){
   ensureToken();
+  opts = Object.assign({}, opts);
+  const h = new Headers(opts.headers || {});
+  if (AUTH && token && !h.has('X-Auth-Token')) h.set('X-Auth-Token', token);
+  h.set('X-Requested-With', 'ollama-studio');
+  opts.headers = h;
   const r = await fetch(path, opts);
   if(r.status === 401){ localStorage.removeItem('os_token'); token=''; throw new Error('Invalid token'); }
   return r;
@@ -261,10 +267,11 @@ function setStatus(text, color){
   document.getElementById('statusDot').style.color = color;
   document.getElementById('statusText').textContent = text;
 }
-function toast(msg, err){
+function toast(msg, kind){
   const t = document.getElementById('toast');
-  t.textContent = (err?'× ':'✓ ')+msg;
-  t.className = 'toast show ' + (err?'err':'ok');
+  const isErr = kind === true || kind === 'error' || kind === 'danger';
+  t.textContent = (isErr ? '× ' : '✓ ') + msg;
+  t.className = 'toast show ' + (isErr ? 'err' : 'ok');
   setTimeout(()=>{ t.className='toast'; }, 2800);
 }
 
@@ -1390,13 +1397,16 @@ async function sendChat(){
   if(chatController) return;
   if(!text && !pendingImages.length) return;
 
+  const myMsgs = chatMessages;
+  const myConvoId = currentConvoId;
   const userMsg = {role:'user', content:text};
   if(pendingImages.length){ userMsg.images = pendingImages.slice(); }
-  chatMessages.push(userMsg);
+  myMsgs.push(userMsg);
   input.value=''; autoGrow(input);
   pendingImages = []; renderAttachments();
-  chatMessages.push({role:'assistant', content:''});
-  const idx = chatMessages.length - 1;
+  const target = {role:'assistant', content:''};
+  myMsgs.push(target);
+  const idx = myMsgs.length - 1;
   renderChat();
   const box = document.getElementById('chatMessages');
   const send = document.getElementById('chatSend');
@@ -1452,17 +1462,17 @@ async function sendChat(){
             continue;
           }
           if(msg.message && msg.message.content){
-            chatMessages[idx].content += msg.message.content;
-            if(box.lastChild) box.lastChild.textContent = chatMessages[idx].content;
-            box.scrollTop = box.scrollHeight;
+            target.content += msg.message.content;
+            if(chatMessages === myMsgs && box.lastChild) box.lastChild.textContent = target.content;
+            if(chatMessages === myMsgs) box.scrollTop = box.scrollHeight;
           }
         if(msg.done){
           let tokenCount = msg.eval_count;
-          if(!tokenCount && chatMessages[idx] && chatMessages[idx].content){
-            tokenCount = Math.round(chatMessages[idx].content.length / 3.8);
+          if(!tokenCount && target && target.content){
+            tokenCount = Math.round(target.content.length / 3.8);
           }
           if(tokenCount){
-            chatMessages[idx].stats = {
+            target.stats = {
               tps: msg.eval_duration ? (tokenCount / (msg.eval_duration/1e9)) : 0,
               tokens: tokenCount,
               secs: (msg.total_duration||0)/1e9,
@@ -1471,23 +1481,27 @@ async function sendChat(){
             addCumulativeTokens(tokenCount);
           }
         }
-        if(msg.error){ chatMessages[idx].content += '\n[Error: '+msg.error+']'; }
+        if(msg.error){ target.content += '\n[Error: '+msg.error+']'; }
       }catch(e){}
     }
   }
-  if(!chatMessages[idx].content) chatMessages[idx].content = '(no response)';
-  renderChat();
-  autoPreviewGeneratedCode(chatMessages[idx].content);
-    if(memory) memWrite(text, chatMessages[idx].content);
-  }catch(e){
-    if(e.name === 'AbortError') chatMessages[idx].content += '  [cancelled]';
-    else { chatMessages[idx].content = '[Error: '+e.message+']'; toast('Chat failed', true); }
+  if(!target.content) target.content = '(no response)';
+  if(chatMessages === myMsgs){
     renderChat();
+    autoPreviewGeneratedCode(target.content);
+  }
+  if(memory) memWrite(text, target.content);
+  }catch(e){
+    if(e.name === 'AbortError') target.content += '  [cancelled]';
+    else { target.content = '[Error: '+e.message+']'; toast('Chat failed', true); }
+    if(chatMessages === myMsgs) renderChat();
   }finally{
     chatController = null;
     const send = document.getElementById('chatSend');
     if(send) send.innerHTML = '<i class="ph-bold ph-arrow-up"></i>';
-    saveCurrentConvo();
+    if(chatMessages === myMsgs){
+      saveCurrentConvo();
+    }
   }
 }
 document.getElementById('chatSend').onclick = ()=>{ if(chatController) chatController.abort(); else sendChat(); };
@@ -4449,7 +4463,7 @@ async function loadGhIssues(state = 'open', overrideSlug = null){
             </div>
           </div>
           <div style="display:flex;gap:6px;align-items:center">
-            <button class="btn small primary" onclick="fixSingleIssue('${esc(slug)}', ${iss.iid}, '${esc(iss.title.replace(/'/g, "\\'"))}')" style="font-size:11px;padding:3px 10px;display:inline-flex;align-items:center;gap:4px" id="btnFix-${iss.iid}">
+            <button class="btn small primary js-fix" data-repo="${esc(slug)}" data-iid="${Number(iss.iid)}" data-title="${esc(iss.title || '')}" style="font-size:11px;padding:3px 10px;display:inline-flex;align-items:center;gap:4px" id="btnFix-${Number(iss.iid)}">
               <i class="ph ph-wrench"></i> Fix
             </button>
             <a href="${esc(iss.web_url)}" target="_blank" class="btn small ghost" style="font-size:11px;padding:3px 8px">GitHub ↗</a>
@@ -4458,6 +4472,11 @@ async function loadGhIssues(state = 'open', overrideSlug = null){
       `;
     });
     container.innerHTML = html;
+    container.querySelectorAll('.js-fix').forEach(b => {
+      b.addEventListener('click', () => {
+        fixSingleIssue(b.dataset.repo, Number(b.dataset.iid), b.dataset.title || '');
+      });
+    });
   } catch(e){
     container.innerHTML = `<div style="color:var(--danger);font-size:13px;padding:12px;text-align:center">Error loading issues: ${esc(e.message)}</div>`;
   }
@@ -4763,17 +4782,19 @@ function popoutPreview() {
   if (iframe && iframe.src && iframe.src !== 'about:blank') {
     window.open(iframe.src, '_blank');
   } else if (iframe && iframe.srcdoc) {
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(iframe.srcdoc);
-      w.document.close();
-    }
+    const html = '<meta http-equiv="Content-Security-Policy" content="sandbox allow-scripts allow-forms allow-modals">'
+               + iframe.srcdoc;
+    const url = URL.createObjectURL(new Blob([html], {type: 'text/html'}));
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   } else {
     const code = document.getElementById('previewCodePre');
-    const w = window.open('', '_blank');
-    if (w && code) {
-      w.document.write('<pre style="font-family:monospace;padding:16px;">' + (code.textContent || 'No code to preview') + '</pre>');
-      w.document.close();
+    if (code) {
+      const html = '<meta http-equiv="Content-Security-Policy" content="sandbox">'
+                 + '<pre style="font-family:monospace;padding:16px;">' + esc(code.textContent || '') + '</pre>';
+      const url = URL.createObjectURL(new Blob([html], {type: 'text/html'}));
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
     }
   }
 }

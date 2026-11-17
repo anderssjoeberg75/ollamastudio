@@ -252,6 +252,24 @@ _BLOCK_END_RE = re.compile(r"</(p|div|li|tr|h[1-6]|section|article|table)\s*>|<b
                            re.I)
 
 
+def _ip_is_safe_public(ip):
+    """Kontrollera att IP-adressen är strikt publik och global (Issue #31).
+    Blockerar även 100.64.0.0/10 (CGNAT/Tailscale) och fec0::/10 (site-local)."""
+    if ip.version == 6:
+        if ip.ipv4_mapped:
+            ip = ip.ipv4_mapped
+        elif ip.sixtofour:
+            ip = ip.sixtofour
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved \
+            or ip.is_multicast or ip.is_unspecified:
+        return False
+    if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+        return False
+    if ip.version == 6 and ip in ipaddress.ip_network("fec0::/10"):
+        return False
+    return getattr(ip, "is_global", True)
+
+
 def url_is_public(url):
     """True om URL:en är http(s) mot en publik adress.
 
@@ -275,8 +293,7 @@ def url_is_public(url):
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             return False
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+        if not _ip_is_safe_public(ip):
             return False
     return True
 
@@ -308,8 +325,7 @@ def _resolve_public_ip(host):
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             raise ValueError("oläsbar adress")
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+        if not _ip_is_safe_public(ip):
             raise ValueError("icke-publik adress: %s" % ip)
         if chosen is None:
             chosen = info[4][0]
@@ -446,16 +462,25 @@ def enrich_results(results, pages=3, query="", timeout=PAGE_FETCH_TIMEOUT,
     targets = [r for r in (results or []) if r.get("url")][:max(0, int(pages or 0))]
     if not targets:
         return results
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(targets))) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(targets)))
+    try:
         futures = {pool.submit(fetch_page_text, r["url"], timeout): r for r in targets}
-        for future in concurrent.futures.as_completed(futures, timeout=timeout + 4):
-            try:
-                text = future.result()
-            except Exception as e:
-                log.debug("page fetch task failed: %s", e)
-                text = ""
-            if text:
-                futures[future]["text"] = relevant_excerpt(text, query, per_page)
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=timeout + 4):
+                try:
+                    text = future.result()
+                except Exception as e:
+                    log.debug("page fetch task failed: %s", e)
+                    text = ""
+                if text:
+                    futures[future]["text"] = relevant_excerpt(text, query, per_page)
+        except concurrent.futures.TimeoutError:
+            log.info("enrich_results: timeout reached, returning partial results")
+    finally:
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
     return results
 
 

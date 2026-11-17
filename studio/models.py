@@ -230,16 +230,20 @@ def select_optimal_model(models, task="code"):
             else:
                 score += 50
 
-            # Storleksbonus – 14b och 7b är optimal sweet spot för GPU VRAM (12 GB)
-            if "14b" in n:
-                score += 150
-            elif any(s in n for s in ("7b", "8b", "12b")):
-                score += 100
-            elif "32b" in n:
-                score += 50
-            elif "70b" in n:
+            # Storleksbonus – parsa numeriskt så att 13b/72b inte matchar 3b/2b (Issue #47)
+            m = re.search(r"(?:^|[^\d.])(\d+(?:\.\d+)?)b\b", n)
+            size = float(m.group(1)) if m else None
+            if size is None:
+                pass
+            elif size < 4:
                 score -= 100
-            elif any(s in n for s in ("1b", "2b", "3b")):
+            elif size <= 13:
+                score += 100
+            elif size <= 14:
+                score += 150
+            elif size <= 34:
+                score += 50
+            else:
                 score -= 100
 
         return score

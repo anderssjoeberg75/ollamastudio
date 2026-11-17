@@ -100,9 +100,13 @@ def _risky_path(value: Any) -> bool:
 
 
 def get_overview_snapshot() -> dict:
-    """Returnerar ett samlat översikts-ögonblick för Ollama Studios dashboard."""
-    import psutil
-    proc_count = len(psutil.pids()) if hasattr(psutil, "pids") else 0
+    """Returnerar ett samlat översikts-ögonblick för Ollama Studios dashboard (Issue #44)."""
+    proc_count = 0
+    try:
+        import psutil
+        proc_count = len(psutil.pids()) if hasattr(psutil, "pids") else 0
+    except Exception:
+        pass
     return {
         "status": "active",
         "risk_level": "quiet",
