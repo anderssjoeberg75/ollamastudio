@@ -485,7 +485,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
             proj = str(raw_proj).strip() if raw_proj is not None and not isinstance(raw_proj, bool) else ""
             raw_prof = data.get("profile")
             profile = str(raw_prof).strip() if raw_prof is not None else "standard"
-            create_issues = bool(data.get("create_issues", False))
+            create_issues = bool(data.get("create_issues", True))
+            send_email = bool(data.get("send_email", True))
+            email_to = str(data.get("email_to") or "anders@andrix.se").strip()
             raw_target = data.get("target_dir")
             target_dir = str(raw_target).strip() if raw_target is not None and not isinstance(raw_target, bool) else ""
             use_skills = data.get("use_skills", True)
@@ -498,6 +500,8 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 profile=profile,
                 target_dir=target_dir or None,
                 create_issues=create_issues,
+                send_email=send_email,
+                email_to=email_to,
                 use_skills=use_skills,
                 extra_skills=extra_skills
             )

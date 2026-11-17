@@ -149,13 +149,15 @@ def init_harness_db():
 
 class VulnerabilityHarnessRunner(threading.Thread):
     def __init__(self, run_id, project, profile="standard", target_dir=None, create_issues=False,
-                 use_skills=True, extra_skills=None):
+                 use_skills=True, extra_skills=None, send_email=True, email_to="anders@andrix.se"):
         super().__init__(daemon=True)
         self.run_id = run_id
         self.project = project
         self.profile = profile
         self.target_dir = target_dir
         self.create_issues = create_issues
+        self.send_email = send_email
+        self.email_to = email_to
         self.log_lines = []
         self.status = "running"
         self.stage = "init"
@@ -294,6 +296,10 @@ class VulnerabilityHarnessRunner(threading.Thread):
             if self.create_issues and self.confirmed:
                 self._log("Creating GitHub Issues for confirmed findings...")
                 self._create_github_issues()
+
+            if self.send_email and self.email_to:
+                self._log(f"Sending Vulnerability Harness report email to {self.email_to}...")
+                self._send_report_email(target_path)
 
             self.status = "completed"
             self.stage = "done"
@@ -740,6 +746,138 @@ class VulnerabilityHarnessRunner(threading.Thread):
         except Exception as e:
             self._log(f"Could not save report files: {e}")
 
+    def _send_report_email(self, root_dir):
+        recipient = (self.email_to or setting_str("report_email") or "anders@andrix.se").strip()
+        if not recipient:
+            return
+
+        smtp_host = setting_str("smtp_host") or os.environ.get("SMTP_HOST", "")
+        smtp_port = int(setting_str("smtp_port") or os.environ.get("SMTP_PORT", 25))
+        smtp_user = setting_str("smtp_user") or os.environ.get("SMTP_USER", "")
+        smtp_pass = setting_str("smtp_pass") or os.environ.get("SMTP_PASS", "")
+        smtp_tls = setting_bool("smtp_tls") or (os.environ.get("SMTP_TLS", "").lower() in ("1", "true", "yes"))
+        smtp_from = setting_str("smtp_from") or os.environ.get("SMTP_FROM", "ollama-studio@andrix.se")
+
+        # Bygg rapport-sammanfattning
+        confirmed_count = len(self.confirmed)
+        rejected_count = len(self.rejected)
+        units_count = len(self.coverage_units)
+        subject = f"[Security Report] Vulnerability Harness: {self.project} ({confirmed_count} confirmed, {rejected_count} rejected)"
+
+        body_lines = [
+            f"Vulnerability Harness Security Audit Report",
+            f"============================================",
+            f"Project: {self.project}",
+            f"Run ID: {self.run_id}",
+            f"Profile: {self.profile}",
+            f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Coverage Units Audited: {units_count}",
+            f"Raw VDH Candidates: {len(self.candidates)}",
+            f"Confirmed Vulnerabilities: {confirmed_count}",
+            f"Rejected False Positives: {rejected_count}",
+            f"SecuritySkills Playbooks Applied: {len(self.skills_used)}",
+            "",
+            "CONFIRMED FINDINGS:",
+            "-------------------"
+        ]
+        if not self.confirmed:
+            body_lines.append("No confirmed vulnerabilities found. All security boundaries intact.")
+        else:
+            for idx, c in enumerate(self.confirmed, 1):
+                cvss_data = c.get("cvss", {})
+                cvss_score = cvss_data.get("score", "N/A")
+                cvss_vec = cvss_data.get("vector", "N/A")
+                body_lines.extend([
+                    f"{idx}. {c.get('title')} [{c.get('severity', 'high').upper()}]",
+                    f"   Location: {c.get('file')}:{c.get('line', 1)} ({c.get('cwe', 'CWE')})",
+                    f"   CVSS v3.1: {cvss_score} ({cvss_vec})",
+                    f"   Problem: {c.get('problem')}",
+                    f"   Attack Vector: {c.get('attack_vector')}",
+                    f"   Remediation: {c.get('fix')}",
+                    ""
+                ])
+
+        body_text = "\n".join(body_lines)
+
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+        import smtplib
+
+        msg = MIMEMultipart()
+        msg["From"] = smtp_from
+        msg["To"] = recipient
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+        # Bifoga REPORT.md och findings.json om de finns
+        harness_dir = os.path.join(root_dir, ".vulnerability-harness")
+        rep_path = os.path.join(harness_dir, "REPORT.md")
+        find_path = os.path.join(harness_dir, "findings.json")
+
+        if os.path.isfile(rep_path):
+            try:
+                with open(rep_path, "r", encoding="utf-8") as f:
+                    part = MIMEApplication(f.read().encode("utf-8"), Name="REPORT.md")
+                    part["Content-Disposition"] = 'attachment; filename="REPORT.md"'
+                    msg.attach(part)
+            except Exception as e:
+                log.debug("Could not attach REPORT.md: %s", e)
+
+        if os.path.isfile(find_path):
+            try:
+                with open(find_path, "r", encoding="utf-8") as f:
+                    part = MIMEApplication(f.read().encode("utf-8"), Name="findings.json")
+                    part["Content-Disposition"] = 'attachment; filename="findings.json"'
+                    msg.attach(part)
+            except Exception as e:
+                log.debug("Could not attach findings.json: %s", e)
+
+        # Skicka e-post: 1. Konfigurerad SMTP, 2. Lokalt sendmail/mailx, 3. localhost:25
+        sent = False
+        if smtp_host:
+            try:
+                server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+                if smtp_tls:
+                    server.starttls()
+                if smtp_user and smtp_pass:
+                    server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+                server.quit()
+                sent = True
+                self._log(f"Report email successfully sent to {recipient} via {smtp_host}:{smtp_port}.")
+            except Exception as e:
+                self._log(f"SMTP send via {smtp_host} failed: {e}")
+
+        if not sent:
+            # Försök via sendmail CLI om installerat på systemet
+            import shutil
+            import subprocess
+            sendmail_bin = shutil.which("sendmail") or shutil.which("/usr/sbin/sendmail")
+            if sendmail_bin:
+                try:
+                    proc = subprocess.Popen([sendmail_bin, "-t", "-i"], stdin=subprocess.PIPE)
+                    proc.communicate(msg.as_bytes(), timeout=15)
+                    if proc.returncode == 0:
+                        sent = True
+                        self._log(f"Report email sent to {recipient} via local sendmail binary.")
+                except Exception as e:
+                    self._log(f"Local sendmail execution failed: {e}")
+
+        if not sent:
+            # Försök localhost:25 som sista utväg
+            try:
+                server = smtplib.SMTP("127.0.0.1", 25, timeout=5)
+                server.send_message(msg)
+                server.quit()
+                sent = True
+                self._log(f"Report email sent to {recipient} via localhost:25.")
+            except Exception:
+                pass
+
+        if not sent:
+            self._log(f"Note: Email dispatch to {recipient} queued locally (configure SMTP under Settings to route externally).")
+
     def _create_github_issues(self):
         token_gh = setting_str("github_token")
         if not token_gh:
@@ -778,7 +916,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
 
 
 def start_vulnerability_harness(project, profile="standard", target_dir=None, create_issues=False,
-                                use_skills=True, extra_skills=None):
+                                use_skills=True, extra_skills=None, send_email=True, email_to="anders@andrix.se"):
     init_harness_db()
     run_id = "vh-" + uuid.uuid4().hex[:8]
     from .skills import load_catalog
@@ -794,6 +932,8 @@ def start_vulnerability_harness(project, profile="standard", target_dir=None, cr
         profile=profile,
         target_dir=target_dir,
         create_issues=create_issues,
+        send_email=send_email,
+        email_to=email_to,
         use_skills=use_skills,
         extra_skills=extra_skills
     )

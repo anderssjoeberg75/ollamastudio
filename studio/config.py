@@ -132,6 +132,14 @@ SETTINGS_SPEC = {
     # Stöd för llama-server (llama.cpp)
     "llama_url":            ("LLAMA_URL", "", "str", False),
     "backend_type":         ("OLLAMA_STUDIO_BACKEND_TYPE", "auto", "str", False),
+    # E-postavisering för säkerhetsrapporter och harness
+    "report_email":         ("OLLAMA_STUDIO_REPORT_EMAIL", "anders@andrix.se", "str", False),
+    "smtp_host":            ("OLLAMA_STUDIO_SMTP_HOST", "", "str", False),
+    "smtp_port":            ("OLLAMA_STUDIO_SMTP_PORT", "25", "str", False),
+    "smtp_user":            ("OLLAMA_STUDIO_SMTP_USER", "", "str", False),
+    "smtp_pass":            ("OLLAMA_STUDIO_SMTP_PASS", "", "str", True),
+    "smtp_tls":             ("OLLAMA_STUDIO_SMTP_TLS", "0", "bool", False),
+    "smtp_from":            ("OLLAMA_STUDIO_SMTP_FROM", "ollama-studio@andrix.se", "str", False),
 }
 
 _settings_lock = threading.Lock()

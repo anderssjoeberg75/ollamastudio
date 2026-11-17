@@ -5613,11 +5613,13 @@ async function startHarnessRun() {
   const projSel = document.getElementById('harnessProjectSelect');
   const profSel = document.getElementById('harnessProfileSelect');
   const issuesChk = document.getElementById('harnessCreateIssues');
+  const emailChk = document.getElementById('harnessSendEmail');
   const startBtn = document.getElementById('harnessStartBtn');
 
   const project = projSel ? projSel.value : 'current';
   const profile = profSel ? profSel.value : 'standard';
-  const createIssues = issuesChk ? issuesChk.checked : false;
+  const createIssues = issuesChk ? issuesChk.checked : true;
+  const sendEmail = emailChk ? emailChk.checked : true;
   const skillsChk = document.getElementById('harnessUseSkills');
   const useSkills = skillsChk ? skillsChk.checked : true;
   // Always apply all skills automatically without manual picking
@@ -5636,6 +5638,8 @@ async function startHarnessRun() {
         project: project === 'current' ? (cfg.code_ws_path || 'workspace') : project,
         profile: profile,
         create_issues: createIssues,
+        send_email: sendEmail,
+        email_to: "anders@andrix.se",
         use_skills: useSkills,
         skills: extraSkills
       })

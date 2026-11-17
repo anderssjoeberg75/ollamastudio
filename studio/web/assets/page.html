@@ -554,10 +554,16 @@
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-              <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
-                <input type="checkbox" id="harnessCreateIssues">
-                <span>Automatically create GitHub Issues for confirmed vulnerabilities</span>
-              </label>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
+                  <input type="checkbox" id="harnessCreateIssues" checked>
+                  <span>Automatically create GitHub Issues for confirmed vulnerabilities</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg);cursor:pointer">
+                  <input type="checkbox" id="harnessSendEmail" checked>
+                  <span>Email report to <b>anders@andrix.se</b> when audit completes</span>
+                </label>
+              </div>
               <button class="btn accent" id="harnessStartBtn" onclick="startHarnessRun()">
                 <i class="ph-bold ph-play"></i> <span>Start Vulnerability Harness</span>
               </button>
