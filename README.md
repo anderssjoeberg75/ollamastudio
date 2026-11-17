@@ -447,16 +447,27 @@ CWE Top 25, CIS Docker and Kubernetes, SLSA, NIST and more.
   | Solidity (`.sol`) | `auditing-foundry-smart-contract-security` |
   | `serverless.yml`, Lambda handlers | `performing-serverless-function-security-review` |
 
-- **Budgeted digests**: control tables, checklists and vulnerable patterns are kept; report templates and
-  reference lists are dropped. The budget is about 2.5k, 5k or 9k characters per unit (Quick, Standard, Deep), so
-  local models are not overwhelmed.
+- **All skills active by default**: all 67 skills are active on every run, with no manual selection. Each file gets
+  its most relevant skills with full checklists, chosen by file type, attack class and code signals. On top of
+  those, up to 1, 2 or 3 more skills (Quick, Standard, Deep) are rotated in by relevance from the pool of skills
+  not yet used in the run:
+  - Specialist skills rotate in only when their code signal is present.
+  - Broad playbooks need at least two distinct term hits in the file.
+  - Compliance, incident-response and SecOps playbooks need three hits.
+
+  At the end, the report says how many skills were applied and lists the ones that matched no code in the
+  audited files.
+- **Strict budgets**: the skill text per file never exceeds about 2.5k, 5k or 9k characters (Quick, Standard,
+  Deep), headers included, however many skills are active. A Deep prompt with 8k characters of code therefore
+  stays at roughly 5k tokens, inside an 8k context window. Control tables, checklists and vulnerable patterns are
+  kept; report templates, tool listings and reference lists are dropped.
 - **Grounded output**: findings carry `framework_refs` such as `OWASP-ASVS V5.3.4`. The validator checks them and
   also receives the `scanner-tuning` false-positive playbook.
 - **Normalized export**: `.vulnerability-harness/securityskills/<skill>.json` validates against the upstream
   `finding.schema.json`. Each finding carries evidence, remediation, confidence, blast radius and a test strategy.
-- **UI controls**: **Apply SecuritySkills playbooks** (on by default), plus an optional picker that forces up to
-  6 extra skills on every unit, e.g. `pci-dss-review` or `hipaa-review` for compliance-focused runs. Specialist
-  skills are marked ◆ in the picker.
+- **Forcing skills (API)**: `POST /api/harness/start` with `skills: [...]` forces up to 6 named skills onto every
+  file instead of the relevance rotation, e.g. `pci-dss-review` or `hipaa-review` for a compliance-focused run. The
+  live card shows how many skills were applied out of the total.
 
 ### Specialist skills (Anthropic-Cybersecurity-Skills)
 

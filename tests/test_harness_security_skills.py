@@ -111,6 +111,85 @@ class TestSpecialistSkills(unittest.TestCase):
         self.assertIn("MITRE-ATT&CK", env["skill"]["frameworks"])
 
 
+class TestAllSkillsMode(unittest.TestCase):
+    """Alla skills aktiva: budget och kontextfönster ska hålla, relevans ska styra."""
+
+    ROUTE = "@app.get('/u')\nimport jwt\ndef u():\n    cursor.execute('select ' + request.args['q'])\n"
+
+    def test_budget_is_strict_even_with_all_skills_active(self):
+        for prof, budget in S.PROFILE_BUDGETS.items():
+            pool = set(S.load_catalog())
+            names, text = S.build_skill_context(
+                {"path": "api/routes.py", "attack_class": "Injection & Input Validation"},
+                self.ROUTE, profile=prof, rotation_pool=pool)
+            self.assertLessEqual(len(text), budget + 400, prof)
+            self.assertLessEqual(len(names), 4 + S.ROTATION_SLOTS[prof])
+
+    def test_digest_keeps_real_checklist_content(self):
+        pool = set(S.load_catalog())
+        _names, text = S.build_skill_context(
+            {"path": "api/routes.py", "attack_class": "Injection & Input Validation"},
+            self.ROUTE, profile="standard", rotation_pool=pool)
+        self.assertIn("V5.3.4", text)          # kontrolltabell, inte bara rubriker
+
+    def test_skill_digest_never_exceeds_budget(self):
+        for name in S.load_catalog():
+            self.assertLessEqual(len(S.skill_digest(name, ["injection"], budget=600)), 600, name)
+
+    def test_rotation_consumes_pool_and_respects_triggers(self):
+        cat = S.load_catalog()
+        pool = set(cat)
+        names, _ = S.build_skill_context({"path": "web/app.js", "attack_class": "x"},
+                                         "const t = 'x';", profile="deep", rotation_pool=pool)
+        for n in names:
+            self.assertNotIn(n, pool)
+        # PHP-specifika och mobila specialister får aldrig roteras in på en JS-fil utan signal.
+        self.assertNotIn("exploiting-type-juggling-vulnerabilities", names)
+        self.assertNotIn("performing-ios-app-security-assessment", names)
+        self.assertIn("exploiting-type-juggling-vulnerabilities", pool)
+
+    def test_rotation_adds_triggered_specialists_beyond_core(self):
+        pool = set(S.load_catalog())
+        content = ("@app.get('/x')\nimport jwt\nfrom flask import redirect\n"
+                   "def x():\n    return redirect(request.args.get('next'))\n# redirect_uri code_verifier\n")
+        names, _ = S.build_skill_context({"path": "api/x.py", "attack_class": "Injection & Input Validation"},
+                                         content, profile="quick", rotation_pool=pool)
+        self.assertIn("testing-jwt-token-security", names)
+        self.assertGreaterEqual(len(names), 3)
+
+    def test_start_uses_all_mode_without_stuffing_extras(self):
+        from studio.harness import engine
+        with patch.object(engine.VulnerabilityHarnessRunner, "start"), \
+                patch.object(engine, "init_harness_db"), patch.object(engine, "sqlite3"):
+            rid = engine.start_vulnerability_harness("p", use_skills=True)
+            runner = engine._active_runners.pop(rid)
+        self.assertTrue(runner.apply_all_skills)
+        self.assertEqual(runner.extra_skills, [])
+        with patch.object(engine.VulnerabilityHarnessRunner, "start"), \
+                patch.object(engine, "init_harness_db"), patch.object(engine, "sqlite3"):
+            rid = engine.start_vulnerability_harness("p", extra_skills=["pci-dss-review", "nope"])
+            runner = engine._active_runners.pop(rid)
+        self.assertFalse(runner.apply_all_skills)
+        self.assertEqual(runner.extra_skills, ["pci-dss-review"])
+
+    @patch("studio.harness.engine._llm_chat")
+    def test_engine_prompt_stays_bounded_in_all_mode(self, mock_llm):
+        mock_llm.return_value = ("[]", 10)
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "routes.py"), "w") as fh:
+                fh.write(self.ROUTE)
+            runner = VulnerabilityHarnessRunner(run_id="t-all", project="p", profile="deep")
+            runner._sync_db = lambda: None
+            runner.skill_rotation_pool = set(S.load_catalog())
+            runner.skills_available = len(runner.skill_rotation_pool)
+            self.assertTrue(runner.apply_all_skills)
+            runner._execute_vdh_hunting(d, [{"unit_id": "u1", "path": "routes.py",
+                                             "attack_class": "Injection & Input Validation"}])
+        prompt = mock_llm.call_args[0][0]
+        self.assertLess(len(prompt), S.PROFILE_BUDGETS["deep"] + 400 + 8000 + 1000)
+        self.assertLess(len(runner.skills_used), 10)
+
+
 class TestSkillSelection(unittest.TestCase):
 
     def test_infra_files_get_matching_skills(self):

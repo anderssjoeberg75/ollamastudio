@@ -514,16 +514,24 @@ def _shrink_fence(block):
 
 
 def skill_digest(name, keywords=None, budget=3000, target=""):
-    """Bygger en kompakt, prioriterad digest av en skill inom `budget` tecken."""
+    """Bygger en kompakt, prioriterad digest av en skill inom `budget` tecken.
+
+    Budgeten är strikt och inkluderar rubriken: beskrivningen kortas så att det
+    alltid blir plats för minst en sektion med faktiska kontroller/checklistor.
+    """
     cat = load_catalog()
     s = cat.get(name)
-    if not s:
+    if not s or budget <= 0:
         return ""
     keywords = [k.lower() for k in (keywords or [])]
-    header = (
-        f"### SKILL: {s['name']} ({s['domain']}) — frameworks: {', '.join(s['frameworks']) or 'n/a'}\n"
-        f"{s['description']}\n"
-    )
+    title = f"### SKILL: {s['name']} ({s['domain']}) — frameworks: {', '.join(s['frameworks']) or 'n/a'}\n"
+    desc_room = max(80, min(len(s["description"]), budget // 6))
+    desc = s["description"]
+    if len(desc) > desc_room:
+        desc = desc[:desc_room].rsplit(" ", 1)[0] + "…"
+    header = title + desc + "\n"
+    if len(header) >= budget:
+        return header[:budget]
     candidates = []
     for idx, sec in enumerate(s["sections"]):
         h = sec["heading"]
@@ -555,8 +563,8 @@ def skill_digest(name, keywords=None, budget=3000, target=""):
     for score, idx, h, txt in candidates:
         block = f"#### {h}\n{txt}\n"
         if used + len(block) > budget:
-            room = budget - used - len(h) - 30
-            if room > 400 and not chosen:
+            room = budget - used - len(h) - 12
+            if room >= 200 and not chosen:
                 block = f"#### {h}\n{txt[:room]}\n…\n"
             else:
                 continue
@@ -565,30 +573,115 @@ def skill_digest(name, keywords=None, budget=3000, target=""):
         if used >= budget:
             break
     chosen.sort()
-    return header + "".join(b for _, b in chosen)
+    return (header + "".join(b for _, b in chosen))[:budget]
 
 
 PROFILE_BUDGETS = {"quick": 2500, "standard": 5000, "deep": 9000}
+# Hur många extra skills per fil som roteras in när alla skills är aktiva.
+ROTATION_SLOTS = {"quick": 1, "standard": 2, "deep": 3}
+_MIN_ROTATION_BUDGET = 450
+
+_RELEVANCE_STOPWORDS = {
+    "security", "secure", "securing", "testing", "test", "performing", "review", "reviewing", "analysis",
+    "analyzing", "implementing", "exploiting", "vulnerabilities", "vulnerability", "assessment", "auditing",
+    "audit", "detecting", "detection", "application", "applications", "with", "for", "and", "the", "using",
+    "management", "config", "configuration", "web", "code", "app", "data", "attack", "attacks", "checks",
+    "design", "build", "deploy", "operate", "assess", "remediate", "monitor", "investigate", "triage",
+    "appsec", "devsecops", "compliance", "governance", "framework", "frameworks", "owasp", "nist", "cis",
+    "cloud", "network", "identity", "access", "red-team", "redteam", "pentest", "blue-team",
+    # Vanliga programmeringsord som annars ger brus
+    "type", "types", "post", "get", "log", "logs", "logging", "request", "requests", "response", "header",
+    "headers", "file", "files", "user", "users", "server", "client", "service", "services", "error", "errors",
+    "input", "output", "value", "values", "string", "object", "function", "functions", "method", "class",
+    "model", "models", "tool", "tools", "agent", "agents", "event", "events", "rule", "rules", "policy",
+    "policies", "scan", "scanning", "scanner", "report", "reports", "incident", "response", "review",
+}
+_relevance_cache = {}
 
 
-def build_skill_context(unit, content="", profile="standard", extra_skills=None):
-    """Returnerar (skill_names, prompt_text) för en coverage-enhet."""
+def _relevance_patterns(name):
+    """Distinkta termer (taggar + namndelar) som indikerar att en skill är relevant för en fil."""
+    if name in _relevance_cache:
+        return _relevance_cache[name]
+    s = load_catalog().get(name) or {}
+    terms = set()
+    for t in list(s.get("tags") or []):
+        for part in re.split(r"[\s_/]+", str(t).lower()):
+            part = part.strip()
+            if len(part) >= 3 and part not in _RELEVANCE_STOPWORDS and not part.isdigit():
+                terms.add(part)
+    pats = [re.compile(r"(?<![a-z0-9])" + re.escape(t).replace(r"\-", "[-_ ]?") + r"(?![a-z0-9])") for t in terms]
+    _relevance_cache[name] = pats
+    return pats
+
+
+def relevance_score(name, content="", path=""):
+    """Antal distinkta skill-termer som förekommer i filens innehåll eller sökväg."""
+    hay = ((path or "") + "\n" + (content or "")[:20000]).lower()
+    return sum(1 for p in _relevance_patterns(name) if p.search(hay))
+
+
+def build_skill_context(unit, content="", profile="standard", extra_skills=None, rotation_pool=None):
+    """Returnerar (skill_names, prompt_text) för en coverage-enhet.
+
+    - Kärn-skills: de mest relevanta för filen (filtyp, attackklass, kodsignaler)
+      plus ev. uttryckligen valda extra skills. De får huvuddelen av budgeten.
+    - Rotation (när alla skills är aktiva): `rotation_pool` är mängden skills som
+      ännu inte använts i körningen. Upp till ROTATION_SLOTS[profile] av dem väljs
+      efter relevans för just den här filen och tas bort ur poolen, så att alla
+      skills som matchar något i repot används någonstans under körningen.
+    - Hela skill-texten håller sig inom PROFILE_BUDGETS[profile] tecken oavsett
+      hur många skills som är aktiva.
+    """
     total = PROFILE_BUDGETS.get(profile, 5000)
     max_skills = 2 if profile == "quick" else (3 if profile == "standard" else 4)
-    names = select_skills_for_unit(unit, content, extra_skills=extra_skills, max_skills=max_skills)
+    core = select_skills_for_unit(unit, content, extra_skills=None, max_skills=max_skills)
+    for name in (extra_skills or [])[:6]:
+        if name in load_catalog() and name not in core:
+            core.append(name)
+
+    rotation = []
+    if rotation_pool is not None:
+        slots = ROTATION_SLOTS.get(profile, 2)
+        path = unit.get("path", "")
+        cat = load_catalog()
+        triggered = set(specialist_skills(path, content))
+        ranked = []
+        for n in rotation_pool:
+            if n in core or n not in cat:
+                continue
+            if cat[n].get("source") == "acs":
+                # Specialist-skills roteras bara in när deras konkreta kodsignal finns.
+                if n in triggered:
+                    ranked.append((100, n))
+                continue
+            score = relevance_score(n, content, path)
+            # Breda playbooks kräver minst två distinkta träffar; icke-kod-domäner
+            # (compliance, IR, SecOps …) kräver tre för att undvika brus.
+            need = 2 if cat[n]["domain"] in CODE_AUDIT_DOMAINS else 3
+            if score >= need:
+                ranked.append((score, n))
+        ranked.sort(key=lambda x: (-x[0], x[1]))
+        rotation = [n for _score, n in ranked][:slots]
+        for n in core + rotation:
+            rotation_pool.discard(n)
+
+    names = core + rotation
     if not names:
         return [], ""
     keywords = _keywords_for(unit, content)
-    # Första skillen (mest relevant) får störst andel av budgeten.
-    weights = [2.0] + [1.0] * (len(names) - 1)
-    wsum = sum(weights)
-    parts = []
-    for n, w in zip(names, weights):
-        parts.append(skill_digest(n, keywords, budget=int(total * w / wsum), target=unit.get("path", "")))
+    core_total = total if not rotation else max(total - _MIN_ROTATION_BUDGET * len(rotation), int(total * 0.7))
+    rot_each = (total - core_total) // len(rotation) if rotation else 0
+    # Första kärn-skillen (mest relevant) får störst andel av kärnbudgeten.
+    weights = [2.0] + [1.0] * (len(core) - 1)
+    wsum = sum(weights) or 1.0
+    parts = [skill_digest(n, keywords, budget=int(core_total * w / wsum), target=unit.get("path", ""))
+             for n, w in zip(core, weights)]
+    parts += [skill_digest(n, keywords, budget=rot_each, target=unit.get("path", "")) for n in rotation]
     text = (
-        "SECURITY SKILL PLAYBOOKS (UnitOneAI SecuritySkills, framework-grounded). Use these controls and "
-        "checklists to drive your hunt. Cite ONLY control IDs that appear in these playbooks or that you are "
-        "certain exist (e.g. 'OWASP-ASVS V5.3.4', 'OWASP-LLM01:2025', 'CIS-Docker 4.1'). Never invent control IDs.\n\n"
+        "SECURITY SKILL PLAYBOOKS (framework-grounded). Use these controls and checklists to drive your hunt. "
+        "Cite ONLY control IDs that appear in these playbooks or that you are certain exist "
+        "(e.g. 'OWASP-ASVS V5.3.4', 'OWASP-LLM01:2025', 'CIS-Docker 4.1'). Never invent control IDs.\n\n"
         + "\n".join(p for p in parts if p)
     )
     return names, text

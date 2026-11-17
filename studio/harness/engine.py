@@ -151,7 +151,8 @@ def init_harness_db():
 
 class VulnerabilityHarnessRunner(threading.Thread):
     def __init__(self, run_id, project, profile="standard", target_dir=None, create_issues=False,
-                 use_skills=True, extra_skills=None, send_email=True, email_to="anders@andrix.se"):
+                 use_skills=True, extra_skills=None, send_email=True, email_to="anders@andrix.se",
+                 apply_all_skills=None):
         super().__init__(daemon=True)
         self.run_id = run_id
         self.project = project
@@ -171,7 +172,13 @@ class VulnerabilityHarnessRunner(threading.Thread):
         self.coverage_units = []
         self.use_skills = bool(use_skills)
         self.extra_skills = list(extra_skills or [])
+        # "Alla skills": inga uttryckligen valda -> hela katalogen är aktiv, men varje fil
+        # får sina mest relevanta skills och resten roteras in efter relevans (se skills.py).
+        self.apply_all_skills = (self.use_skills and not self.extra_skills) if apply_all_skills is None \
+            else bool(apply_all_skills and self.use_skills)
         self.skills_used = {}
+        self.skills_available = 0
+        self.skill_rotation_pool = None
         self.start_time = time.time()
         self.duration_seconds = 0.0
 
@@ -206,6 +213,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
                     "skills_used": self.skills_used,
                     "skills_enabled": self.use_skills,
                     "extra_skills": self.extra_skills,
+                    "skills_mode": "all" if self.apply_all_skills else ("selected" if self.use_skills else "off"),
+                    "skills_available": self.skills_available,
+                    "skills_unmatched": sorted(self.skill_rotation_pool or []),
                     "duration_seconds": round(dur_sec, 2),
                     "duration_formatted": self._format_duration(dur_sec)
                 }
@@ -261,11 +271,19 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 all_catalog = load_catalog()
                 n_skills = len(all_catalog)
                 n_acs = sum(1 for v in all_catalog.values() if v.get("source") == "acs")
-                # Om inga specifika extra_skills valts körs ALLA tillgängliga skills automatiskt
-                if not self.extra_skills:
-                    self.extra_skills = list(all_catalog.keys())
-                self._log(f"SecuritySkills enabled: All {n_skills} skills ({n_skills - n_acs} framework playbooks + "
-                          f"{n_acs} specialist skills) will be applied across the test suite.")
+                self.skills_available = n_skills
+                if self.apply_all_skills:
+                    # Alla skills är aktiva. I stället för att stoppa in alla i varje prompt
+                    # (vilket spräcker budget och kontextfönster) får varje fil sina mest
+                    # relevanta skills med fullständiga checklistor, och övriga roteras in
+                    # efter relevans tills alla som matchar något i repot har använts.
+                    self.skill_rotation_pool = set(all_catalog.keys())
+                    self._log(f"SecuritySkills enabled: all {n_skills} skills active ({n_skills - n_acs} framework "
+                              f"playbooks + {n_acs} specialist skills); each file gets its most relevant skills "
+                              f"and the rest rotate in by relevance across the run.")
+                else:
+                    self._log(f"SecuritySkills enabled: {n_skills} skills loaded; forced on every file: "
+                              f"{', '.join(self.extra_skills)}.")
 
             # ========================================================
             # PHASE 1: Reconnaissance & Multi-Scanner Seeding (Bandit, Gitleaks, Semgrep)
@@ -296,6 +314,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self._log("PHASE 3-4: VDH Hunting — Deep AST taint tracking across trust boundaries...")
             self.candidates = self._execute_vdh_hunting(target_path, self.coverage_units, scanner_seeds)
             self._log(f"VDH completed: {len(self.candidates)} vulnerability candidates identified.")
+            if self.use_skills and self.skills_available:
+                msg = f"Skill coverage: {len(self.skills_used)} of {self.skills_available} skills applied"
+                if self.apply_all_skills and self.skill_rotation_pool:
+                    msg += (f"; {len(self.skill_rotation_pool)} had no matching code in the audited files "
+                            f"(e.g. {', '.join(sorted(self.skill_rotation_pool)[:5])})")
+                self._log(msg + ".")
 
             # ========================================================
             # PHASE 5: VVS (Vulnerability Validation System - Adversarial & Mathematical Scoring)
@@ -542,7 +566,9 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 try:
                     from .skills import build_skill_context
                     skill_names, skill_text = build_skill_context(
-                        u, content, profile=self.profile, extra_skills=self.extra_skills)
+                        u, content, profile=self.profile,
+                        extra_skills=None if self.apply_all_skills else self.extra_skills,
+                        rotation_pool=self.skill_rotation_pool if self.apply_all_skills else None)
                 except Exception as e:
                     self._log(f"SecuritySkills context failed for {u['path']}: {e}")
                 if skill_names:
@@ -748,12 +774,18 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 f"- **Rejected False Positives (Eliminated by VVS)**: {len(self.rejected)}\n",
             ]
             if self.skills_used:
-                lines.append("## Security Skills Applied (UnitOneAI SecuritySkills)")
+                lines.append("## Security Skills Applied")
+                if self.skills_available:
+                    lines.append(f"{len(self.skills_used)} of {self.skills_available} available skills were applied "
+                                 f"(mode: {'all skills active, relevance-rotated' if self.apply_all_skills else 'selected'}).\n")
                 lines.append("| Skill | Coverage units |")
                 lines.append("|---|---|")
                 for name, cnt in sorted(self.skills_used.items(), key=lambda kv: -kv[1]):
                     lines.append(f"| `{name}` | {cnt} |")
                 lines.append("")
+                if self.apply_all_skills and self.skill_rotation_pool:
+                    lines.append("Skills with no matching code in the audited files: "
+                                 + ", ".join(f"`{n}`" for n in sorted(self.skill_rotation_pool)) + "\n")
             lines.append("## Confirmed Vulnerabilities (Action Required)")
             if not self.confirmed:
                 lines.append("*No confirmed high-confidence vulnerabilities found.*")
@@ -813,7 +845,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
             f"Raw VDH Candidates: {len(self.candidates)}",
             f"Confirmed Vulnerabilities: {confirmed_count}",
             f"Rejected False Positives: {rejected_count}",
-            f"SecuritySkills Playbooks Applied: {len(self.skills_used)}",
+            f"Security Skills Applied: {len(self.skills_used)} of {self.skills_available or len(self.skills_used)}",
             "",
             "CONFIRMED FINDINGS:",
             "-------------------"
@@ -959,11 +991,13 @@ def start_vulnerability_harness(project, profile="standard", target_dir=None, cr
     run_id = "vh-" + uuid.uuid4().hex[:8]
     from .skills import load_catalog
     known = load_catalog()
+    apply_all = False
     if extra_skills:
-        extra_skills = [s for s in extra_skills if s in known]
-    elif use_skills:
-        # Standard: alla skills används automatiskt vid test
-        extra_skills = list(known.keys())
+        extra_skills = [s for s in extra_skills if s in known][:6]
+    if not extra_skills and use_skills:
+        # Standard: alla skills är aktiva automatiskt vid test (relevansstyrd rotation, se skills.py)
+        apply_all = True
+        extra_skills = []
     runner = VulnerabilityHarnessRunner(
         run_id=run_id,
         project=project,
@@ -973,7 +1007,8 @@ def start_vulnerability_harness(project, profile="standard", target_dir=None, cr
         send_email=send_email,
         email_to=email_to,
         use_skills=use_skills,
-        extra_skills=extra_skills
+        extra_skills=extra_skills,
+        apply_all_skills=apply_all
     )
     with _runner_lock:
         _active_runners[run_id] = runner
