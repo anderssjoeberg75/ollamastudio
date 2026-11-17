@@ -5397,9 +5397,10 @@ async function updateVramTelemetry() {
         const temp = g.temp !== null && g.temp !== undefined ? Math.round(g.temp) : null;
         const util = g.util !== null && g.util !== undefined ? Math.round(g.util) : 0;
 
-        // Kompakt text i pill: t.ex. "G0: 44% 29° · G1: 62% 42°"
-        const tempStr = temp !== null ? ` ${temp}°` : '';
-        gpuParts.push(`G${idx}: ${memPct}%${tempStr}`);
+        // Tydlig visning per GPU: Belastning (load), VRAM % och temperatur
+        // t.ex: "G0: 100% load · 44% vram · 51° | G1: 1% load · 62% vram · 76°"
+        const tempStr = temp !== null ? ` · ${temp}°` : '';
+        gpuParts.push(`G${idx}: ${util}% load · ${memPct}% vram${tempStr}`);
 
         // Detaljerad tooltip vid hover:
         tooltipLines.push(
