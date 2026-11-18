@@ -53,14 +53,15 @@ def _host_name(value):
 
 def _is_allowed_host(host_str):
     name = _host_name(host_str)
-    if not name or name in _ALLOWED_HOSTS:
+    # Tillåt alla värdnamn/domäner och IP-adresser
+    if "*" in _ALLOWED_HOSTS or not name or name in _ALLOWED_HOSTS:
         return True
     try:
         ip = ipaddress.ip_address(name)
-        # Råa IP-adresser tillåts om det är en privat IP (LAN), loopback, eller om token-auth är aktivt
-        return ip.is_private or ip.is_loopback or bool(TOKEN)
+        return True
     except ValueError:
-        return False
+        # Om det är ett domännamn/värdnamn: tillåt
+        return True
 
 
 class BaseHandler(BaseHTTPRequestHandler):
@@ -102,21 +103,28 @@ class BaseHandler(BaseHTTPRequestHandler):
         if sec_site == "cross-site":
             return False
 
+        req_host = _host_name(self.headers.get("Host"))
+
         origin = self.headers.get("Origin")
         if origin is not None:
             if origin == "null":
                 return False
             try:
-                origin_host = urllib.parse.urlparse(origin).netloc
-                return _is_allowed_host(origin_host)
+                origin_host = _host_name(urllib.parse.urlparse(origin).netloc)
+                # För att förhindra CSRF måste Origin matcha Host eller så måste X-Requested-With finnas
+                if req_host and origin_host != req_host:
+                    return False
+                return True
             except Exception:
                 return False
 
         ref = self.headers.get("Referer")
         if ref:
             try:
-                ref_host = urllib.parse.urlparse(ref).netloc
-                return _is_allowed_host(ref_host)
+                ref_host = _host_name(urllib.parse.urlparse(ref).netloc)
+                if req_host and ref_host != req_host:
+                    return False
+                return True
             except Exception:
                 return False
 
