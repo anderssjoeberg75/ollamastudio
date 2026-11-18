@@ -35,7 +35,7 @@ import urllib.request
 import uuid
 
 from .. import backends, config
-from ..config import _settings_lock, setting_str, settings_set
+from ..config import _settings_lock, setting_bool, setting_str, settings_set
 from ..logging_util import get_logger
 
 log = get_logger("ollamastudio.harness")
