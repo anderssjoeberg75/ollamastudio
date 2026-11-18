@@ -6,6 +6,7 @@ import hmac
 import ipaddress
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -25,6 +26,20 @@ _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"} | {
 }
 if LISTEN_HOST not in ("0.0.0.0", "::", ""):
     _ALLOWED_HOSTS.add(LISTEN_HOST.lower())
+
+# Lägg automatiskt till maskinens eget hostname, fqdn och lokala domäner (.local)
+try:
+    _h_name = socket.gethostname().strip().lower()
+    if _h_name:
+        _ALLOWED_HOSTS.add(_h_name)
+        _ALLOWED_HOSTS.add(f"{_h_name}.local")
+        _ALLOWED_HOSTS.add(f"{_h_name}.home.arpa")
+        _ALLOWED_HOSTS.add(f"{_h_name}.lan")
+    _fqdn = socket.getfqdn().strip().lower()
+    if _fqdn:
+        _ALLOWED_HOSTS.add(_fqdn)
+except Exception:
+    pass
 
 
 def _host_name(value):
