@@ -8,6 +8,10 @@ Två vendrade skill-paket:
                         saknar (prototype pollution, JWT, OAuth, request smuggling, MCP tool
                         poisoning, mobil, smart contracts …). Dubbletter av befintliga skills
                         valdes bort; se security_skills_acs/README.md.
+- security_skills_ccs/  https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill (MIT, © Riyan
+                        Pratama "Masriyan"/"sudo3rs" — se NOTICE) — 2 skills som inget av de andra
+                        paketen täcker: host-/tjänsthärdning och OT/ICS. Övriga 20 är dubbletter eller
+                        operativa; se security_skills_ccs/README.md.
 
 Modulen:
 
@@ -35,11 +39,27 @@ ACS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "security_sk
 ACS_REPO = "https://github.com/mukul975/Anthropic-Cybersecurity-Skills"
 ACS_COMMIT = "54a798831d2266a3ca61ce68a7acb80b81160d57"
 
+CCS_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "security_skills_ccs")
+CCS_REPO = "https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill"
+CCS_COMMIT = "3aa77d84fb64cf07b550f6be4544bb91292db89f"
+# Upstream-namnen behålls för spårbarhet; domän och ramverk anges här eftersom
+# deras frontmatter saknar dem.
+_CCS_META = {
+    "15-blue-team-defense": {"domain": "hardening",
+                             "frameworks": ["CIS-Benchmarks", "DISA-STIG", "MITRE-ATT&CK"]},
+    "18-ot-ics-security": {"domain": "ot-ics",
+                           "frameworks": ["IEC-62443", "NIST-SP-800-82", "MITRE-ATT&CK-ICS"]},
+}
+# Paket vars skills är specialister: de används bara när konkreta kodsignaler finns.
+SPECIALIST_SOURCES = {"acs", "ccs"}
+
 SOURCES = [
     {"id": "unitone", "name": "UnitOneAI/SecuritySkills", "repo": UPSTREAM_REPO,
      "commit": UPSTREAM_COMMIT, "license": "MIT"},
     {"id": "acs", "name": "mukul975/Anthropic-Cybersecurity-Skills", "repo": ACS_REPO,
      "commit": ACS_COMMIT, "license": "Apache-2.0"},
+    {"id": "ccs", "name": "Masriyan/Claude-Code-CyberSecurity-Skill", "repo": CCS_REPO,
+     "commit": CCS_COMMIT, "license": "MIT", "author": 'Riyan Pratama ("Masriyan" / "sudo3rs")'},
 ]
 
 # ACS-underdomän -> harnessens domän.
@@ -56,7 +76,7 @@ _ACS_DOMAINS = {
 # Domäner som är relevanta för kodgranskning; övriga (IR, SecOps, compliance …)
 # används bara om användaren uttryckligen väljer dem.
 CODE_AUDIT_DOMAINS = {"appsec", "ai-security", "devsecops", "cloud", "vuln-management", "identity",
-                      "cryptography", "mobile", "blockchain"}
+                      "cryptography", "mobile", "blockchain", "hardening", "ot-ics"}
 
 # Sektioner som aldrig hjälper en hunter-modell att hitta buggar.
 _SKIP_SECTION_RE = re.compile(
@@ -64,7 +84,8 @@ _SKIP_SECTION_RE = re.compile(
     r"context the agent needs|^context$|prerequisites|overview|executive summary|"
     r"summary table|recommendations|scan schedul|environment$|^summary$|"
     r"prompt injection safety notice|common pitfalls|tools (&|and) (systems|resources)|"
-    r"expected output|disclaimer|legal notice|^finding:|finding$)",
+    r"expected output|disclaimer|legal notice|^finding:|finding$|evidence contract|activation triggers|"
+    r"script reference|skill integration|enhancements|^purpose$|output standards|output template)",
     re.IGNORECASE,
 )
 
@@ -93,6 +114,7 @@ def _parse_frontmatter(text):
     except Exception:
         pass
     data, key, folded = {}, None, []
+    sub = None            # senaste nyckel i en nästlad mapping (t.ex. metadata.tags)
     for line in raw.splitlines():
         item = re.match(r"^\s*-\s+(.*)$", line)
         if item and key and isinstance(data.get(key), list):
@@ -102,11 +124,27 @@ def _parse_frontmatter(text):
             folded.append(line.strip())
             data[key] = " ".join(folded)
             continue
+        nested = re.match(r"^\s{2,}([A-Za-z0-9_-]+):\s*(.*)$", line)
+        if nested and key and (data.get(key) == [] or isinstance(data.get(key), dict)):
+            if data[key] == []:
+                data[key] = {}
+            sub = nested.group(1)
+            data[key][sub] = nested.group(2).strip().strip("'\"")
+            continue
+        if line.startswith("  ") and key and line.strip():
+            # Fortsättningsrad för flerradigt skalärvärde (vanlig eller nästlad).
+            if isinstance(data.get(key), dict) and sub:
+                data[key][sub] = (data[key][sub] + " " + line.strip()).strip()
+                continue
+            if isinstance(data.get(key), str) and data[key]:
+                data[key] = data[key] + " " + line.strip()
+                continue
         mm = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
         if not mm:
             continue
         key, val = mm.group(1), mm.group(2).strip()
         folded = None
+        sub = None
         if val == "":
             data[key] = []          # blocklista ("- a" på följande rader) eller tomt värde
         elif val in (">", "|", ">-", "|-", ">+", "|+"):
@@ -151,17 +189,30 @@ def _derive_frameworks(fm):
                        ("swc_registry", "SWC-Registry")):
         if fm.get(key) and label not in fws:
             fws.append(label)
-    if any("owasp" in str(t).lower() for t in (fm.get("tags") or [])) and "OWASP" not in fws:
+    if any("owasp" in str(t).lower() for t in _as_list(fm.get("tags"))) and "OWASP" not in fws:
         fws.append("OWASP")
     return fws
 
 
-def _load_skill(path, domain, root=SKILLS_ROOT, source="unitone"):
+def _as_list(value):
+    if isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    return [str(v) for v in (value or [])]
+
+
+def _load_skill(path, domain, root=SKILLS_ROOT, source="unitone", frameworks=None):
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     fm, body = _parse_frontmatter(text)
+    meta = fm.get("metadata") if isinstance(fm.get("metadata"), dict) else {}
+    if not fm.get("tags") and meta.get("tags"):
+        fm["tags"] = meta["tags"]
+    if not fm.get("version") and meta.get("version"):
+        fm["version"] = meta["version"]
+    if frameworks and not fm.get("frameworks"):
+        fm["frameworks"] = frameworks
     name = str(fm.get("name") or os.path.basename(os.path.dirname(path)))
-    desc = re.sub(r"\s+", " ", str(fm.get("description") or "")).strip()
+    desc = re.sub(r"\s+", " ", str(fm.get("description") or "")).strip().strip("'\"").strip()
     sections = _split_sections(body)
     # Referensfiler (checklistor, standarder) blir extra sektioner; verktygs-API:er hoppas över.
     ref_dir = os.path.join(os.path.dirname(path), "references")
@@ -185,7 +236,7 @@ def _load_skill(path, domain, root=SKILLS_ROOT, source="unitone"):
         "version": str(fm.get("version") or "1.0.0"),
         "frameworks": _derive_frameworks(fm),
         "control_ids": controls,
-        "tags": [str(t) for t in (fm.get("tags") or [])],
+        "tags": _as_list(fm.get("tags")),
         "injection_hardened": bool(fm.get("injection-hardened", False)),
         "path": os.path.relpath(path, root).replace("\\", "/"),
         "sections": sections,
@@ -226,6 +277,20 @@ def load_catalog(force=False):
                     domain = _ACS_DOMAINS.get(str(fm.get("subdomain") or ""), "appsec")
                     s = _load_skill(p, domain, root=os.path.dirname(ACS_ROOT), source="acs")
                     if s["name"] not in cat:      # första paketet vinner vid namnkrock
+                        cat[s["name"]] = s
+                except Exception:
+                    continue
+        ccs_base = os.path.join(CCS_ROOT, "skills")
+        if os.path.isdir(ccs_base):
+            for sk in sorted(os.listdir(ccs_base)):
+                p = os.path.join(ccs_base, sk, "SKILL.md")
+                meta = _CCS_META.get(sk)
+                if not os.path.isfile(p) or not meta:
+                    continue
+                try:
+                    s = _load_skill(p, meta["domain"], root=os.path.dirname(CCS_ROOT), source="ccs",
+                                    frameworks=meta["frameworks"])
+                    if s["name"] not in cat:
                         cat[s["name"]] = s
                 except Exception:
                     continue
@@ -332,6 +397,13 @@ SPECIALIST_TRIGGERS = [
      None),
     ("performing-http-parameter-pollution-attack",
      [re.compile(r"(getlist\(|getAll\(|parse_qsl?\(|getParameterValues|\$_GET\[|URLSearchParams)")], None),
+    ("18-ot-ics-security",
+     [re.compile(r"(pymodbus|\bmodbus\b|\bdnp3\b|\bopcua\b|asyncua|python-snap7|\bsnap7\b|s7comm|\bbacnet\b|"
+                 r"pycomm3|cpppo|EtherNet/IP|IEC[ -]?6(1850|0870)|\bSCADA\b|\bPLC\b)", _I)], None),
+    ("15-blue-team-defense",
+     [re.compile(r"(PermitRootLogin|PasswordAuthentication|sshd_config|sysctl\s+-w|/etc/sysctl|"
+                 r"NoNewPrivileges|ProtectSystem|ProtectHome|PrivateTmp|CapabilityBoundingSet|auditctl|"
+                 r"/etc/audit/|\[Service\])")], None),
     ("migrating-to-post-quantum-cryptography",
      [re.compile(r"(rsa\.generate|RSA\.generate|generate_private_key|ec\.generate|\bECDSA\b|\bECDH\b|"
                  r"DiffieHellman|KeyPairGenerator|secp256)")], None),
@@ -367,7 +439,7 @@ def classify_path(path):
         return "iac"
     if base in _DEP_FILES or (base.startswith("requirements") and base.endswith(".txt")):
         return "dependency"
-    if base.endswith((".service", ".env")) or base == ".env":
+    if base.endswith(".env") or base == ".env":
         return "config"
     if base in ("androidmanifest.xml", "info.plist") or base.endswith((".swift", ".m", ".mm")):
         return "mobile"
@@ -375,6 +447,10 @@ def classify_path(path):
         return "smart_contract"
     if base in ("serverless.yml", "serverless.yaml"):
         return "serverless"
+    if base in ("sshd_config", "sysctl.conf", "audit.rules", "login.defs") or base.endswith(".service") or \
+            ("/sysctl.d/" in "/" + low and base.endswith(".conf")) or \
+            ("/audit/rules.d/" in "/" + low and base.endswith(".rules")):
+        return "host_config"
     return "code"
 
 
@@ -413,6 +489,9 @@ def select_skills_for_unit(unit, content="", extra_skills=None, max_skills=3):
         add("exploiting-insecure-data-storage-in-mobile")
     elif kind == "smart_contract":
         add("auditing-foundry-smart-contract-security")
+    elif kind == "host_config":
+        add("15-blue-team-defense")
+        add("secrets-management")
     elif kind == "serverless":
         add("performing-serverless-function-security-review")
         add("iac-security")
@@ -497,6 +576,10 @@ def _keywords_for(unit, content):
                         ("prompt", "prompt"), ("tool", "agency"), ("role", "authorization")):
         if word in low:
             kws.append(extra)
+    if classify_path(unit.get("path", "")) == "host_config" or re.search(r"(sshd_config|sysctl|\[service\])", low):
+        kws.extend(["linux", "ssh", "sysctl", "kernel", "audit"])
+    if "windows" in low or unit.get("path", "").lower().endswith((".ps1", ".psm1")):
+        kws.append("windows")
     return kws
 
 
@@ -556,6 +639,10 @@ def skill_digest(name, keywords=None, budget=3000, target=""):
             score -= 0.75
         if "findings classification" in hl or "severity" in hl:
             score += 0.5
+        if "windows" in hl and "windows" not in keywords:
+            score -= 2.0
+        if re.search(r"\.(py|sh)`?$", h):        # skriptreferenser (`tool.py`) hjälper inte en hunter
+            continue
         candidates.append((score, idx, h, _compact(txt.replace("$ARGUMENTS", target or "the file under review"))))
 
     candidates.sort(key=lambda c: (-c[0], c[1]))
@@ -650,7 +737,7 @@ def build_skill_context(unit, content="", profile="standard", extra_skills=None,
         for n in rotation_pool:
             if n in core or n not in cat:
                 continue
-            if cat[n].get("source") == "acs":
+            if cat[n].get("source") in SPECIALIST_SOURCES:
                 # Specialist-skills roteras bara in när deras konkreta kodsignal finns.
                 if n in triggered:
                     ranked.append((100, n))

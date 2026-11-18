@@ -12,8 +12,9 @@ class TestSecuritySkillsCatalog(unittest.TestCase):
 
     def test_catalog_loads_all_vendored_skills(self):
         cat = S.load_catalog()
-        self.assertEqual(len(cat), 67)
+        self.assertEqual(len(cat), 69)
         self.assertEqual(sum(1 for v in cat.values() if v["source"] == "acs"), 22)
+        self.assertEqual(sum(1 for v in cat.values() if v["source"] == "ccs"), 2)
         scr = cat["secure-code-review"]
         self.assertEqual(scr["domain"], "appsec")
         self.assertIn("OWASP-ASVS", scr["frameworks"])
@@ -38,7 +39,7 @@ class TestSecuritySkillsCatalog(unittest.TestCase):
 
     def test_list_skills_marks_code_audit_domains(self):
         items = S.list_skills()
-        self.assertEqual(len(items), 67)
+        self.assertEqual(len(items), 69)
         by = {i["name"]: i for i in items}
         self.assertTrue(by["api-security"]["code_audit"])
         self.assertFalse(by["ir-playbook"]["code_audit"])
@@ -56,15 +57,58 @@ class TestSpecialistSkills(unittest.TestCase):
             self.assertTrue(sk["sections"], name)
 
     def test_no_scripts_vendored(self):
-        for root, _dirs, files in os.walk(S.ACS_ROOT):
-            for f in files:
-                self.assertTrue(f.endswith(".md") or f == "LICENSE", os.path.join(root, f))
+        for pack in (S.ACS_ROOT, S.CCS_ROOT):
+            for root, _dirs, files in os.walk(pack):
+                for f in files:
+                    self.assertTrue(f.endswith(".md") or f in ("LICENSE", "NOTICE"), os.path.join(root, f))
+
+    def test_ccs_attribution_preserved(self):
+        # Upstream NOTICE kräver att LICENSE, NOTICE och synlig attribution följer med.
+        self.assertTrue(os.path.isfile(os.path.join(S.CCS_ROOT, "LICENSE")))
+        with open(os.path.join(S.CCS_ROOT, "NOTICE"), encoding="utf-8") as fh:
+            self.assertIn("Riyan Pratama", fh.read())
+        src = [x for x in S.SOURCES if x["id"] == "ccs"][0]
+        self.assertIn("Riyan Pratama", src["author"])
+        readme = os.path.join(os.path.dirname(S.SKILLS_ROOT), "..", "..", "README.md")
+        with open(readme, encoding="utf-8") as fh:
+            self.assertIn("Riyan Pratama", fh.read())
+
+    def test_ccs_skills_metadata(self):
+        cat = S.load_catalog()
+        bt, ot = cat["15-blue-team-defense"], cat["18-ot-ics-security"]
+        self.assertEqual((bt["domain"], ot["domain"]), ("hardening", "ot-ics"))
+        self.assertIn("IEC-62443", ot["frameworks"])
+        self.assertIn("modbus", ot["tags"])
+        self.assertTrue(bt["version"].startswith("3."))
+
+    def test_ccs_selection(self):
+        pick = lambda p, c="": S.select_skills_for_unit({"path": p, "attack_class": "x"}, c)
+        self.assertEqual(pick("deploy/sshd_config")[0], "15-blue-team-defense")
+        self.assertEqual(pick("etc/sysctl.d/99-net.conf")[0], "15-blue-team-defense")
+        self.assertEqual(pick("ollama-gpu@.service")[0], "15-blue-team-defense")
+        self.assertIn("18-ot-ics-security",
+                      pick("plc/bridge.py", "from pymodbus.client import ModbusTcpClient"))
+        self.assertNotIn("18-ot-ics-security", pick("app.py", "print('hello')"))
+        d = S.skill_digest("15-blue-team-defense", ["linux", "ssh", "sysctl"], budget=3000)
+        self.assertIn("SSH Hardening", d)
+        self.assertNotIn("Windows System Hardening", d)
+        self.assertNotIn("hardening_checker.py", d.split("\n#### ")[0] + "".join(
+            l for l in d.splitlines() if l.startswith("#### ")))
+
+    def test_fallback_parser_nested_metadata(self):
+        text = ("---\nname: x\ndescription: line one\n  line two\nmetadata:\n  version: 3.3.0\n"
+                "  tags: a, b,\n    c\n---\nbody\n")
+        with patch.dict("sys.modules", {"yaml": None}):
+            fm, _ = S._parse_frontmatter(text)
+        self.assertEqual(fm["description"], "line one line two")
+        self.assertEqual(fm["metadata"]["version"], "3.3.0")
+        self.assertEqual(S._as_list(fm["metadata"]["tags"]), ["a", "b", "c"])
 
     def test_every_trigger_points_at_a_vendored_skill(self):
         cat = S.load_catalog()
         for name, _regexes, _exts in S.SPECIALIST_TRIGGERS:
             self.assertIn(name, cat)
-            self.assertEqual(cat[name]["source"], "acs")
+            self.assertIn(cat[name]["source"], S.SPECIALIST_SOURCES)
 
     def test_specialists_triggered_by_code_signals(self):
         pick = lambda p, c, n=3: S.select_skills_for_unit({"path": p, "attack_class": "x"}, c, max_skills=n)
@@ -298,7 +342,9 @@ class TestEngineIntegration(unittest.TestCase):
     def test_ledger_covers_infra_files(self):
         runner = VulnerabilityHarnessRunner(run_id="t-ledger", project="p")
         units = runner._build_coverage_ledger(["Dockerfile", ".github/workflows/ci.yml", "requirements.txt",
-                                               "contracts/Vault.sol", "AndroidManifest.xml", "serverless.yml"])
+                                               "contracts/Vault.sol", "AndroidManifest.xml", "serverless.yml",
+                                               "deploy/sshd_config"])
+        self.assertIn("Host & Service Hardening", [u["attack_class"] for u in units])
         classes = [u["attack_class"] for u in units]
         self.assertIn("Smart Contract Security", classes)
         self.assertIn("Mobile App Security", classes)
@@ -306,6 +352,20 @@ class TestEngineIntegration(unittest.TestCase):
         self.assertIn("Container & Orchestration Hardening", classes)
         self.assertIn("CI/CD Pipeline & Supply Chain", classes)
         self.assertIn("Dependency & Supply-Chain Risk", classes)
+
+    def test_ledger_adds_specialist_units_by_content(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "plc"))
+            with open(os.path.join(d, "plc", "bridge.py"), "w") as fh:
+                fh.write("from pymodbus.client import ModbusTcpClient\n")
+            with open(os.path.join(d, "util.py"), "w") as fh:
+                fh.write("def add(a, b): return a + b\n")
+            runner = VulnerabilityHarnessRunner(run_id="t-spec", project="p", profile="standard")
+            units = runner._build_coverage_ledger(["util.py", "plc/bridge.py", "db/models.py"], root_dir=d)
+        self.assertEqual(units[0]["path"], "plc/bridge.py")
+        self.assertEqual(units[0]["attack_class"], "Specialist: 18-ot-ics-security")
+        self.assertNotIn("util.py", [u["path"] for u in units])
+        self.assertEqual([u["unit_id"] for u in units], ["unit-1", "unit-2"])
 
     def test_collect_includes_workflows_and_dockerfiles(self):
         with tempfile.TemporaryDirectory() as d:
