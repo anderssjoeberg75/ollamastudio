@@ -51,6 +51,18 @@ def _host_name(value):
     return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
 
 
+def _is_allowed_host(host_str):
+    name = _host_name(host_str)
+    if not name or name in _ALLOWED_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(name)
+        # Råa IP-adresser tillåts om det är en privat IP (LAN), loopback, eller om token-auth är aktivt
+        return ip.is_private or ip.is_loopback or bool(TOKEN)
+    except ValueError:
+        return False
+
+
 class BaseHandler(BaseHTTPRequestHandler):
     """Grundplattan för HTTP-hanteraren."""
 
@@ -63,14 +75,7 @@ class BaseHandler(BaseHTTPRequestHandler):
     # ---- hjälpare ----
     def _host_ok(self):
         """Host-validering mot DNS-rebinding (Issue #14)."""
-        name = _host_name(self.headers.get("Host"))
-        if not name or name in _ALLOWED_HOSTS:
-            return True
-        try:
-            ipaddress.ip_address(name)
-            return True
-        except ValueError:
-            return False
+        return _is_allowed_host(self.headers.get("Host"))
 
     def _auth_ok(self):
         if not TOKEN:
@@ -102,16 +107,16 @@ class BaseHandler(BaseHTTPRequestHandler):
             if origin == "null":
                 return False
             try:
-                origin_host = _host_name(urllib.parse.urlparse(origin).netloc)
-                return origin_host in _ALLOWED_HOSTS
+                origin_host = urllib.parse.urlparse(origin).netloc
+                return _is_allowed_host(origin_host)
             except Exception:
                 return False
 
         ref = self.headers.get("Referer")
         if ref:
             try:
-                ref_host = _host_name(urllib.parse.urlparse(ref).netloc)
-                return ref_host in _ALLOWED_HOSTS
+                ref_host = urllib.parse.urlparse(ref).netloc
+                return _is_allowed_host(ref_host)
             except Exception:
                 return False
 
