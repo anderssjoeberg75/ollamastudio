@@ -933,9 +933,64 @@ class VulnerabilityHarnessRunner(threading.Thread):
             except Exception as e:
                 log.debug("Could not attach findings.json: %s", e)
 
-        # Skicka e-post: 1. Konfigurerad SMTP, 2. Lokalt sendmail/mailx, 3. localhost:25
+        # Skicka e-post:
+        # 1. SMTP2go HTTPS API (om SMTP2GO_API_KEY konfigurerat eller i miljön)
+        # 2. Konfigurerad SMTP (om smtp_host satt)
+        # 3. Lokalt sendmail/mailx
+        # 4. localhost:25
         sent = False
-        if smtp_host:
+
+        smtp2go_key = (setting_str("smtp2go_api_key") or os.environ.get("SMTP2GO_API_KEY", "")).strip()
+        if smtp2go_key:
+            try:
+                import urllib.request
+                import base64
+                s2g_sender = (setting_str("smtp2go_sender") or os.environ.get("SMTP2GO_SENDER", "") or smtp_from).strip()
+                s2g_payload = {
+                    "api_key": smtp2go_key,
+                    "to": [recipient],
+                    "sender": s2g_sender,
+                    "subject": subject,
+                    "text_body": body_text,
+                    "attachments": []
+                }
+                if os.path.isfile(rep_path):
+                    try:
+                        with open(rep_path, "rb") as rf:
+                            s2g_payload["attachments"].append({
+                                "filename": "REPORT.md",
+                                "fileblob": base64.b64encode(rf.read()).decode("ascii"),
+                                "mimetype": "text/markdown"
+                            })
+                    except Exception:
+                        pass
+                if os.path.isfile(find_path):
+                    try:
+                        with open(find_path, "rb") as ff:
+                            s2g_payload["attachments"].append({
+                                "filename": "findings.json",
+                                "fileblob": base64.b64encode(ff.read()).decode("ascii"),
+                                "mimetype": "application/json"
+                            })
+                    except Exception:
+                        pass
+
+                req = urllib.request.Request(
+                    "https://api.smtp2go.com/v3/email/send",
+                    data=json.dumps(s2g_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    if resp_data.get("data", {}).get("succeeded", 0) > 0:
+                        sent = True
+                        self._log(f"Report email successfully sent to {recipient} via SMTP2go API.")
+                    else:
+                        self._log(f"SMTP2go API send failed: {resp_data}")
+            except Exception as e:
+                self._log(f"SMTP2go API send error: {e}")
+
+        if not sent and smtp_host:
             try:
                 server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
                 if smtp_tls:

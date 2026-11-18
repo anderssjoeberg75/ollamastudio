@@ -167,6 +167,8 @@ SETTINGS_SPEC = {
     "backend_autodiscover": ("OLLAMA_STUDIO_BACKEND_AUTODISCOVER", "0", "bool", False),
     # E-postavisering för säkerhetsrapporter och harness
     "report_email":         ("OLLAMA_STUDIO_REPORT_EMAIL", "anders@andrix.se", "str", False),
+    "smtp2go_api_key":      ("SMTP2GO_API_KEY", "", "str", True),
+    "smtp2go_sender":       ("SMTP2GO_SENDER", "Ollama Studio <ollama-studio@andrix.se>", "str", False),
     "smtp_host":            ("OLLAMA_STUDIO_SMTP_HOST", "", "str", False),
     "smtp_port":            ("OLLAMA_STUDIO_SMTP_PORT", "25", "str", False),
     "smtp_user":            ("OLLAMA_STUDIO_SMTP_USER", "", "str", False),
