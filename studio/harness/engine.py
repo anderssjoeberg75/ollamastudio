@@ -9,7 +9,8 @@ Implementerar en rigorös 6-fasig sårbarhetsgranskning enligt Cloudflares arkit
 6. Target-Neutral Reporting & Issue Creation (Genererar REPORT.md, findings.json samt GitHub Issues)
 
 SecuritySkills-integration (UnitOneAI SecuritySkills, MIT + 22 specialist-skills från
-mukul975/Anthropic-Cybersecurity-Skills, Apache-2.0 — se skills.py):
+mukul975/Anthropic-Cybersecurity-Skills, Apache-2.0 + 2 från Masriyan/Claude-Code-CyberSecurity-Skill,
+MIT, © Riyan Pratama — se skills.py):
 - Varje coverage-enhet får 1–4 framework-förankrade skill-playbooks (OWASP ASVS, API Top 10,
   LLM Top 10, CIS Docker/K8s, SLSA …) injicerade i VDH-prompten inom en profilbaserad budget.
 - VVS använder scanner-tuning-skillens falsklarmsklassning.
@@ -270,7 +271,8 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 from .skills import load_catalog
                 all_catalog = load_catalog()
                 n_skills = len(all_catalog)
-                n_acs = sum(1 for v in all_catalog.values() if v.get("source") == "acs")
+                from .skills import SPECIALIST_SOURCES
+                n_acs = sum(1 for v in all_catalog.values() if v.get("source") in SPECIALIST_SOURCES)
                 self.skills_available = n_skills
                 if self.apply_all_skills:
                     # Alla skills är aktiva. I stället för att stoppa in alla i varje prompt
@@ -303,7 +305,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self.stage = "coverage_ledger"
             self.progress = 25
             self._log("PHASE 2: Building Coverage Ledger with Source-to-Sink Taint Flow mapping...")
-            self.coverage_units = self._build_coverage_ledger(file_tree, scanner_seeds)
+            self.coverage_units = self._build_coverage_ledger(file_tree, scanner_seeds, root_dir=target_path)
             self._log(f"Generated {len(self.coverage_units)} coverage units in ledger.")
 
             # ========================================================
@@ -376,7 +378,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
             exts |= {".yml", ".yaml", ".tf", ".toml", ".bicep", ".service",
                      ".kt", ".kts", ".swift", ".m", ".mm", ".sol"}
         named = {"dockerfile", "jenkinsfile", "requirements.txt", "gemfile", "pipfile", "go.mod", "cargo.toml",
-                 "androidmanifest.xml", "info.plist"}
+                 "androidmanifest.xml", "info.plist", "sshd_config", "sysctl.conf", "audit.rules", "login.defs"}
         ignore_dirs = {".git", "node_modules", "vendor", ".venv", "venv", "__pycache__", "dist", "build", ".idea", ".vscode"}
         allowed_hidden = {".github", ".gitlab"} if self.use_skills else set()
         collected = []
@@ -385,7 +387,10 @@ class VulnerabilityHarnessRunner(threading.Thread):
             for f in filenames:
                 ext = os.path.splitext(f)[1].lower()
                 low = f.lower()
-                if ext in exts or (self.use_skills and (low in named or low.startswith("dockerfile")
+                host_cfg = self.use_skills and (
+                    (low.endswith(".conf") and "sysctl.d" in dirpath.replace("\\", "/")) or
+                    (low.endswith(".rules") and "rules.d" in dirpath.replace("\\", "/")))
+                if ext in exts or host_cfg or (self.use_skills and (low in named or low.startswith("dockerfile")
                                                         or (low.startswith("requirements") and ext == ".txt")
                                                         or low == ".gitlab-ci.yml")):
                     rel = os.path.relpath(os.path.join(dirpath, f), root_dir).replace("\\", "/")
@@ -473,7 +478,21 @@ class VulnerabilityHarnessRunner(threading.Thread):
 
         return findings
 
-    def _build_coverage_ledger(self, files, scanner_seeds=None):
+    def _specialist_attack_class(self, root_dir, path):
+        """Läser filens början och returnerar en attackklass om en specialist-skill
+        (JWT, Modbus, prototype pollution …) har en konkret kodsignal i den."""
+        if not (self.use_skills and root_dir):
+            return None
+        try:
+            with open(os.path.join(root_dir, path), "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read(8000)
+        except Exception:
+            return None
+        from .skills import specialist_skills
+        hits = specialist_skills(path, content)
+        return f"Specialist: {hits[0]}" if hits else None
+
+    def _build_coverage_ledger(self, files, scanner_seeds=None, root_dir=None):
         units = []
         seed_files = {s["file"]: s for s in (scanner_seeds or []) if s.get("file")}
 
@@ -500,8 +519,18 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 units.append({"unit_id": f"unit-{len(units)+1}", "path": f, "attack_class": "Data Access & Injection", "priority": "medium"})
             elif any(k in low for k in ("config", "settings", "env", "docker", "deploy")):
                 units.append({"unit_id": f"unit-{len(units)+1}", "path": f, "attack_class": "Configuration & Secrets Exposure", "priority": "medium"})
+            elif self._specialist_attack_class(root_dir, f):
+                # Filer utan "säkerhetsnamn" som ändå har en specialist-signal (t.ex. Modbus-skrivningar,
+                # JWT-hantering) får en egen enhet så att specialist-skillen faktiskt används.
+                units.append({"unit_id": f"unit-{len(units)+1}", "path": f,
+                              "attack_class": self._specialist_attack_class(root_dir, f), "priority": "high"})
             elif len(units) < 25 and self.profile == "deep":
                 units.append({"unit_id": f"unit-{len(units)+1}", "path": f, "attack_class": "General Logic & Memory Safety", "priority": "low"})
+        # Högst prioritet först, så att profilens enhetsgräns inte klipper bort kritiska/specialist-enheter.
+        rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        units.sort(key=lambda u: rank.get(u.get("priority"), 4))
+        for i, u in enumerate(units, 1):
+            u["unit_id"] = f"unit-{i}"
         return units
 
     @staticmethod
@@ -516,6 +545,7 @@ class VulnerabilityHarnessRunner(threading.Thread):
             "mobile": ("Mobile App Security", "high"),
             "smart_contract": ("Smart Contract Security", "critical"),
             "serverless": ("Serverless Function Security", "high"),
+            "host_config": ("Host & Service Hardening", "medium"),
         }.get(kind)
 
     def _execute_vdh_hunting(self, root_dir, units, scanner_seeds=None):

@@ -5613,7 +5613,7 @@ async function populateHarnessSkills() {
       byDomain[domain].forEach(s => {
         const opt = document.createElement('option');
         opt.value = s.name;
-        opt.textContent = `${s.source === 'acs' ? '◆ ' : ''}${s.name} — ${(s.frameworks || []).join(', ')}`;
+        opt.textContent = `${s.source !== 'unitone' ? '◆ ' : ''}${s.name} — ${(s.frameworks || []).join(', ')}`;
         opt.title = s.description || '';
         grp.appendChild(opt);
       });
@@ -5621,7 +5621,8 @@ async function populateHarnessSkills() {
     });
     const src = document.getElementById('harnessSkillsSource');
     const nAcs = skills.filter(s => s.source === 'acs').length;
-    if (src) src.textContent = `UnitOneAI/SecuritySkills (${skills.length - nAcs}, MIT) + ◆ Anthropic-Cybersecurity-Skills (${nAcs}, Apache-2.0)`;
+    const nCcs = skills.filter(s => s.source === 'ccs').length;
+    if (src) src.textContent = `UnitOneAI/SecuritySkills (${skills.length - nAcs - nCcs}, MIT) + ◆ Anthropic-Cybersecurity-Skills (${nAcs}, Apache-2.0) + ◆ Claude-Code-CyberSecurity-Skill by Riyan Pratama (${nCcs}, MIT)`;
     _harnessSkillsLoaded = true;
   } catch(e) {}
 }

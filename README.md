@@ -90,8 +90,9 @@ harness.
   6. Reports and issues
 
   Findings are scored with CVSS v3.1. The harness is grounded in 45 framework-based
-  [SecuritySkills](https://github.com/UnitOneAI/SecuritySkills) playbooks, plus 22 specialist skills from
-  [Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills).
+  [SecuritySkills](https://github.com/UnitOneAI/SecuritySkills) playbooks, plus 24 specialist skills: 22 from
+  [Anthropic-Cybersecurity-Skills](https://github.com/mukul975/Anthropic-Cybersecurity-Skills) and 2 from
+  [Claude-Code-CyberSecurity-Skill](https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill) by Riyan Pratama.
 - **Scheduled audits**: recurring security and simplification reviews of GitHub or GitLab repositories. Each
   finding is filed as an issue.
 - **MCP server**: lets Claude Code, Cursor, Windsurf, Gemini CLI or other agents control Ollama Studio over
@@ -447,7 +448,7 @@ CWE Top 25, CIS Docker and Kubernetes, SLSA, NIST and more.
   | Solidity (`.sol`) | `auditing-foundry-smart-contract-security` |
   | `serverless.yml`, Lambda handlers | `performing-serverless-function-security-review` |
 
-- **All skills active by default**: all 67 skills are active on every run, with no manual selection. Each file gets
+- **All skills active by default**: all 69 skills are active on every run, with no manual selection. Each file gets
   its most relevant skills with full checklists, chosen by file type, attack class and code signals. On top of
   those, up to 1, 2 or 3 more skills (Quick, Standard, Deep) are rotated in by relevance from the pool of skills
   not yet used in the run:
@@ -500,6 +501,25 @@ Specialists are triggered by **concrete code signals**, never by file names alon
 
 A specialist takes the slot right after the primary playbook. Only the `SKILL.md` and reference checklists are
 vendored, never the upstream scripts.
+
+### Specialist skills (Claude-Code-CyberSecurity-Skill)
+
+[Claude-Code-CyberSecurity-Skill](https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill) is by Riyan Pratama
+("Masriyan" / "sudo3rs") and licensed MIT with an attribution NOTICE. It has 22 broad skills, of which only **2**
+cover something no other pack does. They are vendored in `studio/harness/security_skills_ccs/` together with its
+`LICENSE` and `NOTICE`:
+
+| Skill | Applied to |
+| --- | --- |
+| `15-blue-team-defense` | Host and service hardening: `sshd_config`, `sysctl.conf` / `sysctl.d/*.conf`, `audit.rules`, `login.defs` and systemd `*.service` units, plus code that writes these settings |
+| `18-ot-ics-security` | OT/ICS code: Modbus, DNP3, S7, OPC-UA, BACnet and EtherNet/IP libraries (Purdue model, IEC 62443, NIST SP 800-82, MITRE ATT&CK for ICS) |
+
+The other 20 are left out for one of two reasons:
+- **Duplicates of existing skills:** vulnerability scanning, web, cloud, crypto, AI/LLM, mobile, GRC, supply chain.
+- **Operational:** recon, exploit and binary work, malware, incident response, SOC, log analysis, red/purple team
+  and threat intelligence. These need live systems or binaries, not source code.
+
+[`security_skills_ccs/README.md`](studio/harness/security_skills_ccs/README.md) has the full table.
 
 API:
 
@@ -718,3 +738,7 @@ Third-party content:
   [LICENSE](studio/harness/security_skills/LICENSE) file in that folder.
 - The specialist skills in `studio/harness/security_skills_acs/` come from mukul975/Anthropic-Cybersecurity-Skills,
   Apache-2.0. See the [LICENSE](studio/harness/security_skills_acs/LICENSE) file in that folder.
+- The skills in `studio/harness/security_skills_ccs/` come from
+  [Claude-Code-CyberSecurity-Skill](https://github.com/Masriyan/Claude-Code-CyberSecurity-Skill), © 2025-2026 Riyan
+  Pratama ("Masriyan" / "sudo3rs"), MIT. See the [LICENSE](studio/harness/security_skills_ccs/LICENSE) and
+  [NOTICE](studio/harness/security_skills_ccs/NOTICE) files in that folder.
