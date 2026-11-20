@@ -308,6 +308,12 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self.coverage_units = self._build_coverage_ledger(file_tree, scanner_seeds, root_dir=target_path)
             self._log(f"Generated {len(self.coverage_units)} coverage units in ledger.")
 
+            # Initiera Persistent Security Brain (Issue #94)
+            from .brain import SecurityBrain
+            self.brain = SecurityBrain(target_path)
+            for cu in self.coverage_units:
+                self.brain.record_tested_file(cu["path"], 1)
+
             # ========================================================
             # PHASE 3 & 4: VDH (Vulnerability Discovery Harness - Hunting with Taint-Flow)
             # ========================================================
@@ -316,6 +322,15 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self._log("PHASE 3-4: VDH Hunting — Deep AST taint tracking across trust boundaries...")
             self.candidates = self._execute_vdh_hunting(target_path, self.coverage_units, scanner_seeds)
             self._log(f"VDH completed: {len(self.candidates)} vulnerability candidates identified.")
+
+            # Sanera eventuellt hallucinerade filvägar (Issue #93)
+            from .scope_guard import sanitize_hallucinated_file_paths
+            valid_candidates = sanitize_hallucinated_file_paths(self.candidates, target_path)
+            if len(valid_candidates) < len(self.candidates):
+                diff_count = len(self.candidates) - len(valid_candidates)
+                self._log(f"Scope Guard: Dropped {diff_count} candidate(s) referencing non-existent files (hallucination prevention).")
+                self.candidates = valid_candidates
+
             if self.use_skills and self.skills_available:
                 msg = f"Skill coverage: {len(self.skills_used)} of {self.skills_available} skills applied"
                 if self.apply_all_skills and self.skill_rotation_pool:
@@ -330,6 +345,20 @@ class VulnerabilityHarnessRunner(threading.Thread):
             self.progress = 70
             self._log("PHASE 5: VVS Adversarial Validation — Calculating AWS formula confidence & generating PoCs...")
             self.confirmed, self.rejected = self._execute_vvs_validation(target_path, self.candidates)
+
+            # Bygg sammansatta exploateringskedjor via Chain Builder (Issue #92)
+            from .chain_builder import build_exploit_chains
+            chains = build_exploit_chains(self.confirmed)
+            if chains:
+                self._log(f"Exploit Chain Builder: Constructed {len(chains)} composite exploit chain(s) from confirmed primitives.")
+                for ch in chains:
+                    self.confirmed.insert(0, ch)  # Placera kedjorna överst
+
+            # Uppdatera Persistent Security Brain med utfallet (Issue #94)
+            c_ids = [c.get("id", "") for c in self.confirmed]
+            r_ids = [r.get("id", "") for r in self.rejected]
+            self.brain.record_outcome(c_ids, r_ids)
+
             self._log(f"VVS completed: {len(self.confirmed)} confirmed vulnerabilities, {len(self.rejected)} false positives rejected.")
 
             # ========================================================
@@ -611,11 +640,17 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 s = u["seed"]
                 seed_info = f"\n[MULTI-SCANNER SEED]: Flagged by {s.get('source')} (Rule: {s.get('rule')}, Line {s.get('line')}) - {s.get('description')}\n"
 
+            # Infoga Payload Mutation Ladders & WAF bypass guidance (Issue #95)
+            from .mutation_ladders import get_mutation_ladder
+            ladder = get_mutation_ladder(u.get("attack_class", ""))
+            ladder_text = "\n".join([f"  - {lvl}: `{p}`" for lvl, p in ladder])
+
             prompt = (
                 f"File: {u['path']}\n"
                 f"Assigned Attack Class: {u['attack_class']}\n"
                 f"{seed_info}\n"
                 + (f"Applied security skills: {', '.join(skill_names)}\n\n{skill_text}\n\n" if skill_text else "")
+                + f"Payload Mutation Ladder (test for WAF bypass & filter evasion):\n{ladder_text}\n\n"
                 + f"Source code snippet (UNTRUSTED DATA):\n```\n{content}\n```\n\n"
                 "Trace Source-to-Sink taint flow. Hunt for exploitable vulnerabilities. Return strictly JSON list."
             )
@@ -737,11 +772,32 @@ class VulnerabilityHarnessRunner(threading.Thread):
                 if norm:
                     cand["cwe"] = f"{norm['id']} ({norm['name']})" if norm.get("name") else norm["id"]
 
+            # Never-Submit Filter & 7-Question Validation Gate (Issue #91)
+            from .validation_gate import check_never_submit, evaluate_7question_gate
+            is_ns, ns_reason = check_never_submit(cand)
+            if is_ns:
+                verdict = "rejected"
+                conf_score = min(conf_score, 0.25)
+                cand["rejection_reason"] = f"Never-Submit Rule Triggered: {ns_reason}"
+                if isinstance(parsed, dict):
+                    parsed["verdict"] = "rejected"
+                    parsed["reasoning"] = cand["rejection_reason"]
+
+            gate_passed, gate_reason, gate_answers = evaluate_7question_gate(cand, code_context)
+            cand["gate_answers"] = gate_answers
+            if not gate_passed:
+                verdict = "rejected"
+                conf_score = min(conf_score, 0.35)
+                cand["rejection_reason"] = gate_reason
+                if isinstance(parsed, dict):
+                    parsed["verdict"] = "rejected"
+                    parsed["reasoning"] = gate_reason
+
             if verdict == "confirmed" and conf_score >= 0.70:
                 confirmed.append(cand)
                 self._log(f"✅ VVS CONFIRMED ({conf_score*100:.0f}% conf, CVSS {cvss_info['score']}): {cand.get('title')} ({cand.get('file')})")
             else:
-                reason = parsed.get("reasoning", "False positive during validation") if isinstance(parsed, dict) else "Rejected"
+                reason = cand.get("rejection_reason") or (parsed.get("reasoning", "False positive during validation") if isinstance(parsed, dict) else "Rejected")
                 cand["rejection_reason"] = reason
                 rejected.append(cand)
                 self._log(f"❌ VVS REJECTED (False Positive / {conf_score*100:.0f}%): {cand.get('title')} — {reason[:75]}...")
