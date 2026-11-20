@@ -1462,3 +1462,24 @@ textarea {
   color: #3F3F46 !important;
   font-weight: 500;
 }
+
+/* ---- Settings form ---- */
+#settingsForm .st-sec { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; }
+#settingsForm .st-sec h3 { font-size: 14px; margin: 0 0 2px; }
+#settingsForm .st-sub { font-size: 12px; font-weight: 600; color: var(--fg-muted); margin-top: 6px; }
+#settingsForm label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--fg); }
+#settingsForm label.st-check { flex-direction: row; align-items: center; gap: 8px; }
+#settingsForm .st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+#settingsForm .st-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+#settingsForm .st-row .hint { flex: 1 1 auto; }
+#settingsForm .st-list { display: flex; flex-direction: column; gap: 6px; }
+#settingsForm .st-badge { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+#settingsForm .hint { font-size: 12px; line-height: 1.45; }
+#settingsForm .hint:empty { display: none; }
+#settingsForm input:not([type="checkbox"]),
+#settingsForm select,
+#settingsForm textarea {
+  font: inherit; font-size: 13px; color: var(--fg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; width: 100%; box-sizing: border-box;
+}
+#settingsForm textarea { font-family: var(--font-mono); font-size: 12px; resize: vertical; }

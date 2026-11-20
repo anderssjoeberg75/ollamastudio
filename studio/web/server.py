@@ -361,6 +361,9 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"jobs": schedule_list()})
             if path == "/api/gitlab/targets":
                 return self._send_json({"ok": True, "targets": project_targets_list()})
+            if path == "/api/omniroute/status":
+                from studio.omniroute_bridge import omniroute_status
+                return self._send_json(omniroute_status())
             if path == "/api/antigravity/status":
                 from studio.antigravity_bridge import antigravity_status
                 return self._send_json(antigravity_status())
@@ -398,9 +401,19 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                         extra = antigravity_models()
                         if extra:
                             models_list = extra + models_list
+                        from studio.omniroute_bridge import omniroute_models
+                        omni = omniroute_models()
+                        if omni:
+                            models_list = omni + models_list
                         data["models"] = models_list
                     return self._send_json(data)
                 except Exception as e:
+                    # Ollama nere men OmniRoute påslaget? Visa ändå gateway-modellerna.
+                    if path == "/api/models":
+                        from studio.omniroute_bridge import omniroute_models
+                        omni = omniroute_models()
+                        if omni:
+                            return self._send_json({"models": omni, "warning": str(e)})
                     return self._send_json({"error": str(e)}, 502)
             return self._send_json({"error": "not found"}, 404)   # okänd API-väg → JSON
 
@@ -575,6 +588,10 @@ class Handler(ModelRoutes, ChatRoutes, CodexRoutes, TrainRoutes, BaseHandler):
                 return self._send_json({"error": "jobbet hittades inte"}, 404)
             schedule_run_job_async(jid)
             return self._send_json({"ok": True, "message": "Granskning startad i bakgrunden"})
+
+        if path == "/api/omniroute/ping":
+            from studio.omniroute_bridge import omniroute_ping
+            return self._send_json(omniroute_ping((data or {}).get("model") if isinstance(data, dict) else None))
 
         if path == "/api/antigravity/ping":
             from studio.antigravity_bridge import antigravity_ping

@@ -1844,6 +1844,7 @@ async function loadSettingsForm(){
   let s = {};
   try{ const r = await api('/api/settings', {headers: headers(false)}); s = await r.json(); }
   catch(e){ toast('Could not fetch settings', true); return; }
+  renderOmniRouteCard(s);
   const set = (id, v)=>{ const el=document.getElementById(id); if(el) el.value = (v==null?'':v); };
   const chk = (id, v)=>{ const el=document.getElementById(id); if(el) el.checked = !!v; };
   chk('stWebsearch', s.websearch);
@@ -1864,9 +1865,10 @@ async function loadSettingsForm(){
   set('stMem0Proj', s.mem0_project_id);
   mem0KeyIsSet = !!s.mem0_api_key_set; mem0KeyClear = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
-  document.getElementById('stMem0KeyState').textContent =
-    mem0KeyIsSet ? '● An API key is saved (leave empty to keep)' : 'No API key saved';
-  document.getElementById('stMem0Test').textContent = '';
+  const txt = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent = v; };
+  txt('stMem0KeyState',
+    mem0KeyIsSet ? '● An API key is saved (leave empty to keep)' : 'No API key saved');
+  txt('stMem0Test', '');
   chk('stHfEnabled', s.hf_enabled);
   chk('stHfAuto', s.hf_auto);
   hfTokenIsSet = !!s.hf_token_set; hfTokenClear = false;
@@ -1977,7 +1979,7 @@ async function loadSettingsForm(){
     ? '● A token is saved (leave empty to keep)' : 'No token saved';
   renderProjectTargets(s.project_targets || {});
   populateSecProjectSelect();
-  document.getElementById('stDbPath').textContent = s.db_path ? ('Saved in: '+s.db_path) : '';
+  txt('stDbPath', s.db_path ? ('Saved in: '+s.db_path) : '');
   loadAntigravityStatus();
 }
 
@@ -2049,6 +2051,109 @@ async function pingAntigravity(){
   } finally {
     if(btn) btn.disabled = false;
   }
+}
+
+/* ---- OmniRoute (AI gateway, OpenAI-compatible) ---- */
+let omniKeyClear = false;
+function renderOmniRouteCard(s){
+  const host = document.getElementById('settingsForm');
+  if(!host) return;
+  let card = document.getElementById('omniCard');
+  if(!card){
+    card = document.createElement('div');
+    card.id = 'omniCard';
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="top"><h3>🔀 OmniRoute</h3>
+        <span id="omniBadge" style="font-size:12px;padding:2px 8px;border-radius:6px"></span></div>
+      <p class="hint" style="margin:6px 0 12px;font-size:12.5px">
+        Connect to an <b>OmniRoute</b> gateway to use its models in Chat, Codex and scheduled audits.
+        They show up in the model list as <code>omniroute:&lt;model&gt;</code>.</p>
+      <label style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input type="checkbox" id="omniEnabled"> Enable OmniRoute</label>
+      <label for="omniUrl" style="display:block;font-size:12.5px;margin-bottom:4px">Base URL</label>
+      <input id="omniUrl" type="text" placeholder="http://localhost:20128/v1" style="width:100%;margin-bottom:10px">
+      <label for="omniKey" style="display:block;font-size:12.5px;margin-bottom:4px">API key (from OmniRoute dashboard → Endpoint)</label>
+      <div style="display:flex;gap:8px;margin-bottom:4px">
+        <input id="omniKey" type="password" autocomplete="off" placeholder="sk-…" style="flex:1">
+        <button class="btn small" type="button" onclick="clearOmniKey()">Remove key</button></div>
+      <div id="omniKeyState" class="hint" style="font-size:12px;margin-bottom:12px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn accent" type="button" id="omniSave" onclick="saveOmniRoute()">Save &amp; connect</button>
+        <button class="btn" type="button" id="omniPing" onclick="pingOmniRoute()">Test chat</button></div>
+      <div id="omniStatus" style="margin-top:10px;font-size:12.5px"></div>`;
+    host.prepend(card);
+  }
+  document.getElementById('omniEnabled').checked = !!s.omniroute_enabled;
+  document.getElementById('omniUrl').value = s.omniroute_url || '';
+  document.getElementById('omniKey').value = '';
+  omniKeyClear = false;
+  document.getElementById('omniKeyState').textContent = s.omniroute_api_key_set
+    ? '● An API key is saved (leave empty to keep)' : 'No API key saved';
+  loadOmniRouteStatus();
+}
+function clearOmniKey(){
+  omniKeyClear = true;
+  document.getElementById('omniKey').value = '';
+  document.getElementById('omniKeyState').textContent = '✕ Key will be removed upon saving';
+}
+function setOmniBadge(text, tone){
+  const b = document.getElementById('omniBadge'); if(!b) return;
+  const c = {ok:'var(--green)', warn:'var(--amber)', bad:'var(--danger)', off:'var(--subtle)'}[tone] || 'var(--subtle)';
+  b.textContent = text; b.style.color = c; b.style.border = '1px solid ' + c;
+}
+async function loadOmniRouteStatus(){
+  const el = document.getElementById('omniStatus'); if(!el) return;
+  setOmniBadge('Checking…', 'off');
+  try{
+    const d = await (await api('/api/omniroute/status')).json();
+    if(!d.enabled){
+      setOmniBadge('Off', 'off');
+      el.textContent = d.reachable
+        ? `Gateway reachable at ${d.url} (${d.models.length} models) – enable it to use the models.` : '';
+      return;
+    }
+    if(d.reachable){
+      setOmniBadge('● Connected', 'ok');
+      const chips = d.models.slice(0, 40).map(m =>
+        `<span style="display:inline-block;padding:2px 8px;border-radius:6px;border:1px solid var(--border);margin:2px 4px 2px 0;font-size:12px">${esc(m)}</span>`).join('');
+      const more = d.models.length > 40 ? ` <i>+${d.models.length - 40} more</i>` : '';
+      el.innerHTML = `<div style="margin-bottom:4px">${d.models.length} model(s) via <code>${esc(d.url)}</code></div>${chips}${more}`;
+    } else {
+      setOmniBadge('● Unreachable', 'bad');
+      el.innerHTML = `<span style="color:var(--danger)">✗ ${esc(d.error || 'No answer')}</span>`;
+    }
+  }catch(e){ setOmniBadge('Error', 'bad'); el.textContent = 'Could not fetch status: ' + e.message; }
+}
+async function saveOmniRoute(){
+  const body = {
+    omniroute_enabled: document.getElementById('omniEnabled').checked,
+    omniroute_url: document.getElementById('omniUrl').value
+  };
+  const key = document.getElementById('omniKey').value.trim();
+  if(key) body.omniroute_api_key = key;
+  else if(omniKeyClear) body.omniroute_api_key = null;
+  try{
+    const d = await (await api('/api/settings', {method:'POST', headers:headers(true),
+      body: JSON.stringify(body)})).json();
+    if(!d.ok) throw new Error(d.error || 'unknown error');
+    toast('OmniRoute settings saved');
+    renderOmniRouteCard(d.settings || {});
+    try{ refresh(); }catch(e){}
+  }catch(e){ toast('Could not save: ' + e.message, true); }
+}
+async function pingOmniRoute(){
+  const el = document.getElementById('omniStatus');
+  const btn = document.getElementById('omniPing');
+  if(btn) btn.disabled = true;
+  el.textContent = '⏳ Sending a test message…';
+  try{
+    const d = await (await api('/api/omniroute/ping', {method:'POST', headers:headers(true), body:'{}'})).json();
+    el.innerHTML = d.ok
+      ? `<span style="font-weight:600">✓ ${esc(d.message)}</span>${d.reply ? ' – “' + esc(d.reply) + '”' : ''}`
+      : `<span style="color:var(--danger)">✗ ${esc(d.error || 'unknown error')}</span>`;
+  }catch(e){ el.innerHTML = `<span style="color:var(--danger)">✗ ${esc(e.message)}</span>`; }
+  finally{ if(btn) btn.disabled = false; }
 }
 
 let currentProjectTargets = {};
@@ -2145,55 +2250,56 @@ async function deleteProjectTarget(project){
 function clearMem0Key(){
   mem0KeyClear = true; mem0KeyIsSet = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
-  document.getElementById('stMem0KeyState').textContent = '✕ Key will be removed upon saving';
+  const st_ = document.getElementById('stMem0KeyState'); if(st_) st_.textContent = '✕ Key will be removed upon saving';
 }
 function clearHfToken(){
   hfTokenClear = true; hfTokenIsSet = false;
   const el = document.getElementById('stHfToken'); if(el) el.value='';
-  document.getElementById('stHfTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stHfTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function clearGhToken(){
   ghTokenClear = true; ghTokenIsSet = false;
   const el = document.getElementById('stGhToken'); if(el) el.value='';
-  document.getElementById('stGhTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stGhTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function clearGlToken(){
   glTokenClear = true; glTokenIsSet = false;
   const el = document.getElementById('stGlToken'); if(el) el.value='';
-  document.getElementById('stGlTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stGlTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function clearSecToken(){
   secTokenClear = true; secTokenIsSet = false;
   const el = document.getElementById('stSecToken'); if(el) el.value='';
-  document.getElementById('stSecTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stSecTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function collectSettings(){
-  const val = id => (document.getElementById(id).value||'').trim();
+  const val = id => { const el=document.getElementById(id); return el ? (el.value||'').trim() : ''; };
+  const on = id => { const el=document.getElementById(id); return !!(el && el.checked); };
   const body = {
-    websearch: document.getElementById('stWebsearch').checked,
-    chat_time: document.getElementById('stChatTime').checked,
+    websearch: on('stWebsearch'),
+    chat_time: on('stChatTime'),
     websearch_pages: val('stSearchPages'),
     keep_alive: val('stKeepAlive'),
-    mem0_enabled: document.getElementById('stMem0Enabled').checked,
+    mem0_enabled: on('stMem0Enabled'),
     mem0_user_id: val('stMem0User'),
     mem0_base_url: val('stMem0Base'),
     mem0_api_version: val('stMem0Ver'),
     mem0_auth_scheme: val('stMem0Auth'),
     mem0_org_id: val('stMem0Org'),
     mem0_project_id: val('stMem0Proj'),
-    hf_enabled: document.getElementById('stHfEnabled').checked,
-    hf_auto: document.getElementById('stHfAuto').checked,
-    train_enabled: document.getElementById('stTrainEnabled').checked,
-    train_menu: document.getElementById('stTrainMenu').checked,
+    hf_enabled: on('stHfEnabled'),
+    hf_auto: on('stHfAuto'),
+    train_enabled: on('stTrainEnabled'),
+    train_menu: on('stTrainMenu'),
     train_workspace: val('stTrainWs'),
     train_soup_bin: val('stTrainBin'),
-    code_enabled: document.getElementById('stCodeEnabled').checked,
+    code_enabled: on('stCodeEnabled'),
     code_workspace: val('stCodeWs'),
     github_base: val('stGhBase'),
     gitlab_url: val('stGlUrl') || 'http://gitlab.andrix.se',
     gitlab_base: val('stGlBase'),
-    code_run_enabled: document.getElementById('stRunEnabled').checked,
-    code_run_allowlist: document.getElementById('stRunAllow').value,
+    code_run_enabled: on('stRunEnabled'),
+    code_run_allowlist: (document.getElementById('stRunAllow')||{}).value||'',
     code_run_timeout: val('stRunTimeout'),
     code_permission: val('stCodePerm'),
     code_max_steps: val('stCodeSteps'),
@@ -2234,7 +2340,7 @@ async function saveSettings(){
     updateCodeView();
     updateHfView();
     updateTrainNav();
-    loadSettingsForm();
+    await loadSettingsForm();
   }catch(e){ toast('Could not save: '+e.message, true); }
 }
 async function testMem0(){

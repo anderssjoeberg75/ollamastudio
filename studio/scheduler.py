@@ -628,6 +628,13 @@ def _run_single_headless_pass(prompt, model, project_slug, base_url=None, return
             except Exception as e:
                 setattr(ctx, "last_error", "Antigravity-fel (%s): %s" % (model, e))
                 break
+        elif model.startswith("omniroute:"):
+            from .omniroute_bridge import omniroute_complete
+            try:
+                full = omniroute_complete(sent, model, opts=code_options())
+            except Exception as e:
+                setattr(ctx, "last_error", "OmniRoute-fel (%s): %s" % (model, e))
+                break
         else:
             from .llama_bridge import detect_backend_type
             is_llama = (detect_backend_type(base) == "llama_server")

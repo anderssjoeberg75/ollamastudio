@@ -175,6 +175,10 @@ SETTINGS_SPEC = {
     "smtp_pass":            ("OLLAMA_STUDIO_SMTP_PASS", "", "str", True),
     "smtp_tls":             ("OLLAMA_STUDIO_SMTP_TLS", "0", "bool", False),
     "smtp_from":            ("OLLAMA_STUDIO_SMTP_FROM", "ollama-studio@andrix.se", "str", False),
+    # OmniRoute – AI-gateway med OpenAI-kompatibelt API (standardport 20128)
+    "omniroute_enabled":    ("OLLAMA_STUDIO_OMNIROUTE", "0", "bool", False),
+    "omniroute_url":        ("OMNIROUTE_URL", "http://localhost:20128/v1", "str", False),
+    "omniroute_api_key":    ("OMNIROUTE_API_KEY", "", "str", True),
 }
 
 _settings_lock = threading.Lock()

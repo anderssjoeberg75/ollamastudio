@@ -127,9 +127,10 @@ class LlamaServerStream:
     och avslutande {"done": true}.
     """
 
-    def __init__(self, base_url, messages, model=None, opts=None):
+    def __init__(self, base_url, messages, model=None, opts=None, headers=None, endpoint=None):
         base = base_url.rstrip("/")
-        self.url = base + "/v1/chat/completions"
+        # endpoint: full URL till chat/completions (t.ex. för gateways vars bas redan slutar på /v1)
+        self.url = endpoint or (base + "/v1/chat/completions")
         self._closed = False
 
         # Formatera anropet enligt OpenAI-standarden som llama-server stödjer
@@ -152,10 +153,10 @@ class LlamaServerStream:
         req = urllib.request.Request(
             self.url,
             data=body,
-            headers={
+            headers=dict({
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream"
-            },
+            }, **(headers or {})),
             method="POST"
         )
         self.resp = urllib.request.urlopen(req, timeout=300)

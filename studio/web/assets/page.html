@@ -639,7 +639,156 @@
       <div id="view-settings" class="view hidden">
         <div class="settings-wrap" style="max-width:760px;margin:0 auto">
           <h2 style="margin:0 0 16px">⚙ Settings</h2>
-          <div id="settingsForm"></div>
+          <div id="settingsForm">
+            <!-- Chat -->
+            <section class="card st-sec" id="stSecChat">
+              <h3>💬 Chat</h3>
+              <label class="st-check"><input type="checkbox" id="stWebsearch"> Enable web search</label>
+              <label class="st-check"><input type="checkbox" id="stChatTime"> Tell the model the current date &amp; time</label>
+              <div class="st-grid">
+                <label>Web search pages to read<input type="number" id="stSearchPages" min="0" max="10" placeholder="3"></label>
+                <label>Model keep-alive<input type="text" id="stKeepAlive" placeholder="30m"></label>
+              </div>
+              <div class="hint" id="stTimeState"></div>
+            </section>
+
+            <!-- Memory / Mem0 -->
+            <section class="card st-sec" id="stSecMem0">
+              <h3>🧠 Memory (Mem0)</h3>
+              <label class="st-check"><input type="checkbox" id="stMem0Enabled"> Enable Mem0 long-term memory</label>
+              <div class="st-grid">
+                <label>User ID<input type="text" id="stMem0User" placeholder="default_user"></label>
+                <label>Base URL<input type="text" id="stMem0Base" placeholder="https://api.mem0.ai"></label>
+                <label>API version<input type="text" id="stMem0Ver" placeholder="v1"></label>
+                <label>Auth scheme<input type="text" id="stMem0Auth" placeholder="Token"></label>
+                <label>Organization ID<input type="text" id="stMem0Org" placeholder="(optional)"></label>
+                <label>Project ID<input type="text" id="stMem0Proj" placeholder="(optional)"></label>
+              </div>
+              <label>API key<input type="password" id="stMem0Key" autocomplete="off" placeholder="Leave empty to keep"></label>
+              <div class="st-row">
+                <span class="hint" id="stMem0KeyState"></span>
+                <button class="btn ghost small" type="button" onclick="clearMem0Key()">Remove key</button>
+                <button class="btn small" type="button" onclick="testMem0()">Save &amp; test connection</button>
+              </div>
+              <div class="hint" id="stMem0Test"></div>
+            </section>
+
+            <!-- Hugging Face -->
+            <section class="card st-sec" id="stSecHf">
+              <h3>🤗 Hugging Face</h3>
+              <label class="st-check"><input type="checkbox" id="stHfEnabled"> Enable Hugging Face model support</label>
+              <label class="st-check"><input type="checkbox" id="stHfAuto"> Fetch unknown model names automatically</label>
+              <label>Access token<input type="password" id="stHfToken" autocomplete="off" placeholder="hf_… (leave empty to keep)"></label>
+              <div class="st-row">
+                <span class="hint" id="stHfTokenState"></span>
+                <button class="btn ghost small" type="button" onclick="clearHfToken()">Remove token</button>
+              </div>
+              <div class="hint" id="stHfState"></div>
+            </section>
+
+            <!-- AI Training -->
+            <section class="card st-sec" id="stSecTrain">
+              <h3>🎓 AI Training</h3>
+              <label class="st-check"><input type="checkbox" id="stTrainEnabled"> Enable AI training</label>
+              <label class="st-check"><input type="checkbox" id="stTrainMenu"> Show the training tab in the menu</label>
+              <div class="st-grid">
+                <label>Training workspace<input type="text" id="stTrainWs" placeholder="(default)"></label>
+                <label>soup binary<input type="text" id="stTrainBin" placeholder="(auto-detect)"></label>
+              </div>
+              <div class="hint" id="stTrainWsState"></div>
+              <div class="hint" id="stTrainState"></div>
+            </section>
+
+            <!-- Codex -->
+            <section class="card st-sec" id="stSecCodex">
+              <h3>💻 Codex</h3>
+              <label class="st-check"><input type="checkbox" id="stCodeEnabled"> Enable Codex</label>
+              <label>Workspace (path on the server)<input type="text" id="stCodeWs" placeholder="/path/to/project"></label>
+              <div class="hint" id="stCodeWsState"></div>
+              <label>Permission mode
+                <select id="stCodePerm">
+                  <option value="ask">Ask before acting</option>
+                  <option value="auto_edit">Edit files automatically</option>
+                  <option value="full">Full autonomy</option>
+                </select>
+              </label>
+              <div class="hint" id="stCodePermHint"></div>
+              <div class="st-grid">
+                <label>Max steps (0 = unlimited)<input type="number" id="stCodeSteps" min="0" placeholder="0"></label>
+                <label>Context length (tokens)<input type="number" id="stCodeCtx" min="0" placeholder="8192"></label>
+                <label>Temperature<input type="number" id="stCodeTemp" min="0" max="2" step="0.05" placeholder="0.2"></label>
+                <label>Command timeout (s)<input type="number" id="stRunTimeout" min="1" placeholder="120"></label>
+              </div>
+              <label class="st-check"><input type="checkbox" id="stRunEnabled"> Allow Codex to run commands</label>
+              <label>Allowed commands (one per line)<textarea id="stRunAllow" rows="5" spellcheck="false"></textarea></label>
+              <div class="hint" id="stCodeGit"></div>
+            </section>
+
+            <!-- Git -->
+            <section class="card st-sec" id="stSecGit">
+              <h3>🐙 Git</h3>
+              <div class="st-sub">GitHub</div>
+              <label>Token<input type="password" id="stGhToken" autocomplete="off" placeholder="ghp_… (leave empty to keep)"></label>
+              <div class="st-row">
+                <span class="hint" id="stGhTokenState"></span>
+                <button class="btn ghost small" type="button" onclick="clearGhToken()">Remove token</button>
+              </div>
+              <label>Base branch<input type="text" id="stGhBase" placeholder="main"></label>
+              <div class="st-sub">GitLab</div>
+              <div class="st-grid">
+                <label>Server URL<input type="text" id="stGlUrl" placeholder="http://gitlab.andrix.se"></label>
+                <label>Base branch<input type="text" id="stGlBase" placeholder="main"></label>
+              </div>
+              <label>Token<input type="password" id="stGlToken" autocomplete="off" placeholder="glpat-… (leave empty to keep)"></label>
+              <div class="st-row">
+                <span class="hint" id="stGlTokenState"></span>
+                <button class="btn ghost small" type="button" onclick="clearGlToken()">Remove token</button>
+              </div>
+            </section>
+
+            <!-- Security -->
+            <section class="card st-sec" id="stSecSecurity">
+              <h3>🛡 Security testing</h3>
+              <div class="st-grid">
+                <label>Target server (IP/DNS/URL)<input type="text" id="stSecTarget" placeholder="https://staging.example.com"></label>
+                <label>Test mode
+                  <select id="stSecMode">
+                    <option value="safe">Safe (non-destructive)</option>
+                    <option value="full">Full</option>
+                  </select>
+                </label>
+              </div>
+              <label>Target token<input type="password" id="stSecToken" autocomplete="off" placeholder="Leave empty to keep"></label>
+              <div class="st-row">
+                <span class="hint" id="stSecTokenState"></span>
+                <button class="btn ghost small" type="button" onclick="clearSecToken()">Remove token</button>
+              </div>
+              <div class="st-sub">Production server per project</div>
+              <div class="st-grid">
+                <label>Repository<select id="stSecProjSelect"><option value="">Loading repositories…</option></select></label>
+                <label>Production server<input type="text" id="stSecProjServer" placeholder="https://prod.example.com"></label>
+              </div>
+              <label>Production token<input type="password" id="stSecProjToken" autocomplete="off" placeholder="(optional)"></label>
+              <div class="st-row">
+                <button class="btn small" type="button" onclick="saveProjectTarget()">Save project server</button>
+              </div>
+              <div id="stSecProjList" class="st-list"></div>
+            </section>
+
+            <!-- Antigravity -->
+            <section class="card st-sec" id="stSecAgy">
+              <h3>🚀 Antigravity</h3>
+              <div class="st-row">
+                <span id="agyStatusBadge" class="st-badge">–</span>
+                <button class="btn ghost small" type="button" onclick="loadAntigravityStatus()">↻ Refresh</button>
+                <button class="btn small" type="button" id="btnAgyPing" onclick="pingAntigravity()">Test connection</button>
+              </div>
+              <div id="agyStatusDetails" class="hint"></div>
+              <div id="agyPingResult" class="hint"></div>
+            </section>
+
+            <div class="hint" id="stDbPath" style="margin-top:8px"></div>
+          </div>
           <div class="set-bar" style="margin-top:20px;display:flex;justify-content:flex-end">
             <button class="btn accent" onclick="saveSettings()">Save settings</button>
           </div>

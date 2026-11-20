@@ -179,6 +179,13 @@ class BaseHandler(BaseHTTPRequestHandler):
                 upstream = AntigravityStream(payload.get("messages") or [], m_str)
             except Exception as e:
                 return self._send_json({"error": str(e)}, 502)
+        elif m_str.startswith("omniroute:"):
+            from studio.omniroute_bridge import OmniRouteStream
+            try:
+                upstream = OmniRouteStream(payload.get("messages") or [], m_str,
+                                           opts=payload.get("options"))
+            except Exception as e:
+                return self._send_json({"error": str(e)}, 502)
         else:
             b_url = (base or _backends.PRIMARY["url"]).rstrip("/")
             from studio.llama_bridge import detect_backend_type, LlamaServerStream
@@ -229,11 +236,14 @@ class BaseHandler(BaseHTTPRequestHandler):
 
     # ---- Chatt med auto-webbsök -----------------------------------------
     def _open_chat_stream(self, messages, model, opts, base):
-        """Öppna en strömmande chatt mot en Ollama-backend, llama-server eller Antigravity."""
+        """Öppna en strömmande chatt mot en Ollama-backend, llama-server, Antigravity eller OmniRoute."""
         m_str = str(model or "")
         if m_str.startswith("antigravity:") or m_str.startswith("gemini:") or m_str.startswith("claude:"):
             from studio.antigravity_bridge import AntigravityStream
             return AntigravityStream(messages, m_str)
+        if m_str.startswith("omniroute:"):
+            from studio.omniroute_bridge import OmniRouteStream
+            return OmniRouteStream(messages, m_str, opts=opts)
 
         b_url = (base or _backends.PRIMARY["url"]).rstrip("/")
         from studio.llama_bridge import detect_backend_type, LlamaServerStream
