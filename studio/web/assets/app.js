@@ -1864,9 +1864,10 @@ async function loadSettingsForm(){
   set('stMem0Proj', s.mem0_project_id);
   mem0KeyIsSet = !!s.mem0_api_key_set; mem0KeyClear = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
-  document.getElementById('stMem0KeyState').textContent =
-    mem0KeyIsSet ? '● An API key is saved (leave empty to keep)' : 'No API key saved';
-  document.getElementById('stMem0Test').textContent = '';
+  const txt = (id, v)=>{ const el=document.getElementById(id); if(el) el.textContent = v; };
+  txt('stMem0KeyState',
+    mem0KeyIsSet ? '● An API key is saved (leave empty to keep)' : 'No API key saved');
+  txt('stMem0Test', '');
   chk('stHfEnabled', s.hf_enabled);
   chk('stHfAuto', s.hf_auto);
   hfTokenIsSet = !!s.hf_token_set; hfTokenClear = false;
@@ -1977,7 +1978,7 @@ async function loadSettingsForm(){
     ? '● A token is saved (leave empty to keep)' : 'No token saved';
   renderProjectTargets(s.project_targets || {});
   populateSecProjectSelect();
-  document.getElementById('stDbPath').textContent = s.db_path ? ('Saved in: '+s.db_path) : '';
+  txt('stDbPath', s.db_path ? ('Saved in: '+s.db_path) : '');
   loadAntigravityStatus();
 }
 
@@ -2145,55 +2146,56 @@ async function deleteProjectTarget(project){
 function clearMem0Key(){
   mem0KeyClear = true; mem0KeyIsSet = false;
   const keyEl = document.getElementById('stMem0Key'); if(keyEl) keyEl.value='';
-  document.getElementById('stMem0KeyState').textContent = '✕ Key will be removed upon saving';
+  const st_ = document.getElementById('stMem0KeyState'); if(st_) st_.textContent = '✕ Key will be removed upon saving';
 }
 function clearHfToken(){
   hfTokenClear = true; hfTokenIsSet = false;
   const el = document.getElementById('stHfToken'); if(el) el.value='';
-  document.getElementById('stHfTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stHfTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function clearGhToken(){
   ghTokenClear = true; ghTokenIsSet = false;
   const el = document.getElementById('stGhToken'); if(el) el.value='';
-  document.getElementById('stGhTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stGhTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function clearGlToken(){
   glTokenClear = true; glTokenIsSet = false;
   const el = document.getElementById('stGlToken'); if(el) el.value='';
-  document.getElementById('stGlTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stGlTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function clearSecToken(){
   secTokenClear = true; secTokenIsSet = false;
   const el = document.getElementById('stSecToken'); if(el) el.value='';
-  document.getElementById('stSecTokenState').textContent = '✕ Token will be removed upon saving';
+  const st_ = document.getElementById('stSecTokenState'); if(st_) st_.textContent = '✕ Token will be removed upon saving';
 }
 function collectSettings(){
-  const val = id => (document.getElementById(id).value||'').trim();
+  const val = id => { const el=document.getElementById(id); return el ? (el.value||'').trim() : ''; };
+  const on = id => { const el=document.getElementById(id); return !!(el && el.checked); };
   const body = {
-    websearch: document.getElementById('stWebsearch').checked,
-    chat_time: document.getElementById('stChatTime').checked,
+    websearch: on('stWebsearch'),
+    chat_time: on('stChatTime'),
     websearch_pages: val('stSearchPages'),
     keep_alive: val('stKeepAlive'),
-    mem0_enabled: document.getElementById('stMem0Enabled').checked,
+    mem0_enabled: on('stMem0Enabled'),
     mem0_user_id: val('stMem0User'),
     mem0_base_url: val('stMem0Base'),
     mem0_api_version: val('stMem0Ver'),
     mem0_auth_scheme: val('stMem0Auth'),
     mem0_org_id: val('stMem0Org'),
     mem0_project_id: val('stMem0Proj'),
-    hf_enabled: document.getElementById('stHfEnabled').checked,
-    hf_auto: document.getElementById('stHfAuto').checked,
-    train_enabled: document.getElementById('stTrainEnabled').checked,
-    train_menu: document.getElementById('stTrainMenu').checked,
+    hf_enabled: on('stHfEnabled'),
+    hf_auto: on('stHfAuto'),
+    train_enabled: on('stTrainEnabled'),
+    train_menu: on('stTrainMenu'),
     train_workspace: val('stTrainWs'),
     train_soup_bin: val('stTrainBin'),
-    code_enabled: document.getElementById('stCodeEnabled').checked,
+    code_enabled: on('stCodeEnabled'),
     code_workspace: val('stCodeWs'),
     github_base: val('stGhBase'),
     gitlab_url: val('stGlUrl') || 'http://gitlab.andrix.se',
     gitlab_base: val('stGlBase'),
-    code_run_enabled: document.getElementById('stRunEnabled').checked,
-    code_run_allowlist: document.getElementById('stRunAllow').value,
+    code_run_enabled: on('stRunEnabled'),
+    code_run_allowlist: (document.getElementById('stRunAllow')||{}).value||'',
     code_run_timeout: val('stRunTimeout'),
     code_permission: val('stCodePerm'),
     code_max_steps: val('stCodeSteps'),
@@ -2234,7 +2236,7 @@ async function saveSettings(){
     updateCodeView();
     updateHfView();
     updateTrainNav();
-    loadSettingsForm();
+    await loadSettingsForm();
   }catch(e){ toast('Could not save: '+e.message, true); }
 }
 async function testMem0(){
