@@ -119,8 +119,9 @@ class CodexRoutes(BaseHandler):
                     # är fullt, och modellen slutar följa protokollet mitt i.
                     sent = prune_convo(convo, code_char_budget())
                     up = self._open_chat_stream(sent, model, code_options(), base)
-                except Exception as e:
-                    self._emit({"type": "error", "text": "Kunde inte nå modellen: %s" % e})
+                except Exception:
+                    _log.warning("Kunde inte nå modellen under agent-steg", exc_info=True)
+                    self._emit({"type": "error", "text": "Kunde inte nå modellen"})
                     finished = True      # avbrutet av ett fel, inte av stegtaket
                     break
                 try:

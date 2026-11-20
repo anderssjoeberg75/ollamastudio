@@ -4,6 +4,7 @@ Godkännande-registret (en körning blockerar tills användaren svarar),
 loop-vakten som fångar en modell som kört fast, och AgentRun som håller
 en körnings tillstånd."""
 import json
+import secrets
 import threading
 
 from ..config import CODE_MODES, CODE_MODE_LABELS, code_mode
@@ -18,15 +19,12 @@ _log = _get_logger(__name__)
 CODE_ASK_TIMEOUT = 600      # sekunder innan en obesvarad fråga räknas som nej
 _approvals = {}             # id -> {"ev": Event, "allow": bool, "always": bool}
 _approvals_lock = threading.Lock()
-_approval_n = 0
 
 
 def approval_open():
-    """Registrera en väntande fråga och returnera dess id."""
-    global _approval_n
+    """Registrera en väntande fråga och returnera dess kryptografiskt säkra id."""
     with _approvals_lock:
-        _approval_n += 1
-        aid = "ap%d" % _approval_n
+        aid = "ap_" + secrets.token_urlsafe(16)
         _approvals[aid] = {"ev": threading.Event(), "allow": False, "always": False}
     return aid
 

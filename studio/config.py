@@ -418,7 +418,10 @@ def train_resolve(rel, create=False):
     root = train_workspace_root(create=create)
     if not root:
         raise ValueError("Ingen träningsmapp kunde skapas")
-    rel = (rel or "").strip().lstrip("/")
+    raw = (rel or "").strip()
+    if len(raw) >= 2 and raw[1] == ":" and raw[0].isalpha():
+        raw = raw[2:]
+    rel = raw.lstrip("/\\")
     full = os.path.realpath(os.path.join(root, rel))
     if full != root and not full.startswith(root + os.sep):
         raise ValueError("Sökvägen ligger utanför träningsmappen")
