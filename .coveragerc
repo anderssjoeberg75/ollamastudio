@@ -9,6 +9,6 @@ source =
 
 [report]
 # Spärr som bara får höjas (se .agents/rules/tdd.md).
-fail_under = 51
+fail_under = 59
 skip_covered = true
 sort = Cover

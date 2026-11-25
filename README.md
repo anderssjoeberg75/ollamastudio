@@ -711,7 +711,7 @@ so the browser loads no external files except icon fonts. The server proxies cal
 | `studio/llama_bridge.py`, `antigravity_bridge.py`, `huggingface_bridge.py` | Backend bridges |
 | `studio/websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `scheduler.py` | Chat services, training, updates, scheduled audits |
 | `studio/codex/` | Agent: workspace, permissions, protocol, commands, sandbox, network policy, git, GitHub, GitLab, router, fixer, testing, skills |
-| `studio/harness/` | Vulnerability Harness (`engine.py`), skill integration (`skills.py`, `security_skills/`, `security_skills_acs/`), CVSS v3.1, security overview, Ghidra worker |
+| `studio/harness/` | Vulnerability Harness (`engine.py`), skill integration (`skills.py`, `security_skills/`, `security_skills_acs/`), CVSS v3.1, security overview |
 | `studio/mcp/` | MCP server |
 | `studio/web/` | Routing (`server.py`), `routes_*.py`, UI assets |
 | `*.service` | systemd units: web app, one Ollama instance per GPU, tuned instance |
