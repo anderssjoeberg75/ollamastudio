@@ -1,0 +1,14 @@
+[run]
+source =
+    studio
+    catalog
+    huggingface
+    soup_train
+    ollama_web
+    ollama_studio
+
+[report]
+# Spärr som bara får höjas (se .agents/rules/tdd.md).
+fail_under = 61
+skip_covered = true
+sort = Cover

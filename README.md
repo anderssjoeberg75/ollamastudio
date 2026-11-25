@@ -711,7 +711,7 @@ so the browser loads no external files except icon fonts. The server proxies cal
 | `studio/llama_bridge.py`, `antigravity_bridge.py`, `huggingface_bridge.py` | Backend bridges |
 | `studio/websearch.py`, `memory.py`, `models.py`, `training.py`, `selfupdate.py`, `scheduler.py` | Chat services, training, updates, scheduled audits |
 | `studio/codex/` | Agent: workspace, permissions, protocol, commands, sandbox, network policy, git, GitHub, GitLab, router, fixer, testing, skills |
-| `studio/harness/` | Vulnerability Harness (`engine.py`), skill integration (`skills.py`, `security_skills/`, `security_skills_acs/`), CVSS v3.1, security overview, Ghidra worker |
+| `studio/harness/` | Vulnerability Harness (`engine.py`), skill integration (`skills.py`, `security_skills/`, `security_skills_acs/`), CVSS v3.1, security overview |
 | `studio/mcp/` | MCP server |
 | `studio/web/` | Routing (`server.py`), `routes_*.py`, UI assets |
 | `*.service` | systemd units: web app, one Ollama instance per GPU, tuned instance |
@@ -720,11 +720,24 @@ so the browser loads no external files except icon fonts. The server proxies cal
 
 ## Development & tests
 
+This project is developed **test-first (TDD)**: every production change starts with a failing `unittest` test, bug
+fixes start with a test that reproduces the bug, and untested code gets characterization tests (proven by mutation)
+before it is changed. The full workflow is in [`.agents/rules/tdd.md`](.agents/rules/tdd.md).
+
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests                            # whole suite
+python3 -m unittest tests.test_issue_fixer.SafeRepoPathTests     # one class while in the red/green loop
 ```
 
-CI runs the same suite (`.github/workflows/ci.yml`). This repository also keeps a [graphify](CLAUDE.md) knowledge
+Coverage is measured with `coverage` (a dev-only tool; the app itself stays stdlib-only):
+
+```bash
+python3 -m pip install coverage
+python3 -m coverage run -m unittest discover -s tests && python3 -m coverage report
+```
+
+CI runs the same suite (`.github/workflows/ci.yml`) and fails if total coverage drops below `fail_under` in
+`.coveragerc`. That threshold is a ratchet: it only ever goes up. This repository also keeps a [graphify](CLAUDE.md) knowledge
 graph; run `graphify update .` after code changes.
 
 ---

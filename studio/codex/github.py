@@ -53,22 +53,26 @@ def code_repos_root(create=False):
     return path
 
 
-_GH_URL_RE = re.compile(r"^(?:https?://github\.com/|git@github\.com:)?([^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+_GH_URL_RE = re.compile(r"^(?:https?://github\.com/|git@github\.com:)(.*)$")
 
 
 def _normalize_gh_slug(slug_or_url):
-    """Normaliserar full GitHub-URL eller slug till 'ägare/repo' (Issue #57)."""
+    """Normaliserar full GitHub-URL eller slug till 'ägare/repo' (Issue #57).
+
+    GitHub-URL:er kan ha mer sökväg efter repot (/tree/main, /issues/5) – då
+    gäller de två första segmenten. En slug utan URL behåller alla segment så
+    att GitLab-undergrupper (grupp/under/projekt) inte kortas och krockar.
+    """
     val = (slug_or_url or "").strip()
     if not val:
         return ""
     m = _GH_URL_RE.match(val)
+    parts = [p for p in (m.group(1) if m else val).split("/") if p]
     if m:
-        return m.group(1).rstrip("/")
-    if "/" in val:
-        parts = [p for p in val.strip("/").split("/") if p]
-        if len(parts) >= 2:
-            return f"{parts[-2]}/{parts[-1].removesuffix('.git')}"
-    return val
+        parts = parts[:2]
+    if parts:
+        parts[-1] = parts[-1].removesuffix(".git")
+    return "/".join(parts)
 
 
 def repo_dir_name(slug, host="github.com"):

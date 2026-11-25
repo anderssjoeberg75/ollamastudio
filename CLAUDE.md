@@ -1,3 +1,12 @@
+## Test-driven development (mandatory)
+
+All production code changes follow TDD — see [`.agents/rules/tdd.md`](.agents/rules/tdd.md):
+- Write a failing `unittest` test first, run it and watch it fail for the right reason, then write the minimal code to pass.
+- Bug fixes start with a test that reproduces the bug.
+- Before touching an untested module, add characterization tests and prove them by mutation.
+- Run the full suite before calling anything done: `python3 -m unittest discover -s tests`.
+- Coverage gate: `fail_under` in `.coveragerc` may only go up; raise it when your change raises coverage.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
