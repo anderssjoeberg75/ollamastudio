@@ -215,10 +215,10 @@ class IssueFixerRunner(threading.Thread):
                 "temperature": 0.1
             }
             body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
-            
+
             updated_code = ""
             try:
+                req = urllib.request.Request(req_url, data=body, headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     data = json.loads(resp.read().decode("utf-8", "replace"))
                     tok_count = data.get("usage", {}).get("total_tokens", 0)

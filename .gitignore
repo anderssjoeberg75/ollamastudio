@@ -25,3 +25,7 @@ ollama_studio.db
 
 # graphify local output
 graphify-out/
+
+# coverage
+.coverage
+htmlcov/

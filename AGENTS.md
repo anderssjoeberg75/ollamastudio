@@ -4,6 +4,7 @@ This workspace contains customized rules and skills located in `.agents/`.
 
 ## Rules & Guidelines (`.agents/rules/`)
 Codex and coding agents working in this repository must adhere to the following rules:
+- **Testdriven utveckling (TDD) – obligatoriskt**: [`.agents/rules/tdd.md`](.agents/rules/tdd.md) — Ingen produktionskod utan ett test som först har misslyckats (RÖD → GRÖN → REFAKTORERA). Buggar börjar med ett reproducerande test. Täckningsspärren i `.coveragerc` får bara höjas. Gäller före de generiska `common-testing.md`/`python-testing.md`.
 - **Ponytail Senior Dev Mode**: [`.agents/rules/ponytail.md`](.agents/rules/ponytail.md) — Follow lazy senior dev practices (YAGNI, stdlib first, minimal diffs, no unnecessary abstractions or dependencies).
 - **Compilation / Execution**: [`.agents/rules/compile.md`](.agents/rules/compile.md) — Python virtual environment & runtime instructions.
 - **Accounts & Configuration**: [`.agents/rules/accounts.md`](.agents/rules/accounts.md) — Handling environment variables and local accounts.
